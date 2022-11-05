@@ -1,0 +1,8 @@
+*.pyo
+*.pyc
+__pycache__/
+tving.py
+wavve.py
+seezn.py
+kakaotv.py
+cppl.py
