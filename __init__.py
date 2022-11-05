@@ -36,7 +36,7 @@ except:
 
 
 try:
-    if True or os.path.exists(os.path.join(os.path.dirname(__file__), 'cppl.py')):
+    if os.path.exists(os.path.join(os.path.dirname(__file__), 'cppl.py')):
         from .cppl import SupportCppl
     else:
         SupportCppl = SupportSC.load_module_f(__file__, 'cppl').SupportCppl
