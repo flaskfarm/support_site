@@ -2,7 +2,7 @@ setting = {
     'filepath' : __file__,
     'use_db': True,
     'use_default_setting': True,
-    'home_module': 'site',
+    'home_module': None,
     'menu': None,
     'setting_menu': {
         'uri': f"support_site/site/setting",
