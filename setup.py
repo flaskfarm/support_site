@@ -1,34 +1,3 @@
-"""
-{
-    'uri': __package__,
-    'name': 'SJVA',
-    'list': [
-        {
-            'uri': 'setting',
-            'name': '설정',
-            'list': [
-                {
-                    'uri': 'auth',
-                    'name': '인증',
-                },
-                {
-                    'uri': 'bot',
-                    'name': '텔레그램 봇',
-                }
-            ]
-        },
-        {
-            'uri': 'plugin',
-            'name': '전용 플러그인',
-        },
-        {
-            'uri': 'log',
-            'name': '로그',
-        },
-    ]
-},
-"""
-
 setting = {
     'filepath' : __file__,
     'use_db': True,
@@ -54,3 +23,4 @@ except Exception as e:
     P.logger.error(f'Exception:{str(e)}')
     P.logger.error(traceback.format_exc())
 
+logger = P.logger
