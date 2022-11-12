@@ -5,6 +5,11 @@ try:
 except:
     os.system("pip install xmltodict")
 
+try:
+    import lxml
+except:
+    os.system("pip install lxml")
+
 from support import SupportSC
 
 from .site_util import SiteUtil
