@@ -86,7 +86,7 @@ $("body").on('click', '#site_tving_login_btn', function(e) {
 $("body").on('click', '#site_tving_deviceid_btn', function(e) {
   e.preventDefault(); 
   globalSendCommand('tving_deviceid', $('#site_tving_token').val(), null, null, function(ret){
-    console.log(ret)
+
   });
 });
 
