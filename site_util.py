@@ -132,8 +132,8 @@ class SiteUtil(object):
             if with_poster:
                 logger.debug(ret['image_url'])
                 ret['poster_image_url'] = cls.process_image_mode('5', ret['image_url']) #포스터이미지 url 본인 sjva
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return ret
 

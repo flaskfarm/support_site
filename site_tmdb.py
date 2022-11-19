@@ -88,8 +88,8 @@ class SiteTmdb(object):
                         backdrop_url = 'https://image.tmdb.org/t/p/' + 'original' + backdrop['file_path']
                         thumb_url = 'https://image.tmdb.org/t/p/' + 'w300' + backdrop['file_path']
                         data.append(EntityThumb(aspect='landscape', value=backdrop_url, thumb=thumb_url, site='tmdb', score=backdrop['score']+100).as_dict())
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -122,8 +122,8 @@ class SiteTmdbTv(SiteTmdb):
             for t in tmdb_search['results']:
                 if premiered == t['first_air_date']:
                     return t['id']
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return
 
@@ -153,8 +153,8 @@ class SiteTmdbTv(SiteTmdb):
                             flag_find = True
                             actor['thumb'] = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
                             break
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -177,8 +177,8 @@ class SiteTmdbTv(SiteTmdb):
                 cls.process_actor_image(tmdb, show)
             #ret['tmdb']['info'] = tmdb.credits(language='en')
             return True
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return False
 
@@ -210,8 +210,8 @@ class SiteTmdbMovie(SiteTmdb):
         try:
             tmdb_search = tmdbsimple.Search().movie(query=keyword, language='ko', include_adult=True)
             return tmdb_search
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -229,8 +229,8 @@ class SiteTmdbMovie(SiteTmdb):
             ret['video'] = tmdb.videos()
             
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -279,11 +279,11 @@ class SiteTmdbMovie(SiteTmdb):
                 ret['ret'] = 'empty'
                
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -306,11 +306,11 @@ class SiteTmdbMovie(SiteTmdb):
             
 
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
     @classmethod
@@ -339,8 +339,8 @@ class SiteTmdbMovie(SiteTmdb):
                     extra.title = tmdb_item['name']
                     extra.premiered = ''
                     entity.extras.append(extra)
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -385,8 +385,8 @@ class SiteTmdbMovie(SiteTmdb):
                         entity.producers.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
                     if tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']:
                         entity.credits.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -441,8 +441,8 @@ class SiteTmdbMovie(SiteTmdb):
 
             try: entity.ratings.append(EntityRatings(info['vote_average'], name='tmdb', votes=info['vote_count']))
             except: pass
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -474,8 +474,8 @@ class SiteTmdbMovie(SiteTmdb):
                             break
                 if flag_find == False:
                     logger.debug(kor_name)
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -547,8 +547,8 @@ class SiteTmdbFtv(SiteTmdb):
         try:
             tmdb_search = tmdbsimple.Search().tv(query=keyword, language='ko', include_adult=True)
             return tmdb_search
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return
 
@@ -594,11 +594,11 @@ class SiteTmdbFtv(SiteTmdb):
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -618,8 +618,8 @@ class SiteTmdbFtv(SiteTmdb):
             ret['video'] = tmdb.videos()
             ret['external_ids'] = tmdb.external_ids()
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -645,11 +645,11 @@ class SiteTmdbFtv(SiteTmdb):
             entity['actor'] = list(sorted(entity['actor'], key=lambda k: k['order']))
             ret['ret'] = 'success'
             ret['data'] = entity #entity.as_dict() #tmdb_dict
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -661,8 +661,8 @@ class SiteTmdbFtv(SiteTmdb):
                 entity.code_list.append(['imdb_id', info['imdb_id']])
             if 'tvdb_id' in info:
                 entity.code_list.append(['tvdb_id', info['tvdb_id']])
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -708,8 +708,8 @@ class SiteTmdbFtv(SiteTmdb):
                     entity.producer.append(tmdb_item['original_name'])
                 if tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']:
                     entity.writer.append(tmdb_item['original_name'])
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -729,8 +729,8 @@ class SiteTmdbFtv(SiteTmdb):
                 if tmp != '':
                     entity.mpaa = tmp
                     return
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
     @classmethod
@@ -809,8 +809,8 @@ class SiteTmdbFtv(SiteTmdb):
             except: pass
             entity.episode_run_time = info['episode_run_time'][0] if 'episode_run_time' in info and len(info['episode_run_time'])>0 else 0
             return
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -832,8 +832,8 @@ class SiteTmdbFtv(SiteTmdb):
             ret['video'] = tmdb.videos()
             ret['external_ids'] = tmdb.external_ids()
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -869,11 +869,11 @@ class SiteTmdbFtv(SiteTmdb):
             cls._process_image(tmdb, entity['art'])
             ret['ret'] = 'success'
             ret['data'] = entity #entity.as_dict() #tmdb_dict
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -928,6 +928,6 @@ class SiteTmdbFtv(SiteTmdb):
                     #entity.episodes.append(episode)
                     entity.episodes[tmp['episode_number']] = episode.as_dict()
             return
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())

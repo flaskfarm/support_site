@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 import traceback
 
-from lxml import html
-
 from framework import SystemModelSetting
 from framework.util import Util
+from lxml import html
 from system import SystemLogicTrans
 
-from .plugin import P
 from .entity_av import EntityAVSearch
-from .entity_base import EntityMovie, EntityThumb, EntityActor, EntityRatings
+from .entity_base import EntityActor, EntityMovie, EntityRatings, EntityThumb
+from .plugin import P
 from .site_util import SiteUtil
 
 logger = P.logger
@@ -67,17 +66,17 @@ class SiteJavbus(object):
                         item.socre = 0
                     #logger.debug(item)
                     ret['data'].append(item.as_dict())
-                except Exception as exception: 
-                    logger.error('Exception:%s', exception)
+                except Exception as e: 
+                    logger.error(f"Exception:{str(e)}")
                     logger.error(traceback.format_exc()) 
             ret['data'] = sorted(ret['data'], key=lambda k: k['score'], reverse=True) 
             ret['ret'] = 'success'
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -175,10 +174,10 @@ class SiteJavbus(object):
             ret['ret'] = 'success'
             logger.warning(ret)
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         logger.debug(ret)
         return ret

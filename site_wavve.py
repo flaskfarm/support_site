@@ -53,11 +53,11 @@ class SiteWavveTv(SiteWavve):
                 ret['data'] = show_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -77,8 +77,8 @@ class SiteWavveTv(SiteWavve):
                         if info is not None and (show['studio'] == info['cpname'] or show['premiered'] == info['firstreleasedate']):
                             cls._apply_tv_by_program(show, info)
                             break
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
     
@@ -126,8 +126,8 @@ class SiteWavveTv(SiteWavve):
                         actor.name = item.strip()
                         show['actor'].append(actor.as_dict())
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -156,11 +156,11 @@ class SiteWavveTv(SiteWavve):
             cls._apply_tv_by_program(show, program_info)
             ret['ret'] = 'success'
             ret['data'] = show
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret            
 
                     
@@ -207,11 +207,11 @@ class SiteWavveMovie(SiteWavve):
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -272,9 +272,9 @@ class SiteWavveMovie(SiteWavve):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret

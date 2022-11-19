@@ -1,11 +1,12 @@
 
 # -*- coding: utf-8 -*-
-import os, traceback, time
+import os
+import time
+import traceback
 
 import requests
-from lxml import html
-
 from framework import SystemModelSetting
+from lxml import html
 from system import SystemLogicTrans
 
 from .plugin import P
@@ -47,7 +48,7 @@ class SiteHentaku(object):
                 logger.debug(u'단시간 많은 요청으로 재요청')
                 time.sleep(2)
                 return SiteHentaku.get_actor_info(entity_actor, proxy_url=proxy_url, retry=False)
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return entity_actor

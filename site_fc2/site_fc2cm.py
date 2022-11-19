@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
-import requests, re, json, random
+import json
+import random
+import re
 import traceback
+
+import requests
 from dateutil.parser import parse
-
-from lxml import html
-
 from framework import SystemModelSetting
 from framework.util import Util
+from lxml import html
 from system import SystemLogicTrans
 
 from ..entity_av import EntityAVSearch
-from ..entity_base import EntityMovie, EntityThumb, EntityActor, EntityRatings, EntityExtra
-from ..site_util import SiteUtil
-
+from ..entity_base import (EntityActor, EntityExtra, EntityMovie,
+                           EntityRatings, EntityThumb)
 #########################################################
 from ..plugin import P
+from ..site_util import SiteUtil
+
 logger = P.logger
 ModelSetting = P.ModelSetting
 
@@ -99,11 +102,11 @@ class SiteFc2Cm(object):
             ret['data'] = sorted(ret['data'], key=lambda k: k['score'], reverse=True)  
             ret['ret'] = 'success'
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         
         return ret
 
@@ -172,10 +175,10 @@ class SiteFc2Cm(object):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
 
         return ret

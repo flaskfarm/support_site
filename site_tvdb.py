@@ -12,8 +12,8 @@ except:
         os.system("pip install requests_cache==0.5.2")
         os.system("pip install tvdb-api")
         import tvdb_api
-    except Exception as exception: 
-        logger.error('Exception:%s', exception)
+    except Exception as e: 
+        logger.error(f"Exception:{str(e)}")
         logger.error(traceback.format_exc())
 
 APIKEY = 'D4DDDAEFAD083E6F'
@@ -101,11 +101,11 @@ class SiteTvdbTv(SiteTvdb):
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -117,8 +117,8 @@ class SiteTvdbTv(SiteTvdb):
             try:
                 tvdb = tvdb_api.Tvdb(apikey=APIKEY, select_first=True, banners=True, actors=True, language='en') 
                 series = tvdb[code[2:]]
-            except Exception as exception: 
-                logger.error('Exception:%s', exception)
+            except Exception as e: 
+                logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
                 tvdb = tvdb_api.Tvdb(apikey=APIKEY, select_first=True, banners=True, language='en') 
                 series = tvdb[code[2:]]
@@ -187,6 +187,6 @@ class SiteTvdbTv(SiteTvdb):
                     episode.art.append(episode_info['filename'])
                     entity.seasons[season_no].episodes[epi_no] = episode
             return entity.as_dict()
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())

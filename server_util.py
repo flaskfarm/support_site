@@ -53,8 +53,8 @@ class MetadataServerUtil(object):
             if SiteUtil.is_include_hangul(data['plot']) == False:
                 return
             cls.set_metadata(code, data, keyword)   
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -74,8 +74,8 @@ class MetadataServerUtil(object):
                 return
             cls.set_metadata(code, data, keyword)
             logger.debug(f'set metadata uncensored complete, {code}')
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
     

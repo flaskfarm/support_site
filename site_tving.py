@@ -119,8 +119,8 @@ class SiteTvingTv(SiteTving):
             data = SupportTving.get_info(episode_code, 'stream50')
             tving_program = data['content']['info']['program']
             cls._apply_tv_by_program(show, tving_program, apply_plot=apply_plot, apply_image=apply_image)
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return
 
@@ -168,14 +168,14 @@ class SiteTvingTv(SiteTving):
                                 'premiered' : cls.change_to_premiered(epi['broadcast_date']), 
                                 'title' : '',
                             }
-                        except Exception as exception: 
-                            logger.error('Exception:%s', exception)
+                        except Exception as e: 
+                            logger.error(f"Exception:{str(e)}")
                             logger.error(traceback.format_exc())
                     page += 1
                     if episode_data['has_more'] == 'N' or page == 10:
                         break
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
     @classmethod 
@@ -194,8 +194,8 @@ class SiteTvingTv(SiteTving):
                         break
                         
                         #if show['premiered'] == ''
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
     
 #https://search.tving.com/search/common/module/getAkc.jsp?kwd=SKY+%EC%BA%90%EC%8A%AC
@@ -237,11 +237,11 @@ class SiteTvingTv(SiteTving):
                 ret['data'] = show_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
     @classmethod 
@@ -293,11 +293,11 @@ class SiteTvingTv(SiteTving):
             ret['ret'] = 'success'
             ret['data'] = show
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -336,11 +336,11 @@ class SiteTvingMovie(SiteTving):
             else:
                 ret['ret'] = 'empty'
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -404,9 +404,9 @@ class SiteTvingMovie(SiteTving):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret

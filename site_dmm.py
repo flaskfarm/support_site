@@ -1,17 +1,19 @@
 
 # -*- coding: utf-8 -*-
-import requests, re, json
+import json
+import re
 import traceback
 
-from lxml import html
-
+import requests
 from framework import SystemModelSetting
 from framework.util import Util
+from lxml import html
 from system import SystemLogicTrans
 
-from .plugin import P
 from .entity_av import EntityAVSearch
-from .entity_base import EntityMovie, EntityThumb, EntityActor, EntityRatings, EntityExtra
+from .entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings,
+                          EntityThumb)
+from .plugin import P
 from .site_util import SiteUtil
 
 logger = P.logger
@@ -136,19 +138,19 @@ class SiteDmm(object):
 
                     logger.debug('score :%s %s ', item.score, item.ui_code)
                     ret['data'].append(item.as_dict())
-                except Exception as exception: 
-                    logger.error('Exception:%s', exception)
+                except Exception as e: 
+                    logger.error(f"Exception:{str(e)}")
                     logger.error(traceback.format_exc()) 
             ret['data'] = sorted(ret['data'], key=lambda k: k['score'], reverse=True)  
             ret['ret'] = 'success'
             if len(ret['data']) == 0 and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
                 new_title = '%s%s' % (keyword_tmps[0], keyword_tmps[1].zfill(6))
                 return cls.search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode)
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -295,8 +297,8 @@ class SiteDmm(object):
                     if match:
                         tmp = match.group('rating')
                         entity.ratings = [EntityRatings(float(tmp.replace('_', '.')), max=5, name='dmm', image_url=tag[0].attrib['src'])]
-            except Exception as exception: 
-                #logger.error('Exception:%s', exception)
+            except Exception as e: 
+                #logger.error(f"Exception:{str(e)}")
                 #logger.error(traceback.format_exc())
                 logger.error('point exception')
 
@@ -321,8 +323,8 @@ class SiteDmm(object):
                     votes = int(tree.xpath('//div[@class="d-review__points"]/p[2]/strong')[0].text_content().strip())
                     entity.ratings[0].value = point
                     entity.ratings[0].votes = votes
-            except Exception as exception: 
-                logger.error('Exception:%s', exception)
+            except Exception as e: 
+                logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
 
             try:
@@ -337,15 +339,15 @@ class SiteDmm(object):
                     #logger.debug(json.dumps(data, indent=4))
                     data['bitrates'] = sorted(data['bitrates'], key=lambda k: k['bitrate'], reverse=True)
                     entity.extras = [EntityExtra('trailer', SiteUtil.trans(data['title'], do_trans=do_trans), 'mp4', 'https:%s' % data['bitrates'][0]['src'])]
-            except Exception as exception: 
-                logger.error('Exception:%s', exception)
+            except Exception as e: 
+                logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret

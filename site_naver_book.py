@@ -41,8 +41,8 @@ class SiteNaverBook(SiteNaver):
                     return data
                 else:
                     continue
-            except Exception as exception:
-                logger.error('Exception:%s', exception)
+            except Exception as e:
+                logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
 
 

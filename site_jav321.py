@@ -1,17 +1,19 @@
 
 # -*- coding: utf-8 -*-
-import requests, re, json
+import json
+import re
 import traceback
 
-from lxml import html
-
+import requests
 from framework import SystemModelSetting
 from framework.util import Util
+from lxml import html
 from system import SystemLogicTrans
 
-from .plugin import P
 from .entity_av import EntityAVSearch
-from .entity_base import EntityMovie, EntityThumb, EntityActor, EntityRatings, EntityExtra
+from .entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings,
+                          EntityThumb)
+from .plugin import P
 from .site_util import SiteUtil
 
 logger = P.logger
@@ -42,11 +44,11 @@ class SiteJav321(object):
                 ret['ret'] = 'success'
             else:
                 ret['ret'] = 'no_match'
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -177,9 +179,9 @@ class SiteJav321(object):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret

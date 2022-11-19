@@ -1,22 +1,24 @@
 # -*- coding: utf-8 -*-
 # python
-import os, traceback, time, json
+import json
+import os
+import time
+import traceback
 
+import lxml.builder as builder
 # third-party
 import requests
-from flask import Blueprint, request, send_file, redirect, Response
-from lxml import etree as ET
-import lxml.builder as builder
-from lxml.builder import E
-from lxml import html
-
+from flask import Blueprint, Response, redirect, request, send_file
 # sjva 공용
-from framework import app, path_data, check_api, py_urllib, SystemModelSetting
+from framework import SystemModelSetting, app, check_api, path_data, py_urllib
 from framework.logger import get_logger
 from framework.util import Util
-
+from lxml import etree as ET
+from lxml import html
+from lxml.builder import E
 
 from .plugin import P
+
 logger = P.logger
 
 
@@ -37,7 +39,7 @@ class UtilNfo(object):
                     value = str(value)
                 parent.append(E(key, cls.change_html(value), kwargs))
         except Exception as e: 
-            logger.error('Exception:%s', e)
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
     @classmethod
@@ -48,7 +50,7 @@ class UtilNfo(object):
                 for value in dictionary[key]:
                     parent.append(E(key, cls.change_html(value)))
         except Exception as e: 
-            logger.error('Exception:%s', e)
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
     @classmethod
@@ -126,7 +128,7 @@ class UtilNfo(object):
 
            
         except Exception as e: 
-            logger.error('Exception:%s', e)
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
     @classmethod

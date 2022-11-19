@@ -165,7 +165,7 @@ class MusicProcess:
                                 ret = self.move(select_artist['artist'], album, album_path, current_album_data[ans]['foldername'])
                                 break
                         except Exception as e: 
-                            #logger.error('Exception:%s', e)
+                            #logger.error(f"Exception:{str(e)}")
                             #logger.error(traceback.format_exc())
                             #logger.error("변환하지 않음")
                             break
@@ -195,7 +195,7 @@ class MusicProcess:
                 return True
             return False
         except Exception as e: 
-            logger.error('Exception:%s', e)
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 

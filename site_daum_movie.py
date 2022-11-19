@@ -42,11 +42,11 @@ class SiteDaumMovie(SiteDaum):
                 ret['ret'] = 'success'
                 ret['data'] = result_list
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -245,8 +245,8 @@ class SiteDaumMovie(SiteDaum):
                         continue
                 ret.append(entity.as_dict())
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
     
 
@@ -259,11 +259,11 @@ class SiteDaumMovie(SiteDaum):
             url = "https://movie.daum.net/api/movie/%s/main" % code[2:]
             ret['data']['basic'] = requests.get(url).json()
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
    
@@ -281,11 +281,11 @@ class SiteDaumMovie(SiteDaum):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
     
         
@@ -335,8 +335,8 @@ class SiteDaumMovie(SiteDaum):
                 for cast in data['staff']:
                     if cast['movieJob']['role'] == u'각본':
                         entity.credits.append(cast['nameKorean'])
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -372,8 +372,8 @@ class SiteDaumMovie(SiteDaum):
                     art_count += 1
                 if poster_count == max_poster_count and art_count == max_art_count:
                     break
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -395,7 +395,7 @@ class SiteDaumMovie(SiteDaum):
                     entity.extras.append(extra)
                 if data['page']['last']:
                     break
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 

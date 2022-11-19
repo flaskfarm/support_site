@@ -25,8 +25,8 @@ class SiteVibe(object):
             elif mode == 'album':
                 data = data['response']['result']['albumResult']['albums']
             return data
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -46,8 +46,8 @@ class SiteVibe(object):
                     'score': 100 - (idx*5),
                 })
             return ret
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
@@ -61,7 +61,7 @@ class SiteVibe(object):
             if return_format == 'api':
                 return data
             return data
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 

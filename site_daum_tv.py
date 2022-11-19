@@ -50,11 +50,11 @@ class SiteDaumTv(SiteDaum):
             else:
                 ret['ret'] = 'success'
                 ret['data'] = data
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -209,11 +209,11 @@ class SiteDaumTv(SiteDaum):
             ret['ret'] = 'success'
             ret['data'] = show.as_dict()
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -291,11 +291,11 @@ class SiteDaumTv(SiteDaum):
 
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
         return ret
 
 
@@ -326,6 +326,6 @@ class SiteDaumTv(SiteDaum):
                             ret2.append('%s %s' % (tmp[1], tmp[0]))
 
                     return ret2
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as e: 
+            logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
