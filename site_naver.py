@@ -92,7 +92,11 @@ class SiteNaverMovie(SiteNaver):
             if cls._naver_key == None:
                 return
             for tmp in cls._naver_key.split('\n'):
-                client_id, client_secret = tmp.strip().split(',')
+                tmps = tmp.strip().split(',')
+                if len(tmps) != 2:
+                    continue
+                client_id = tmps[0]
+                client_secret = tmps[1]
                 try:
                     if client_id == '' or client_id is None or client_secret == '' or client_secret is None: 
                         return keyword
@@ -115,7 +119,7 @@ class SiteNaverMovie(SiteNaver):
                     logger.error(traceback.format_exc())             
         except Exception as e: 
             logger.error(f"Exception:{str(e)}")
-            #logger.error(traceback.format_exc())       
+            logger.error(traceback.format_exc())       
 
     @classmethod 
     def info(cls, code):
