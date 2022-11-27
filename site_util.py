@@ -146,7 +146,7 @@ class SiteUtil(object):
 
     @classmethod
     def remove_special_char(cls, text):
-        return re.sub('[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》]', '', text)
+        return re.sub('[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》：]', '', text)
     
 
     @classmethod
