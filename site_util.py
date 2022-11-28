@@ -204,7 +204,7 @@ class SiteUtil(object):
                     ddns=F.SystemModelSetting.get('ddns'),
                     site=data['extras'][0]['mode'],
                     param=data['extras'][0]['content_url'],
-                    apikey=F.SystemModelSetting.get('auth_apikey')
+                    apikey=F.SystemModelSetting.get('apikey')
                 )
                 data['info']['trailer'] = url
             elif data['extras'][0]['mode'] == 'mp4':
