@@ -41,6 +41,7 @@ class SiteDaumTv(SiteDaum):
 
             root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
             data = cls.get_show_info_on_home(root)
+            #data['link'] = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(keyword)), daum_id)
             #logger.debug(data)
             # KD58568 : 비하인드 더 쇼
             if data is not None and data['code'] in ['KD58568']:

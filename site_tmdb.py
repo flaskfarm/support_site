@@ -576,6 +576,7 @@ class SiteTmdbFtv(SiteTmdb):
                     except: entity.year = 1900
                     try: entity.desc = item['overview']
                     except: pass
+                    entity.link = f"https://www.themoviedb.org/tv/{item['id']}"
                     
                     if SiteUtil.compare(keyword, entity.title) or SiteUtil.compare(keyword, entity.title_original):
                         if year is not None:

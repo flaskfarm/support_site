@@ -623,6 +623,7 @@ class EntitySearchItemFtv(object):
         self.country = []
         self.genre = []
         self.year = ''        
+        self.link = ''
         
 
     def as_dict(self):
@@ -644,6 +645,7 @@ class EntitySearchItemFtv(object):
             'desc' : self.desc,                   
             'score' : self.score,
             'status' : self.status,
+            'link' : self.link,
         }
 
 #from collections import OrderedDict
