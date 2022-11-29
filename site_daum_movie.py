@@ -34,6 +34,7 @@ class SiteDaumMovie(SiteDaum):
                         except: home['image_url'] = ''
                         try: home['desc'] = movie_list[0]['more']['info'][0]
                         except: home['desc'] = ''
+                        home['link'] = 'https://movie.daum.net/moviedb/main?movieId=' + movie_list[0]['id']
                         result_list.insert(0, home)
 
             if result_list is None:
@@ -221,7 +222,7 @@ class SiteDaumMovie(SiteDaum):
                 entity.title_en = item['titleEnglishHanl']
                 entity.extra_info['title_en'] = item['titleEnglishHanl']
                 entity.desc = f"{item['admission']} / {item['genres']}"
-
+                entity.link = 'https://movie.daum.net/moviedb/main?movieId=' + item['movieId']
                 
                 if SiteUtil.compare(keyword, entity.title) or (item['titleEnglishHanl'] != '' and SiteUtil.compare(keyword, item['titleEnglishHanl'])) or (item['titleAdminHanl'] != '' and SiteUtil.compare(keyword, item['titleAdminHanl'])):
                     if year != 1900:

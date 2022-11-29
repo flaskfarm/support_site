@@ -56,6 +56,7 @@ class SiteNaverMovie(SiteNaver):
                     entity.extra_info['actor'] = item['actor']
                     entity.extra_info['director'] = item['director']
                     entity.extra_info['userRating'] = item['userRating']
+                    entity.link = 'https://movie.naver.com/movie/bi/mi/basic.naver?code=' + item['link'].split('=')[1]
                 
                     if SiteUtil.compare(keyword, entity.title) or SiteUtil.compare(keyword, entity.originaltitle):
                         if year != 1900:

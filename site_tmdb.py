@@ -257,6 +257,7 @@ class SiteTmdbMovie(SiteTmdb):
                 #if item['userRating'] != '0.00':
                 #    entity.desc += u'평점 : %s\r\n' % item['userRating']
                 entity.desc = item['overview']
+                entity.link = f"https://www.themoviedb.org/movie/{item['id']}"
 
                 if SiteUtil.compare(keyword, entity.title) or SiteUtil.compare(keyword, entity.originaltitle):
                     if year != 1900:

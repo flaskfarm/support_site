@@ -470,6 +470,7 @@ class EntitySearchItemMovie(object):
         self.extra_info = {}
         self.score = 0
         self.originaltitle = ''
+        self.link = ''
 
     def __repr__(self):
         tmp = 'site : %s\n' % self.site
@@ -489,19 +490,9 @@ class EntitySearchItemMovie(object):
             'extra_info' : self.extra_info,
             'score' : self.score,
             'originaltitle': self.originaltitle,
+            'link' : self.link
         }
-        """
-            'year' : self.year,            
-            'desc' : self.desc,            
-            
-            'status' : self.status,
-            'extra_info' : self.extra_info,
-            'broadcast_info' : self.broadcast_info,
-            'broadcast_term' : self.broadcast_term,
-            'series' : self.series,
-            'equal_name' : self.equal_name,
-            'episode' : self.episode,
-        """
+        
 
 class EntityMovie2(object):
     def __init__(self, site, code):
