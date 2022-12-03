@@ -317,7 +317,7 @@ class SiteNaverMovie(SiteNaver):
                             if tmp == u'한국':
                                 entity.originaltitle = entity.extra_info['title_ko']
                             else:
-                                entity.originaltitle = entity.extra_info['title_3'] if 'title_3' in entity.extra_info else entity.extra_info['title_en'] 
+                                entity.originaltitle = entity.extra_info['title_3'] if 'title_3' in entity.extra_info else entity.extra_info.get('title_en', '')
                         elif href.find('open=') != -1:
                             for a_tag_tmp in a_tag:
                                 tmp = a_tag_tmp.attrib['href'].split("open=")[1]
