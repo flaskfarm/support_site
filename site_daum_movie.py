@@ -317,6 +317,15 @@ class SiteDaumMovie(SiteDaum):
                         if tmp is not None:
                             entity.premiered = tmp[0:4] + '-' + tmp[4:6] + '-' + tmp[6:8]
                         break
+            try:
+                if entity.premiered == '':
+                    ott = data['movieCommon'].get('ottInformation')
+                    if ott != None and len(ott)>0:
+                        date = ott[0].get('openDate')
+                        if date != None:
+                            entity.premiered = date[0:4] + '-' + date[4:6] + '-' + date[6:8]
+            except:
+                pass
             if data['movieCommon']['mainPhoto'] is not None:
                 entity.art.append(EntityThumb(aspect='poster', value=data['movieCommon']['mainPhoto']['imageUrl'], site=cls.site_name, score=70))
 
