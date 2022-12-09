@@ -240,11 +240,11 @@ class SiteDaum(object):
     @classmethod
     def get_kakao_video(cls, kakao_id, sort='CreateTime', size=20):
         #sort : CreateTime PlayCount
+        ret = []
         try:
             url = 'https://tv.kakao.com/api/v1/ft/channels/{kakao_id}/videolinks?sort={sort}&fulllevels=clipLinkList%2CliveLinkList&fields=ccuCount%2CisShowCcuCount%2CthumbnailUrl%2C-user%2C-clipChapterThumbnailList%2C-tagList&size=20&page=1&_={timestamp}'.format(kakao_id=kakao_id, sort=sort, timestamp=int(time.time()))
             data = requests.get(url).json()
-
-            ret = []
+           
             for item in data['clipLinkList']:
                 ret.append(EntityExtra('Featurette', item['clip']['title'], 'kakao', item['id'], premiered=item['createTime'].split(' ')[0], thumb=item['clip']['thumbnailUrl']).as_dict())
             return ret
