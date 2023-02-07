@@ -56,6 +56,13 @@ except:
     pass
 
 
+try:
+    if os.path.exists(os.path.join(os.path.dirname(__file__), 'dl_watcha.py')):
+        from .cppl import DL_Watcha
+    else:
+        DL_Watcha = SupportSC.load_module_f(__file__, 'cppl').DL_Watcha
+except:
+    pass
 
 
 from .server_util import MetadataServerUtil
