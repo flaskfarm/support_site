@@ -41,7 +41,10 @@ class SiteWavveTv(SiteWavve):
                     entity.title = item['title_list'][0]['text']
                     if entity.title.find('[스페셜]') != -1:
                         continue
-                    entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + item['event_list'][1]['url'].split('=')[1]
+                    #entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + item['event_list'][1]['url'].split('=')[1]
+                    match = re.search('=(?P<code>.*)(&|$)', item['event_list'][1]['url'])
+                    if match:
+                        entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + match.group('code')
                     entity.image_url = 'https://' + item['thumbnail']
                     if SiteUtil.compare_show_title(entity.title, keyword):
                         entity.score = 100 - count_100
@@ -191,7 +194,11 @@ class SiteWavveMovie(SiteWavve):
             if search_list:
                 for idx, item in enumerate(search_list):
                     entity = EntitySearchItemMovie(cls.site_name)
-                    entity.code = cls.module_char + cls.site_char + item['event_list'][1]['url'].split('=')[1]
+                    #entity.code = cls.module_char + cls.site_char + item['event_list'][1]['url'].split('=')[1]
+                    match = re.search('=(?P<code>.*)(&|$)', item['event_list'][1]['url'])
+                    if match:
+                        entity.code = cls.module_char + cls.site_char + match.group('code')
+
                     entity.title = item['title_list'][0]['text']
                     entity.image_url = 'https://' + item['thumbnail']
                     entity.desc = u'Age: %s' % (item['age'])
