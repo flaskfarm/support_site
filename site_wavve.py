@@ -22,6 +22,11 @@ class SiteWavve(object):
             return channelname_map[channelname]
         return channelname
 
+    @classmethod
+    def trim_program_id(cls, code):
+        code, delimiter, trailing = code.partition('&')
+        return code
+
 
 class SiteWavveTv(SiteWavve):
     module_char = 'K'
@@ -42,7 +47,7 @@ class SiteWavveTv(SiteWavve):
                     if entity.title.find('[스페셜]') != -1:
                         continue
                     #entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + item['event_list'][1]['url'].split('=')[1]
-                    match = re.search('=(?P<code>.*)(&|$)', item['event_list'][1]['url'])
+                    match = re.search('id=(?P<code>[^&\n]+)', item['event_list'][1]['url'])
                     if match:
                         entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + match.group('code')
                     entity.image_url = 'https://' + item['thumbnail']
@@ -138,6 +143,7 @@ class SiteWavveTv(SiteWavve):
     def info(cls, code):
         try:
             ret = {}
+            code = cls.trim_program_id(code)
             program_info = SupportWavve.vod_programs_programid(code[2:])
             show = EntityShow(cls.site_name, code)
             show.title = program_info['programtitle']
@@ -181,6 +187,7 @@ class SiteWavveMovie(SiteWavve):
        
     @classmethod
     def info_api(cls, code):
+        code = cls.trim_program_id(code)
         if code.startswith(cls.module_char + cls.site_char):
             code = code[2:]
         return SupportWavve.movie_contents_movieid(code)
@@ -195,7 +202,7 @@ class SiteWavveMovie(SiteWavve):
                 for idx, item in enumerate(search_list):
                     entity = EntitySearchItemMovie(cls.site_name)
                     #entity.code = cls.module_char + cls.site_char + item['event_list'][1]['url'].split('=')[1]
-                    match = re.search('=(?P<code>.*)(&|$)', item['event_list'][1]['url'])
+                    match = re.search('id=(?P<code>[^&\n]+)', item['event_list'][1]['url'])
                     if match:
                         entity.code = cls.module_char + cls.site_char + match.group('code')
 
@@ -226,6 +233,7 @@ class SiteWavveMovie(SiteWavve):
     def info(cls, code):
         try:
             ret = {}
+            code = cls.trim_program_id(code)
             entity = EntityMovie2(cls.site_name, code)
             entity.code_list.append(['wavve_id', code[2:]])
             wavve_data = cls.info_api(code)
