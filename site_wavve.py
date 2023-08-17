@@ -16,7 +16,7 @@ movie_mpaa_map = {'0' : u'전체 관람가', '12': u'12세 관람가', '15': u'1
 class SiteWavve(object):
     site_name = 'wavve'
 
-    @classmethod 
+    @classmethod
     def change_daum_channelname(cls, channelname):
         if channelname in channelname_map:
             return channelname_map[channelname]
@@ -33,7 +33,7 @@ class SiteWavveTv(SiteWavve):
     site_char = 'W'
 
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, **kwargs):
         try:
             ret = {}
@@ -61,7 +61,7 @@ class SiteWavveTv(SiteWavve):
                 ret['data'] = show_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -69,7 +69,7 @@ class SiteWavveTv(SiteWavve):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def apply_tv_by_search(cls, show, force_search_title=None):
         try:
             keyword = force_search_title if force_search_title is not None else show['title']
@@ -85,26 +85,26 @@ class SiteWavveTv(SiteWavve):
                         if info is not None and (show['studio'] == info['cpname'] or show['premiered'] == info['firstreleasedate']):
                             cls._apply_tv_by_program(show, info)
                             break
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
-    
+
     @classmethod
     def _apply_tv_by_program(cls, show, program_info):
         try:
             show['extra_info']['wavve_id'] = program_info['programid']
             show['plot'] = program_info['programsynopsis'].replace('<br>', '\r\n')
             score = 70
-            show['thumb'].append(EntityThumb(aspect='landscape', value='https://' + program_info['image'], site=cls.site_name, score=0).as_dict())   
-            show['thumb'].append(EntityThumb(aspect='poster', value='https://' + program_info['posterimage'], site=cls.site_name, score=score).as_dict()) 
-            
+            show['thumb'].append(EntityThumb(aspect='landscape', value='https://' + program_info['image'], site=cls.site_name, score=0).as_dict())
+            show['thumb'].append(EntityThumb(aspect='poster', value='https://' + program_info['posterimage'], site=cls.site_name, score=score).as_dict())
+
             page = 1
             epi = None
             while True:
                 episode_data = SupportWavve.vod_program_contents_programid(program_info['programid'], page=page)
                 for epi in episode_data['list']:
-                    try: 
+                    try:
                         tmp = epi['episodenumber'].split('-')
                         if len(tmp) == 1:
                             epi_no = int(tmp[0])
@@ -127,19 +127,19 @@ class SiteWavveTv(SiteWavve):
             # 방송정보에 없는 데이터 에피소드에서 빼서 입력
             if epi:
                 show['mpaa'] = mpaa_map[epi['targetage']]
-                
+
                 if len(show['actor']) == 0:
                     for item in epi['episodeactors'].split(','):
                         actor = EntityActor(item.strip())
                         actor.name = item.strip()
                         show['actor'].append(actor.as_dict())
 
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code):
         try:
             ret = {}
@@ -148,7 +148,7 @@ class SiteWavveTv(SiteWavve):
             show = EntityShow(cls.site_name, code)
             show.title = program_info['programtitle']
             show.originaltitle = show.title
-            show.sorttitle = show.title 
+            show.sorttitle = show.title
             show.studio = cls.change_daum_channelname(program_info['channelname'])
             show.premiered = program_info['firstreleasedate']
             if show.premiered != '':
@@ -165,14 +165,14 @@ class SiteWavveTv(SiteWavve):
             cls._apply_tv_by_program(show, program_info)
             ret['ret'] = 'success'
             ret['data'] = show
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
-        return ret            
+        return ret
 
-                    
+
 
 
 
@@ -184,7 +184,7 @@ class SiteWavveMovie(SiteWavve):
     @classmethod
     def search_api(cls, keyword):
         return SupportWavve.search_movie(keyword)
-       
+
     @classmethod
     def info_api(cls, code):
         code = cls.trim_program_id(code)
@@ -192,7 +192,7 @@ class SiteWavveMovie(SiteWavve):
             code = code[2:]
         return SupportWavve.movie_contents_movieid(code)
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, year=1900):
         try:
             ret = {}
@@ -215,13 +215,13 @@ class SiteWavveMovie(SiteWavve):
                     else:
                         entity.score = 80 - (idx*5)
                     result_list.append(entity.as_dict())
-                result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)  
+                result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)
             if result_list:
                 ret['ret'] = 'success'
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -229,7 +229,7 @@ class SiteWavveMovie(SiteWavve):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code):
         try:
             ret = {}
@@ -242,9 +242,9 @@ class SiteWavveMovie(SiteWavve):
 
             entity.title = wavve_data['title']
             try:
-                tmp = wavve_data['origintitle'].split(',') 
+                tmp = wavve_data['origintitle'].split(',')
                 entity.extra_info['title_en'] = tmp[0].strip()
-                
+
             except: pass
 
             entity.country.append(wavve_data['country'])
@@ -265,7 +265,7 @@ class SiteWavveMovie(SiteWavve):
 
             for item in wavve_data['directors']['list']:
                 entity.director.append(item['text'])
-            
+
             entity.art.append(EntityThumb(aspect='poster', value='https://' + wavve_data['image'], site=cls.site_name, score=50))
 
             try: entity.ratings.append(EntityRatings(float(wavve_data['rating']), name=cls.site_name))
@@ -287,7 +287,7 @@ class SiteWavveMovie(SiteWavve):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
