@@ -9,6 +9,7 @@ from .entity_base import (EntityActor, EntityExtra2, EntityMovie2,
                           EntityRatings, EntitySearchItemMovie, EntityThumb)
 from .setup import *
 
+endofservice = {'ret': 'exception', 'data': '네이버 영화 검색 API 종료 : https://developers.naver.com/notice/article/9553'}
 
 class SiteNaver(object):
     site_name = 'naver'
@@ -35,7 +36,9 @@ class SiteNaverMovie(SiteNaver):
         try:
             ret = {}
             logger.debug('NAVER search : [%s] [%s]', keyword, year)
-            data = cls.search_api(keyword)
+            #data = cls.search_api(keyword)
+            # 네이버 영화 검색 API 종료 : https://developers.naver.com/notice/article/9553
+            data = None
             result_list = []
             if data is not None:
                 for idx, item in enumerate(data['items']):
@@ -83,6 +86,7 @@ class SiteNaverMovie(SiteNaver):
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        ret = endofservice
         return ret
 
 
@@ -124,6 +128,7 @@ class SiteNaverMovie(SiteNaver):
 
     @classmethod
     def info(cls, code):
+        return endofservice
         try:
             ret = {}
             entity = EntityMovie2(cls.site_name, code)
