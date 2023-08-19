@@ -11,6 +11,7 @@ class SiteWatcha(object):
     site_name = 'watcha'
     site_base_url = 'https://thetvdb.com'
 
+    """
     default_headers = {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
         'x-watchaplay-client': 'WatchaPlay-WebApp',
@@ -23,6 +24,19 @@ class SiteWatcha(object):
         'x-watcha-client-language': 'ko',
         'x-watcha-client-region': 'KR',
         'x-watcha-client-version': '2.0.0',
+    }
+    """
+    default_headers = {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 Edg/115.0.1901.203',
+        'X-Watcha-Client': 'watcha-WebApp',
+        'X-Watcha-Client-Language': 'ko',
+        'X-Watcha-Client-Region': 'KR',
+        'X-Watcha-Client-Version': '2.1.0',
+        'X-Frograms-Client': 'Galaxy-Web-App',
+        'X-Frograms-App-Code': 'Galaxy',
+        'X-Frograms-Galaxy-Language': 'ko',
+        'X-Frograms-Galaxy-Region': 'KR',
+        'X-Frograms-Version': '2.1.0',
     }
 
     @classmethod
@@ -37,6 +51,7 @@ class SiteWatcha(object):
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
+            logger.debug(f'keyword: {keyword}, content_type: {content_type}, data: {data}')
 
 
 
@@ -237,7 +252,7 @@ class SiteWatchaTv(SiteWatcha):
         try:
             ret = {}
             data = cls.search_api(keyword)
-            logger.debug(json.dumps(data, indent=4))
+            #logger.debug(json.dumps(data, indent=4))
             result_list = []
             for idx, item in enumerate(data):
                 entity = EntitySearchItemFtv(cls.site_name)
