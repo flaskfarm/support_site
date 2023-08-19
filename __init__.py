@@ -213,7 +213,8 @@ def vod_program_contents_programid(code: str, page: int = 1):
         data = json.loads(response.text)
         data = data.pop('cell_toplist')
         data['list'] = data['celllist']
-        data['list'] = data['list'][1:]
+        if page == 1:
+            data['list'] = data['list'][1:]
         for ep in data['list']:
             ep['image'] = ep.pop('thumbnail')
             ep['programtitle'] = ep.pop('alt')
