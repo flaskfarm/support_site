@@ -126,7 +126,7 @@ class SiteWavveTv(SiteWavve):
                     break
             # 방송정보에 없는 데이터 에피소드에서 빼서 입력
             if epi:
-                show['mpaa'] = mpaa_map[epi['targetage'] if epi['targetage'] else '0']
+                show['mpaa'] = mpaa_map[epi.get('targetage', '0')]
 
                 if len(show['actor']) == 0:
                     for item in epi['episodeactors'].split(','):

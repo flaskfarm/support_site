@@ -188,6 +188,9 @@ def get_prefer_url(url):
 SupportWavve.get_prefer_url = get_prefer_url
 
 
+'''
+프로그램 정보 api 오류 대응
+'''
 default_query = {
     'limit': 10,
     'offset': 0,
