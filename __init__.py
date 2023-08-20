@@ -222,6 +222,9 @@ def vod_program_contents_programid(code: str, page: int = 1):
         for ep in data['list']:
             ep['image'] = ep.pop('thumbnail')
             ep['programtitle'] = ep.pop('alt')
+            ep['episodeactors'] = ep.pop('actors')
+            if not ep['episodetitle']:
+                ep['episodetitle'] = ep['synopsis']
         return data
     except:
         PLUGIN.logger.error(traceback.format_exc())
@@ -237,33 +240,28 @@ SupportWavve.vod_program_contents_programid = vod_program_contents_programid
 웨이브 TV 검색 결과가 없을 경우:
     band.js api: KeyError: 'band'
 
-mtype=ppv로 검색이 안될 경우 mtype=svod로 재시도
+mtype:
+    all: 전체
+    svod: 영화 (인터스텔라)
+    ppv: 영화플러스 (타이타닉)
+mtype=ppv일 경우 mtype=all로 변경
 '''
 p_wavve_netloc = re.compile(r'wavve\.com')
 p_wavve_path_search_list = re.compile(r'list\.js')
 def hook_request_get(f):
     @functools.wraps(f)
     def wrap(*args, **kwargs):
-        response = f(*args, **kwargs)
         url_parts = list(urlparse(args[0]))
         match_netloc = p_wavve_netloc.search(url_parts[1])
         match_path_search_list = p_wavve_path_search_list.search(url_parts[2])
         if match_netloc and match_path_search_list:
-            try:
-                result = json.loads(response.text)
-                # mtype=ppv로 검색이 안될 경우 mtype=svod로 재시도
-                if not result.get('cell_toplist', {'celllist': []}).get('celllist'):
-                    PLUGIN.logger.warning(f'"mtype=svod"으로 재시도')
-                    query = parse_qs(url_parts[4])
-                    if 'mtype' in query:
-                        query['mtype'] = 'svod'
-                        url_parts[4] = urlencode(query, doseq=True)
-                        args = list(args)
-                        args[0] = urlunparse(url_parts)
-                        response = f(*args, **kwargs)
-            except:
-                PLUGIN.logger.warning(traceback.format_exc())
-                PLUGIN.logger.warning(f'response: {response.text}')
+            query = parse_qs(url_parts[4])
+            if 'mtype' in query:
+                query['mtype'] = 'all'
+                url_parts[4] = urlencode(query, doseq=True)
+                args = list(args)
+                args[0] = urlunparse(url_parts)
+        response = f(*args, **kwargs)
         return response
     return wrap
 SupportWavve.session.get = hook_request_get(SupportWavve.session.get)
