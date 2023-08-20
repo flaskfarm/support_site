@@ -249,16 +249,17 @@ p_wavve_path_search_list = re.compile(r'list\.js')
 def hook_request_get(f):
     @functools.wraps(f)
     def wrap(*args, **kwargs):
-        url_parts = list(urlparse(args[0]))
-        match_netloc = p_wavve_netloc.search(url_parts[1])
-        match_path_search_list = p_wavve_path_search_list.search(url_parts[2])
-        if match_netloc and match_path_search_list:
-            query = parse_qs(url_parts[4])
-            if 'mtype' in query:
-                query['mtype'] = 'all'
-                url_parts[4] = urlencode(query, doseq=True)
-                args = list(args)
-                args[0] = urlunparse(url_parts)
+        if args:
+            url_parts = list(urlparse(args[0]))
+            match_netloc = p_wavve_netloc.search(url_parts[1])
+            match_path_search_list = p_wavve_path_search_list.search(url_parts[2])
+            if match_netloc and match_path_search_list:
+                query = parse_qs(url_parts[4])
+                if 'mtype' in query:
+                    query['mtype'] = 'all'
+                    url_parts[4] = urlencode(query, doseq=True)
+                    args = list(args)
+                    args[0] = urlunparse(url_parts)
         response = f(*args, **kwargs)
         return response
     return wrap
