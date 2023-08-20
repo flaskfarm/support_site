@@ -137,7 +137,6 @@ class SiteWavveTv(SiteWavve):
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
-            logger.debug(f'show: {show}, program_info: {program_info}, episode_data: {episode_data}')
 
 
     @classmethod

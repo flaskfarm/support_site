@@ -118,11 +118,10 @@ from .setup import P as PLUGIN
 
 
 '''
-by 만물이론님(halfaider)
 파일 이름을 생성할 때 "programtitle"이 공백일 경우 "seasontitle"로 대체
-by ssokka
-드라마의 경우 파일 이름에 시즌 표시가 안됨
-"seasontitle"로 1차적으로 적용하고 공백일 경우 "programtitle"로 대체
+ssokka:
+    드라마의 경우 파일 이름에 시즌 표시가 안됨
+    "seasontitle"로 1차적으로 적용하고 공백일 경우 "programtitle"로 대체
 '''
 def hook_get_filename(f):
     @functools.wraps(f)
@@ -143,8 +142,9 @@ SupportWavve.get_filename = hook_get_filename(SupportWavve.get_filename)
 
 
 '''
-Fix Proxy
-국내 IP가 적용되는 Proxy 주소 사용, warproxy/wgcf 불가
+ssokka:
+    Fix Proxy
+    국내 IP가 적용되는 Proxy 주소 사용, warproxy/wgcf 불가
 '''
 SupportWavve.use_proxy = PLUGIN.ModelSetting.get_bool('site_wavve_use_proxy')
 SupportWavve.proxy_url = PLUGIN.ModelSetting.get('site_wavve_proxy_url')
@@ -153,9 +153,10 @@ if SupportWavve.use_proxy and SupportWavve._SupportWavve__get_proxies() is not N
 
 
 '''
-Fix low auido bitrate
-Fix 'SDR_AVC' error log
-Apply auto url type
+ssokka:
+    Fix low auido bitrate
+    Fix 'SDR_AVC' error log
+    Apply auto url type
 '''
 def get_prefer_url(url):
     try:
