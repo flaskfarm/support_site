@@ -113,6 +113,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import re
 import json
 import traceback
+import sys
 
 from .setup import P as PLUGIN
 
@@ -180,7 +181,7 @@ def get_prefer_url(url):
                     url_type = f'chunklist{url_type}'
                 last_url = f'{url.split(url_type)[0]}{last_url}'
                 return last_url
-        P.logger.debug(f'function: {sys._getframe().f_code.co_name}, url: {url}, data: {data}')
+        PLUGIN.logger.debug(f'function: {sys._getframe().f_code.co_name}, url: {url}, data: {data}')
         return url
     except Exception as exception:
         PLUGIN.logger.error('Exception:%s', exception)
