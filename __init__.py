@@ -60,7 +60,7 @@ except:
 
 try:
     if os.path.exists(os.path.join(os.path.dirname(__file__), 'dl_watcha.py')):
-        from .cppl import DL_Watcha
+        from .dl_watcha import DL_Watcha
     else:
         DL_Watcha = SupportSC.load_module_f(__file__, 'dl_watcha').DL_Watcha
 except:
@@ -114,21 +114,22 @@ import re
 import json
 import traceback
 import sys
+from unittest.mock import patch
 
 from .setup import P as PLUGIN
 
 
-'''
-파일 이름을 생성할 때 "programtitle"이 공백일 경우 "seasontitle"로 대체
-ssokka:
-    드라마의 경우 파일 이름에 시즌 표시가 안됨
-    "seasontitle"로 1차적으로 적용하고 공백일 경우 "programtitle"로 대체
-'''
-def hook_get_filename(f):
+def get_filename_warpper(f):
+    '''
+    파일 이름을 생성할 때 "programtitle"이 공백일 경우 "seasontitle"로 대체
+    ssokka:
+        드라마의 경우 파일 이름에 시즌 표시가 안됨
+        "seasontitle"로 1차적으로 적용하고 공백일 경우 "programtitle"로 대체
+    '''
     @functools.wraps(f)
     def wrap(*args, **kwargs):
         try:
-            if not args[0].get('movieid'):
+            if 'programtitle' in args[0] and 'seasontitle' in args[0]:
                 programtitle = args[0].get('programtitle')
                 args[0]['programtitle'] = args[0]['seasontitle']
                 if not args[0]['programtitle']:
@@ -139,27 +140,18 @@ def hook_get_filename(f):
             PLUGIN.logger.error(traceback.format_exc())
         return f(*args, **kwargs)
     return wrap
-SupportWavve.get_filename = hook_get_filename(SupportWavve.get_filename)
+SupportWavve.get_filename = get_filename_warpper(SupportWavve.get_filename)
 
 
-'''
-ssokka:
-    Fix Proxy
-    국내 IP가 적용되는 Proxy 주소 사용, warproxy/wgcf 불가
-'''
-SupportWavve.use_proxy = PLUGIN.ModelSetting.get_bool('site_wavve_use_proxy')
-SupportWavve.proxy_url = PLUGIN.ModelSetting.get('site_wavve_proxy_url')
-if SupportWavve.use_proxy and SupportWavve._SupportWavve__get_proxies() is not None:
-    SupportWavve.session.proxies = SupportWavve._SupportWavve__get_proxies()
-
-
-'''
-ssokka:
-    Fix low auido bitrate
-    Fix 'SDR_AVC' error log
-    Apply auto url type
-'''
-def get_prefer_url(url):
+p_wavve_bandwidth = re.compile(r'.*?BANDWIDTH=(\d+)')
+p_wavve_last_url = re.compile(r'^(.*?)/')
+def get_prefer_url(url: str) -> str:
+    '''
+    ssokka:
+        Fix low auido bitrate
+        Fix 'SDR_AVC' error log
+        Apply auto url type
+    '''
     try:
         data = SupportWavve.session.get(url, headers=SupportWavve.config['headers']).text.strip()
         line = data.split('\n')
@@ -167,14 +159,14 @@ def get_prefer_url(url):
         last_url = None
         iterator = iter(line)
         for l in iterator:
-            match = re.match(r'.*?BANDWIDTH=(\d+)', l)
+            match = p_wavve_bandwidth.match(l)
             if match:
                 bandwidth = int(match.group(1))
                 if bandwidth > max_bandwidth:
                     max_bandwidth = bandwidth
                     last_url = next(iterator)
         if last_url is not None and last_url != '':
-            match = re.match(r'^(.*?)/', last_url)
+            match = p_wavve_last_url.match(last_url)
             if match:
                 url_type = match.group(1)
                 if url.find('chunklist') != -1:
@@ -189,9 +181,6 @@ def get_prefer_url(url):
 SupportWavve.get_prefer_url = get_prefer_url
 
 
-'''
-프로그램 정보 api 오류 대응
-'''
 default_query = {
     'limit': 10,
     'offset': 0,
@@ -209,7 +198,10 @@ default_headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 Edg/115.0.1901.20',
     'Wavve-Credential': PLUGIN.ModelSetting.get('site_wavve_credential'),
 }
-def vod_program_contents_programid(code: str, page: int = 1):
+def vod_program_contents_programid(code: str, page: int = 1) -> dict:
+    '''
+    프로그램 정보 api 오류 대응
+    '''
     PLUGIN.logger.debug(f'{code}, {page}')
     default_query['offset'] = (page - 1) * 10
     url = urlunparse(('https', 'apis.wavve.com', f'fz/vod/programs/{code}/contents', '', urlencode(default_query, doseq=True), ''))
@@ -232,37 +224,37 @@ def vod_program_contents_programid(code: str, page: int = 1):
 SupportWavve.vod_program_contents_programid = vod_program_contents_programid
 
 
-'''
-웨이브 영화 검색 결과가 없을 경우:
-    1차 검색 list.js api: KeyError: 'cell_toplist'
-    2차 검색 band.js api: KeyError: 'band'
-웨이브 TV 검색 결과가 없을 경우:
-    band.js api: KeyError: 'band'
+def patch_session_get(*args, **kwds):
+    '''
+    웨이브 영화 검색 결과가 없을 경우:
+        1차 검색 list.js api: KeyError: 'cell_toplist'
+        2차 검색 band.js api: KeyError: 'band'
+    웨이브 TV 검색 결과가 없을 경우:
+        band.js api: KeyError: 'band'
 
-mtype:
-    all: 전체
-    svod: 영화 (인터스텔라)
-    ppv: 영화플러스 (타이타닉)
-mtype=ppv일 경우 mtype=all로 변경
-'''
-p_wavve_netloc = re.compile(r'wavve\.com')
-p_wavve_path_search_list = re.compile(r'list\.js')
-def hook_request_get(f):
+    mtype:
+        all: 전체
+        svod: 영화 (인터스텔라)
+        ppv: 영화플러스 (타이타닉)
+    mtype=ppv일 경우 mtype=all로 변경
+    '''
+    PLUGIN.logger.debug(args)
+    PLUGIN.logger.debug(kwds)
+    args = list(args)
+    url_parts = list(urlparse(args[0]))
+    query = parse_qs(url_parts[4])
+    if 'mtype' in query:
+        query['mtype'] = 'all'
+        url_parts[4] = urlencode(query, doseq=True)
+        args = list(args)
+        args[0] = urlunparse(url_parts)
+    return SupportWavve.session.request('GET', *args, **kwds)
+
+
+def search_movie_wrapper(f):
     @functools.wraps(f)
-    def wrap(*args, **kwargs):
-        if args:
-            url_parts = list(urlparse(args[0]))
-            match_netloc = p_wavve_netloc.search(url_parts[1])
-            match_path_search_list = p_wavve_path_search_list.search(url_parts[2])
-            if match_netloc and match_path_search_list:
-                query = parse_qs(url_parts[4])
-                if 'mtype' in query:
-                    query['mtype'] = 'all'
-                    url_parts[4] = urlencode(query, doseq=True)
-                    args = list(args)
-                    args[0] = urlunparse(url_parts)
-        response = f(*args, **kwargs)
-        return response
+    def wrap(*args, **kwds):
+        with patch('support_site.wavve.SupportWavve.session.get', patch_session_get):
+            return f(*args, **kwds)
     return wrap
-SupportWavve.session.get = hook_request_get(SupportWavve.session.get)
-wavve.requests.get = hook_request_get(wavve.requests.get)
+SupportWavve.search_movie = search_movie_wrapper(SupportWavve.search_movie)

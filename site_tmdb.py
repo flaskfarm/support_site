@@ -139,7 +139,10 @@ class SiteTmdbTv(SiteTmdb):
             for tmdb_item in tmdb_actor['cast']:
                 if tmdb_item['profile_path'] is None:
                     continue
-                kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko')
+                try:
+                    kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko')
+                except:
+                    kor_name = None
                 flag_find = False
                 for actor in show['actor']:
                     if actor['name'] == kor_name:
@@ -147,7 +150,10 @@ class SiteTmdbTv(SiteTmdb):
                         actor['thumb'] = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
                         break
                 if flag_find == False:
-                    kor_role_name = SiteUtil.trans(tmdb_item['character'], source='en', target='ko')
+                    try:
+                        kor_role_name = SiteUtil.trans(tmdb_item['character'], source='en', target='ko')
+                    except:
+                        kor_role_name = None
                     for actor in show['actor']:
                         if actor['role'] == kor_role_name:
                             flag_find = True
@@ -371,21 +377,41 @@ class SiteTmdbMovie(SiteTmdb):
                     except: pass
 
                     actor = EntityActor('', site=cls.site_name)
-                    actor.name = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
-                    actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
+                    try:
+                        try:
+                            actor.name = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
+                            actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
+                        except:
+                            actor.name = name
+                            actor.role = tmdb_item['character']
+                    except:
+                        actor.name = name
+                        actor.role = tmdb_item['character']
                     if tmdb_item['profile_path'] is not None:
                         actor.thumb = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
 
                     entity.actor.append(actor)
                 for tmdb_item in info['crew'][:20]:
                     if tmdb_item['job'] == 'Director':
-                        entity.director.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        try:
+                            entity.director.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        except:
+                            entity.director.append(tmdb_item['original_name'])
                     if tmdb_item['job'] == 'Executive Producer':
-                        entity.producers.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        try:
+                            entity.producers.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        except:
+                            entity.producers.append(tmdb_item['original_name'])
                     if tmdb_item['job'] == 'Producer':
-                        entity.producers.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        try:
+                            entity.producers.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        except:
+                            entity.producers.append(tmdb_item['original_name'])
                     if tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']:
-                        entity.credits.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        try:
+                            entity.credits.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                        except:
+                            entity.credits.append(tmdb_item['original_name'])
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -456,7 +482,10 @@ class SiteTmdbMovie(SiteTmdb):
             for tmdb_item in tmdb_actor['cast']:
                 if tmdb_item['profile_path'] is None:
                     continue
-                kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko').replace(' ', '')
+                try:
+                    kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko').replace(' ', '')
+                except:
+                    kor_name = None
                 #kor_name = MetadataServerUtil.trans_en_to_ko(tmdb_item['name'])
                 flag_find = False
 
