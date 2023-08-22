@@ -238,8 +238,6 @@ def patch_session_get(*args, **kwds):
         ppv: 영화플러스 (타이타닉)
     mtype=ppv일 경우 mtype=all로 변경
     '''
-    PLUGIN.logger.debug(args)
-    PLUGIN.logger.debug(kwds)
     args = list(args)
     url_parts = list(urlparse(args[0]))
     query = parse_qs(url_parts[4])
