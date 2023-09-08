@@ -202,7 +202,6 @@ def vod_program_contents_programid(code: str, page: int = 1) -> dict:
     '''
     프로그램 정보 api 오류 대응
     '''
-    PLUGIN.logger.debug(f'{code}, {page}')
     default_query['offset'] = (page - 1) * 10
     url = urlunparse(('https', 'apis.wavve.com', f'fz/vod/programs/{code}/contents', '', urlencode(default_query, doseq=True), ''))
     try:
@@ -214,8 +213,7 @@ def vod_program_contents_programid(code: str, page: int = 1) -> dict:
             ep['image'] = ep.pop('thumbnail')
             ep['programtitle'] = ep.pop('alt')
             ep['episodeactors'] = ep.pop('actors')
-            if not ep['episodetitle']:
-                ep['episodetitle'] = ep['synopsis']
+            ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
         return data
     except:
         PLUGIN.logger.error(traceback.format_exc())
@@ -224,13 +222,32 @@ def vod_program_contents_programid(code: str, page: int = 1) -> dict:
 SupportWavve.vod_program_contents_programid = vod_program_contents_programid
 
 
+def patch_wrapper(f, target, inject):
+    @functools.wraps(f)
+    def wrap(*args, **kwds):
+        with patch(target, inject):
+            return f(*args, **kwds)
+    return wrap
+
+
+def check_empty_json(response, keyword, dummy, match):
+    try:
+        if match:
+            result = response.json()
+            if not result:
+                PLUGIN.logger.debug(f'검색 결과 없음: {keyword}')
+                response._content = bytes(dummy, response.encoding or 'utf-8')
+    except:
+        PLUGIN.logger.error(traceback.format_exc())
+    finally:
+        return response
+
+
+p_wavve_url_list = re.compile(r'list.js')
 def patch_session_get(*args, **kwds):
     '''
-    웨이브 영화 검색 결과가 없을 경우:
-        1차 검색 list.js api: KeyError: 'cell_toplist'
-        2차 검색 band.js api: KeyError: 'band'
-    웨이브 TV 검색 결과가 없을 경우:
-        band.js api: KeyError: 'band'
+    웨이브 list.js api 검색 응답이 '{}'일 경우:
+        search_movie(): list.js api: KeyError: 'cell_toplist'
 
     mtype:
         all: 전체
@@ -246,13 +263,19 @@ def patch_session_get(*args, **kwds):
         url_parts[4] = urlencode(query, doseq=True)
         args = list(args)
         args[0] = urlunparse(url_parts)
-    return SupportWavve.session.request('GET', *args, **kwds)
+    response = SupportWavve.session.request('GET', *args, **kwds)
+    return check_empty_json(response, query.get("keyword", [None])[0], r'{"cell_toplist": {}}', p_wavve_url_list.search(url_parts[2]))
+SupportWavve.search_movie = patch_wrapper(SupportWavve.search_movie, 'support_site.wavve.SupportWavve.session.get', patch_session_get)
 
 
-def search_movie_wrapper(f):
-    @functools.wraps(f)
-    def wrap(*args, **kwds):
-        with patch('support_site.wavve.SupportWavve.session.get', patch_session_get):
-            return f(*args, **kwds)
-    return wrap
-SupportWavve.search_movie = search_movie_wrapper(SupportWavve.search_movie)
+p_wavve_url_band = re.compile(r'band.js')
+def patch_search_session_get(*args, **kwds):
+    '''
+    웨이브 band.js api 검색 응답이 '{}'일 경우:
+        band.js api: KeyError: 'band'
+    '''
+    response = SupportWavve.session.request('GET', *args, **kwds)
+    url_parts = urlparse(args[0])
+    query = parse_qs(url_parts.query)
+    return check_empty_json(response, query.get("keyword", [None])[0], r'{"band": {}}', p_wavve_url_band.search(url_parts.path))
+SupportWavve._SupportWavve__search = patch_wrapper(SupportWavve._SupportWavve__search, 'support_site.wavve.SupportWavve.session.get', patch_search_session_get)
