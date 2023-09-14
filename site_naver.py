@@ -9,6 +9,7 @@ from .entity_base import (EntityActor, EntityExtra2, EntityMovie2,
                           EntityRatings, EntitySearchItemMovie, EntityThumb)
 from .setup import *
 
+endofservice = {'ret': 'exception', 'data': '네이버 영화 검색 API 종료 : https://developers.naver.com/notice/article/9553'}
 
 class SiteNaver(object):
     site_name = 'naver'
@@ -30,12 +31,14 @@ class SiteNaverMovie(SiteNaver):
     module_char = 'M'
     site_char = 'N'
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, year=1900):
         try:
             ret = {}
             logger.debug('NAVER search : [%s] [%s]', keyword, year)
-            data = cls.search_api(keyword)
+            #data = cls.search_api(keyword)
+            # 네이버 영화 검색 API 종료 : https://developers.naver.com/notice/article/9553
+            data = None
             result_list = []
             if data is not None:
                 for idx, item in enumerate(data['items']):
@@ -57,7 +60,7 @@ class SiteNaverMovie(SiteNaver):
                     entity.extra_info['director'] = item['director']
                     entity.extra_info['userRating'] = item['userRating']
                     entity.link = 'https://movie.naver.com/movie/bi/mi/basic.naver?code=' + item['link'].split('=')[1]
-                
+
                     if SiteUtil.compare(keyword, entity.title) or SiteUtil.compare(keyword, entity.originaltitle):
                         if year != 1900:
                             if abs(entity.year-year) < 2:
@@ -72,20 +75,21 @@ class SiteNaverMovie(SiteNaver):
                             entity.socre = 10
                     result_list.append(entity.as_dict())
 
-            result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)  
+            result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)
             if result_list:
                 ret['ret'] = 'success'
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        ret = endofservice
         return ret
 
-        
+
 
     @classmethod
     def search_api(cls, keyword):
@@ -99,7 +103,7 @@ class SiteNaverMovie(SiteNaver):
                 client_id = tmps[0]
                 client_secret = tmps[1]
                 try:
-                    if client_id == '' or client_id is None or client_secret == '' or client_secret is None: 
+                    if client_id == '' or client_id is None or client_secret == '' or client_secret is None:
                         return keyword
                     url = f"https://openapi.naver.com/v1/search/movie.json?query={urllib.parse.quote(str(keyword))}&display=100"
                     requesturl = urllib.request.Request(url)
@@ -115,15 +119,16 @@ class SiteNaverMovie(SiteNaver):
                         return data
                     else:
                         continue
-                except Exception as e: 
+                except Exception as e:
                     logger.error(f"Exception:{str(e)}")
-                    logger.error(traceback.format_exc())             
-        except Exception as e: 
+                    logger.error(traceback.format_exc())
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())       
+            logger.error(traceback.format_exc())
 
-    @classmethod 
+    @classmethod
     def info(cls, code):
+        return endofservice
         try:
             ret = {}
             entity = EntityMovie2(cls.site_name, code)
@@ -134,15 +139,15 @@ class SiteNaverMovie(SiteNaver):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc()) 
+            logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info_video(cls, code, entity):
         try:
             url = 'https://movie.naver.com/movie/bi/mi/media.nhn?code=%s' % code[2:]
@@ -165,18 +170,18 @@ class SiteNaverMovie(SiteNaver):
                         if tmp:
                             tmp2 = tmp[0].attrib['src']
                             extra.thumb = 'https://ssl.pstatic.net/imgmovie' + tmp2.split('coverImage=')[1].split('&')[0]
-                    except Exception as e: 
+                    except Exception as e:
                         logger.error(f"Exception:{str(e)}")
-                        logger.error(traceback.format_exc()) 
+                        logger.error(traceback.format_exc())
                     extra.title = tag.xpath('.//a/img')[0].attrib['alt']
                     extra.premiered = tag.xpath('.//p[@class="video_date"]')[0].text_content().replace('.', '-')
                     entity.extras.append(extra)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc()) 
+            logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def info_photo(cls, code, entity):
         try:
             page = 1
@@ -214,11 +219,11 @@ class SiteNaverMovie(SiteNaver):
                 page += 1
                 if len(data) != 100 or page > 3:
                     break
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc()) 
+            logger.error(traceback.format_exc())
 
-    @classmethod 
+    @classmethod
     def info_detail(cls, code, entity):
         try:
             url = 'https://movie.naver.com/movie/bi/mi/detail.nhn?code=%s' % code[2:]
@@ -228,7 +233,7 @@ class SiteNaverMovie(SiteNaver):
                 for tag in tags:
                     actor = EntityActor('', site=cls.site_name)
                     tmp = tag.xpath('.//img')[0].attrib['src']
-                    match = re.search(r'src\=(?P<url>.*?)\&', tmp) 
+                    match = re.search(r'src\=(?P<url>.*?)\&', tmp)
                     if match:
                         actor.thumb = urllib.parse.unquote(match.group('url'))
                     actor.name = tag.xpath('.//div[@class="p_info"]/a')[0].attrib['title']
@@ -250,9 +255,9 @@ class SiteNaverMovie(SiteNaver):
                 for tag in tags:
                     tmp = tag.xpath('.//a')
                     if tmp:
-                        entity.credits.append(tmp[0].text_content().strip()) 
+                        entity.credits.append(tmp[0].text_content().strip())
                     else:
-                        entity.credits.append(tag.text.strip()) 
+                        entity.credits.append(tag.text.strip())
             tags = root.xpath('//div[@class="agency"]/dl')
             if tags:
                 tmp1 = tags[0].xpath('.//dt')
@@ -261,12 +266,12 @@ class SiteNaverMovie(SiteNaver):
                     if tag.text_content().strip() == u'제작':
                         tmp = tmp2[idx].xpath('.//a')
                         entity.studio = tmp[0].text_content().strip() if tmp else tmp2[idx].text_content().strip()
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc()) 
+            logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def info_basic(cls, code, entity):
         try:
             url = 'https://movie.naver.com/movie/bi/mi/basic.nhn?code=%s' % code[2:]
@@ -335,13 +340,13 @@ class SiteNaverMovie(SiteNaver):
             tags = root.xpath('//div[@class="story_area"]//p[@class="con_tx"]/text()')
             if tags:
                 entity.plot = '\r\n'.join([tag.strip().replace('&nbsp;', '') for tag in tags])
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc()) 
+            logger.error(traceback.format_exc())
         return True
 
 
-    @classmethod 
+    @classmethod
     def get_video_url(cls, param):
         try:
             tmps = param.split(',')
@@ -356,7 +361,6 @@ class SiteNaverMovie(SiteNaver):
                 data = requests.get(url).json()
                 ret = data['videos']['list'][0]['source']
                 return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
-

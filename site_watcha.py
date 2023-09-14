@@ -11,6 +11,7 @@ class SiteWatcha(object):
     site_name = 'watcha'
     site_base_url = 'https://thetvdb.com'
 
+    """
     default_headers = {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
         'x-watchaplay-client': 'WatchaPlay-WebApp',
@@ -24,6 +25,19 @@ class SiteWatcha(object):
         'x-watcha-client-region': 'KR',
         'x-watcha-client-version': '2.0.0',
     }
+    """
+    default_headers = {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 Edg/115.0.1901.203',
+        'X-Watcha-Client': 'watcha-WebApp',
+        'X-Watcha-Client-Language': 'ko',
+        'X-Watcha-Client-Region': 'KR',
+        'X-Watcha-Client-Version': '2.1.0',
+        'X-Frograms-Client': 'Galaxy-Web-App',
+        'X-Frograms-App-Code': 'Galaxy',
+        'X-Frograms-Galaxy-Language': 'ko',
+        'X-Frograms-Galaxy-Region': 'KR',
+        'X-Frograms-Version': '2.1.0',
+    }
 
     @classmethod
     def _search_api(cls, keyword, content_type='movies'):
@@ -34,9 +48,10 @@ class SiteWatcha(object):
                 return data['result']['movies']
             elif content_type == 'tv_seasons':
                 return data['result']['tv_seasons']
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
+            logger.debug(f'keyword: {keyword}, content_type: {content_type}, data: {data}')
 
 
 
@@ -54,15 +69,15 @@ class SiteWatchaMovie(SiteWatcha):
             ret['review'] = cls.info_review(code, None, api_return=True)
             ret['collection'] = cls.info_collection(code, None, api_return=True)
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
-    @classmethod 
+    @classmethod
     def search_api(cls, keyword):
         return cls._search_api(keyword, 'movies')
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, year=1900):
         try:
             ret = {}
@@ -94,7 +109,7 @@ class SiteWatchaMovie(SiteWatcha):
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -102,7 +117,7 @@ class SiteWatchaMovie(SiteWatcha):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code, like_count=100):
         try:
             ret = {}
@@ -116,7 +131,7 @@ class SiteWatchaMovie(SiteWatcha):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -124,7 +139,7 @@ class SiteWatchaMovie(SiteWatcha):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info_basic(cls, code, entity, api_return=False):
         try:
             url = 'https://api-mars.watcha.com/api/contents/%s.json' % code
@@ -140,7 +155,7 @@ class SiteWatchaMovie(SiteWatcha):
                     if item['photo'] is not None:
                         actor.thumb = item['photo']['medium']
                     entity.actor.append(actor)
-                except Exception as e: 
+                except Exception as e:
                     logger.error(f"Exception:{str(e)}")
                     logger.error(traceback.format_exc())
                     logger.debug(item)
@@ -163,12 +178,12 @@ class SiteWatchaMovie(SiteWatcha):
             entity.art.append(EntityThumb(aspect='poster', value=data['poster']['original'], thumb=data['poster']['small'], site=cls.site_name, score=60))
             entity.art.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
             entity.plot = data['story']
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def info_review(cls, code, entity, api_return=False):
         try:
             url = 'https://api-pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
@@ -188,12 +203,12 @@ class SiteWatchaMovie(SiteWatcha):
                 tmp = re.sub(r'[^ %s-=+,#/\?:^$.@*\"~&%%!\\|\(\)\[\]\<\>`\'A-Za-z0-9]' % u'ㄱ-ㅣ가-힣', ' ', tmp)
                 review.text += ']   ' + tmp
                 entity.review.append(review)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def info_collection(cls, code, entity, api_return=False, like_count=100):
         try:
             url = 'https://api-pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
@@ -203,7 +218,7 @@ class SiteWatchaMovie(SiteWatcha):
             for item in data['result']['result']:
                 if item['likes_count'] > like_count:
                     entity.tag.append(item['title'])
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -222,22 +237,22 @@ class SiteWatchaTv(SiteWatcha):
             ret['review'] = cls.info_review(code, None, api_return=True)
             ret['collection'] = cls.info_collection(code, None, api_return=True)
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def search_api(cls, keyword):
         return cls._search_api(keyword, 'tv_seasons')
 
-    # 로마도 검색할 경우 리턴이 Rome이다. 
-    @classmethod 
+    # 로마도 검색할 경우 리턴이 Rome이다.
+    @classmethod
     def search(cls, keyword, year=None, season_count=None):
         try:
             ret = {}
             data = cls.search_api(keyword)
-            logger.debug(json.dumps(data, indent=4))
+            #logger.debug(json.dumps(data, indent=4))
             result_list = []
             for idx, item in enumerate(data):
                 entity = EntitySearchItemFtv(cls.site_name)
@@ -271,7 +286,7 @@ class SiteWatchaTv(SiteWatcha):
                                 series = series.as_dict()
                                 result_list.append(series)
                             series['seasons'].append({'season_no':match.group('season_no'), 'year':entity.year, 'info':entity.as_dict()})
-                            series['seasons'] = sorted(series['seasons'], key=lambda k: k['year'], reverse=False)  
+                            series['seasons'] = sorted(series['seasons'], key=lambda k: k['year'], reverse=False)
                             series_insert = True
                             break
                 if series_insert:
@@ -292,7 +307,7 @@ class SiteWatchaTv(SiteWatcha):
                             item['score'] = 95
                     else:
                         item['score'] = 80 - (idx*5)
-                    
+
                 else:
                     if year is not None:
                         if abs(item['year']-year) < 1:
@@ -313,7 +328,7 @@ class SiteWatchaTv(SiteWatcha):
                 try: item['title_en'] = season_data['eng_title']
                 except: item['title_en'] = None
                 logger.debug('%s %s %s' % (item['title'], 'eng_title' in season_data, item['title_en']))
-            
+
             if season_count is not None:
                 for item in result_list:
                     if len(result_list[0]['seasons']) != season_count:
@@ -324,7 +339,7 @@ class SiteWatchaTv(SiteWatcha):
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -332,7 +347,7 @@ class SiteWatchaTv(SiteWatcha):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code):
         try:
             ret = {}
@@ -343,7 +358,7 @@ class SiteWatchaTv(SiteWatcha):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -351,7 +366,7 @@ class SiteWatchaTv(SiteWatcha):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info_basic(cls, code, entity, api_return=False):
         try:
             logger.debug('code :%s', code)
@@ -362,12 +377,12 @@ class SiteWatchaTv(SiteWatcha):
             if api_return:
                 return data
             entity.plot = data['story']
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def info_review(cls, code, entity, api_return=False):
         try:
             url = 'https://api-pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
@@ -387,12 +402,12 @@ class SiteWatchaTv(SiteWatcha):
                 tmp = re.sub(r'[^ %s-=+,#/\?:^$.@*\"~&%%!\\|\(\)\[\]\<\>`\'A-Za-z0-9]' % u'ㄱ-ㅣ가-힣', ' ', tmp)
                 review.text += ']   ' + tmp
                 entity.review.append(review)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
-    @classmethod 
+    @classmethod
     def info_collection(cls, code, entity, api_return=False):
         try:
             url = 'https://api-pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
@@ -402,6 +417,6 @@ class SiteWatchaTv(SiteWatcha):
             for item in data['result']['result']:
                 if item['likes_count'] > 100:
                     entity.tag.append(item['title'])
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
