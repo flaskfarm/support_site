@@ -279,3 +279,48 @@ def patch_search_session_get(*args, **kwds):
     query = parse_qs(url_parts.query)
     return check_empty_json(response, query.get("keyword", [None])[0], r'{"band": {}}', p_wavve_url_band.search(url_parts.path))
 SupportWavve._SupportWavve__search = patch_wrapper(SupportWavve._SupportWavve__search, 'support_site.wavve.SupportWavve.session.get', patch_search_session_get)
+
+
+def wrapper_vod_programs_programid(f: callable) -> callable:
+    @functools.wraps(f)
+    def wrap(*args, **kwds):
+        '''
+        /vod/programs API로 데이터를 가져오지 못할 경우 대응
+        증상:
+            플렉스에서 일부 프로그램을 웨이브 메타 적용시 오류 발생
+        '''
+        data = f(*args, **kwds)
+        if not data:
+            try:
+                query = dict(default_query)
+                query.pop('limit')
+                query.pop('offset')
+                query['programid'] = args[0]
+                query['history'] = 'season'
+                landing_url = urlunparse(('https', 'apis.wavve.com', '/fz/vod/programs/landing', '', urlencode(query, doseq=True), ''))
+                response = SupportWavve.session.request('GET', landing_url, headers=default_headers)
+                landing_data = json.loads(response.text)
+                detail_path = landing_data.get('landing_list', {}).get('path', f'/fz/vod/contents-detail/{landing_data["content_id"]}')
+                detail_url = urlunparse(('https', 'apis.wavve.com', detail_path, '', urlencode(default_query, doseq=True), ''))
+                response = SupportWavve.session.request('GET', detail_url, headers=default_headers)
+                data = json.loads(response.text)
+                data['programtitle'] = data.get('seasontitle') or data.get('programtitle')
+                data['programactors'] = data.pop('season_actors', data.pop('actors', {}))
+                data['cirlceimage'] = data.pop('seasontitlelogoimage', data.pop('programtitlelogoimage', None))
+                data['posterimage'] = data.pop('seasonposterimage', None)
+                data['image'] = data.pop('programimage', data.pop('episodeimage', None))
+                data['livechannelid'] = data.pop('livechannel', None)
+                data['endtime'] = data.pop('programendtime', None)
+                data['starttime'] = data.pop('programstarttime', None)
+                data['cpname'] = data.pop('channelname', None)
+                data['channelname'] = data['cpname']
+                data['livechannelid'] = data.pop('channelid', None)
+                data['playtimetext'] = data.pop('playtime', None)
+                data['closedate'] = None
+                data['onair'] = None
+            except Exception as e:
+                PLUGIN.logger.error(e)
+                PLUGIN.logger.error(traceback.format_exc())
+        return data
+    return wrap
+SupportWavve.vod_programs_programid = wrapper_vod_programs_programid(SupportWavve.vod_programs_programid)

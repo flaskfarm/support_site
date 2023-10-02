@@ -80,6 +80,12 @@ class ModuleSite(PluginModuleBase):
         self.__tving_init()
         self.__naver_init()
 
+    def plugin_load_celery(self):
+        '''
+        셀러리로 플러그인 로딩시 사이트 정보 초기화
+        '''
+        self.plugin_load()
+
     def __wavve_init(self):
         from . import SupportWavve
         SupportWavve.initialize(
