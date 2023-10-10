@@ -16,11 +16,9 @@ from .site_util import SiteUtil
 
 try:
     if os.path.exists(os.path.join(os.path.dirname(__file__), 'wavve.py')):
-        import wavve
-        SupportWavve = wavve.SupportWavve
+        from .wavve import SupportWavve
     else:
-        wavve = SupportSC.load_module_f(__file__, 'wavve')
-        SupportWavve = wavve.SupportWavve
+        SupportWavve = SupportSC.load_module_f(__file__, 'wavve').SupportWavve
 except:
     pass
 
@@ -108,16 +106,15 @@ from .site_uncensored.site_heyzo import SiteHeyzo
 
 """
 
-import functools
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-import re
-import traceback
-import sys
-from unittest.mock import patch
 import datetime
+import functools
+import re
+import sys
+import traceback
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import redis
-
 from framework.init_main import Framework
 
 from .setup import P as PLUGIN
