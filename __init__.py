@@ -296,7 +296,7 @@ def patch_session_get(*args, **kwds):
         args[0] = urlunparse(url_parts)
     response = SupportWavve.session.request('GET', *args, **kwds)
     return check_empty_json(response, query.get("keyword", [None])[0], r'{"cell_toplist": {}}', p_wavve_url_list.search(url_parts[2]))
-SupportWavve.search_movie = patch_wrapper(SupportWavve.search_movie, 'support_site.wavve.SupportWavve.session.get', patch_session_get)
+SupportWavve.search_movie = patch_wrapper(SupportWavve.search_movie, 'support_site.SupportWavve.session.get', patch_session_get)
 
 
 p_wavve_url_band = re.compile(r'band.js')
@@ -309,7 +309,7 @@ def patch_search_session_get(*args, **kwds):
     url_parts = urlparse(args[0])
     query = parse_qs(url_parts.query)
     return check_empty_json(response, query.get("keyword", [None])[0], r'{"band": {}}', p_wavve_url_band.search(url_parts.path))
-SupportWavve._SupportWavve__search = patch_wrapper(SupportWavve._SupportWavve__search, 'support_site.wavve.SupportWavve.session.get', patch_search_session_get)
+SupportWavve._SupportWavve__search = patch_wrapper(SupportWavve._SupportWavve__search, 'support_site.SupportWavve.session.get', patch_search_session_get)
 
 
 def wrapper_vod_programs_programid(f: callable) -> callable:
