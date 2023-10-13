@@ -269,7 +269,8 @@ def check_empty_json(response, keyword, dummy, match):
                 PLUGIN.logger.debug(f'검색 결과 없음: {keyword}')
                 response._content = bytes(dummy, response.encoding or 'utf-8')
     except:
-        PLUGIN.logger.error(traceback.format_exc())
+        #PLUGIN.logger.error(traceback.format_exc())
+        pass
     finally:
         return response
 
