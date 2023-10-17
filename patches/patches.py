@@ -441,8 +441,7 @@ def check_date(releasedate: str, contentid: str) -> bool:
             rel_datetime = datetime.datetime.strptime(releasedate, '%Y-%m-%d')
             if rel_datetime > date_limit and rel_datetime < datetime.datetime.today() + datetime.timedelta(days=2):
                 hset(redis_key, 'releasedate', releasedate)
-                if hget(redis_key, 'recent') == 'false':
-                    hset(redis_key, 'recent', 'true')
+                hset(redis_key, 'recent', 'true')
             else:
                 confirm = False
         except:
