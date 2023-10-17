@@ -1,0 +1,9 @@
+patches:
+  wavve:
+    check_date: True
+    keywords: 드라마|예능|시사|교양|시리즈|애니메이션|스포츠
+    list_limit: 10
+    patterns_airdate: 20\d{2}-\d{1,2}-\d{1,2}
+    patterns_episode: \s(\d+)
+    query: apikey=E5F3E0D30947AA5440556471321BB6D9&client_version=6.0.1&device=pc&drm=wm&partner=pooq&pooqzone=none&region=kor&targetage=all&orderby=new&limit=10&offset=0
+    recent_days: 7
