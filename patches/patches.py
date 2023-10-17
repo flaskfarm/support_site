@@ -148,29 +148,36 @@ def search_list(keyword: str, query: dict) -> dict:
     return SupportWavve.session.request('GET', url, headers=DEFAULT_HEADERS).json()
 
 
-def vod_program_contents_programid(code: str, page: int = 1) -> dict:
-    '''
-    프로그램 정보 api 오류 대응
-    '''
-    data = {}
-    query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
-    query['offset'] = (page - 1) * 10
-    try:
-        data = vod_programs_contents(code, query)
-        data = data.pop('cell_toplist')
-        data['list'] = data['celllist']
-        for ep in data['list']:
-            ep['image'] = ep.pop('thumbnail')
-            ep['programtitle'] = ep.pop('alt')
-            ep['episodeactors'] = ep.pop('actors')
-            ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
-            check_date(ep.get('releasedate'), ep.get('contentid'))
-    except:
-        PLUGIN.logger.error(traceback.format_exc())
-        PLUGIN.logger.debug(code)
-    finally:
-        return data
-SupportWavve.vod_program_contents_programid = vod_program_contents_programid
+def wrapper_vod_program_contents_programid(f: callable) -> callable:
+    @functools.wraps(f)
+    def wrap(code: str, page: int = 1) -> dict:
+        '''
+        기존 API에서 정보를 가져오지 못 할 경우 새로운 API로 시도
+        '''
+        data = f(code, page)
+        if data.get('list'):
+            return data
+        else:
+            PLUGIN.logger.debug(f'No episode list of {code}: {data}')
+            query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
+            query['offset'] = (page - 1) * 10
+            try:
+                data = vod_programs_contents(code, query)
+                data = data.pop('cell_toplist')
+                data['list'] = data['celllist']
+                for ep in data['list']:
+                    ep['image'] = ep.pop('thumbnail')
+                    ep['programtitle'] = ep.pop('alt')
+                    ep['episodeactors'] = ep.pop('actors')
+                    ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
+                    check_date(ep.get('releasedate'), ep.get('contentid'))
+            except:
+                PLUGIN.logger.error(traceback.format_exc())
+                PLUGIN.logger.debug(code)
+            finally:
+                return data
+    return wrap
+SupportWavve.vod_program_contents_programid = wrapper_vod_program_contents_programid(SupportWavve.vod_program_contents_programid)
 
 
 def patch_wrapper(f, target, inject):
