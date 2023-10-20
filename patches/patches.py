@@ -158,7 +158,7 @@ def wrapper_vod_program_contents_programid(f: callable) -> callable:
         if data.get('list'):
             return data
         else:
-            PLUGIN.logger.debug(f'No episode list of {code}: {data}')
+            PLUGIN.logger.debug(f'No episode list of {code} on page {page}: {data}')
             query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
             query['offset'] = (page - 1) * 10
             try:
@@ -170,10 +170,11 @@ def wrapper_vod_program_contents_programid(f: callable) -> callable:
                     ep['programtitle'] = ep.pop('alt')
                     ep['episodeactors'] = ep.pop('actors')
                     ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
+                    ep['targetage'] = ep.get('targetage') or '0'
                     check_date(ep.get('releasedate'), ep.get('contentid'))
             except:
                 PLUGIN.logger.error(traceback.format_exc())
-                PLUGIN.logger.debug(code)
+                PLUGIN.logger.debug(f'{code}: {data}')
             finally:
                 return data
     return wrap
@@ -248,6 +249,7 @@ def wrapper_vod_programs_programid(f: callable) -> callable:
         '''
         data = f(*args, **kwds) or {}
         if not data:
+            PLUGIN.logger.debug(f'No data of {args[0]}')
             query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
             query.pop('limit')
             query.pop('offset')
@@ -256,32 +258,32 @@ def wrapper_vod_programs_programid(f: callable) -> callable:
             try:
                 content_id = vod_programs_landing(query).get('content_id')
                 contents = SupportWavve.vod_contents_contentid(content_id)
-                if contents:
-                    data['tags'] = contents.get('tags', {})
-                    data['programactors'] = contents.get('actors', {})
-                    data['image'] = contents.get('image', contents.get('programimage', ''))
-                    data['cirlceimage'] = contents.get('programcircleimage', '')
-                    data['posterimage'] = contents.get('programposterimage', '')
-                    data['programsynopsis'] = contents.get('programsynopsis', '')
-                    data['closedate'] = contents.get('closedate', '')
-                    data['onair'] = contents.get('onair', '')
-                    data['cpid'] = contents.get('cpid', '')
-                    data['endtime'] = contents.get('programendtime', '')
-                    data['releaseweekday'] = contents.get('releaseweekday', '')
-                    data['starttime'] = contents.get('programstarttime', '')
-                    data['channelname'] = contents['channelname']
-                    data['programtitle'] = contents.get('seasontitle') or contents.get('programtitle')
-                    data['cpname'] = contents.pop('cpname', '')
-                    data['livechannelid'] = contents.pop('channelid', '')
-                    data['alarm'] = contents.get('alarm', '')
-                    data['zzim'] = contents.get('zzim', '')
-                    data['programid'] = contents.get('programid', '')
-                    data['channelid'] = contents.get('channelid', '')
-                    data['firstreleasedate'] = contents.get('firstreleasedate', '')
-                    data['playtimetext'] = contents.get('playtimetext', '')
             except:
                 PLUGIN.logger.error(traceback.format_exc())
-                PLUGIN.logger.debug(f'content_id: {content_id}')
+                contents = None
+            if contents:
+                data['tags'] = contents.get('tags', {})
+                data['programactors'] = contents.get('actors', {})
+                data['image'] = contents.get('image', contents.get('programimage', ''))
+                data['cirlceimage'] = contents.get('programcircleimage', '')
+                data['posterimage'] = contents.get('programposterimage', '')
+                data['programsynopsis'] = contents.get('programsynopsis', '')
+                data['closedate'] = contents.get('closedate', '')
+                data['onair'] = contents.get('onair', '')
+                data['cpid'] = contents.get('cpid', '')
+                data['endtime'] = contents.get('programendtime', '')
+                data['releaseweekday'] = contents.get('releaseweekday', '')
+                data['starttime'] = contents.get('programstarttime', '')
+                data['channelname'] = contents['channelname']
+                data['programtitle'] = contents.get('seasontitle') or contents.get('programtitle')
+                data['cpname'] = contents.pop('cpname', '')
+                data['livechannelid'] = contents.pop('channelid', '')
+                data['alarm'] = contents.get('alarm', '')
+                data['zzim'] = contents.get('zzim', '')
+                data['programid'] = contents.get('programid', '')
+                data['channelid'] = contents.get('channelid', '')
+                data['firstreleasedate'] = contents.get('firstreleasedate', '')
+                data['playtimetext'] = contents.get('playtimetext', '')
         return data
     return wrap
 SupportWavve.vod_programs_programid = wrapper_vod_programs_programid(SupportWavve.vod_programs_programid)
