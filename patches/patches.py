@@ -318,7 +318,9 @@ def get_vod_ids_from_newcontents(page: int) -> set:
     query['channel'] = 'all'
     query['weekday'] = 'all'
     query['genre'] = 'all'
-    query['limit'] = CONFIG['patches']['wavve']['list_limit']
+    #query['limit'] = CONFIG['patches']['wavve']['list_limit']
+    # 기존 API와 동일하게 기본 20개씩 로딩.
+    query['limit'] = 20
     query['offset'] = (page - 1) * query['limit']
     try:
         celllist = vod_newcontents(query).get('cell_toplist', {}).get('celllist', [])
