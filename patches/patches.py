@@ -5,6 +5,7 @@ import sys
 import traceback
 import pathlib
 import shutil
+import os
 from unittest.mock import patch
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
@@ -30,7 +31,8 @@ REDIS_EXPIRE = 86400 # in seconds
 REDIS_KEY_WAVVE_CONTENTS = 'flaskfarm:support_site:wavve:contents'
 
 try:
-    REDIS_CONN = redis.Redis(host='localhost', port=6379, decode_responses=True)
+    redis_port = FRAMEWORK.config.get('redis_port') or os.environ.get('REDIS_PORT') or 6379
+    REDIS_CONN = redis.Redis(host='localhost', port=redis_port, decode_responses=True)
     cursor = '0'
     while cursor != 0:
         cursor, keys = REDIS_CONN.scan(cusor=cursor, match=f'{REDIS_KEY_WAVVE_CONTENTS}:*', count=5000)
