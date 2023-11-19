@@ -52,11 +52,12 @@ def get_config() -> dict:
     try:
         if not CONFIG_FILE.exists():
             shutil.copyfile(default, CONFIG_FILE)
-        with CONFIG_FILE.open(encoding='utf-8', newline='\n') as file:
-            return yaml.safe_load(file)
+        conf = CONFIG_FILE
     except Exception as e:
         PLUGIN.logger.warning(e)
-        with default.open(encoding='utf-8', newline='\n') as file:
+        conf = default
+    finally:
+        with conf.open(encoding='utf-8', newline='\n') as file:
             return yaml.safe_load(file)
 CONFIG = get_config()
 
@@ -154,31 +155,27 @@ def wrapper_vod_program_contents_programid(f: callable) -> callable:
     @functools.wraps(f)
     def wrap(code: str, page: int = 1) -> dict:
         '''
-        기존 API에서 정보를 가져오지 못 할 경우 새로운 API로 시도
+        새로운 API가 실패할 경우 기존 API로 시도
         '''
-        data = f(code, page)
-        if data.get('list'):
+        query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
+        query['offset'] = (page - 1) * 10
+        try:
+            data = vod_programs_contents(code, query)
+            data = data.pop('cell_toplist')
+            data['list'] = data['celllist']
+            for ep in data['list']:
+                ep['image'] = ep.pop('thumbnail')
+                ep['programtitle'] = ep.pop('alt')
+                ep['episodeactors'] = ep.pop('actors')
+                ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
+                ep['targetage'] = ep.get('targetage') or '0'
+                check_date(ep.get('releasedate'), ep.get('contentid'))
+        except:
+            PLUGIN.logger.error(traceback.format_exc())
+            PLUGIN.logger.debug(f'{code}: {data}')
+            data = f(code, page)
+        finally:
             return data
-        else:
-            PLUGIN.logger.debug(f'No episode list of {code} on page {page}: {data}')
-            query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
-            query['offset'] = (page - 1) * 10
-            try:
-                data = vod_programs_contents(code, query)
-                data = data.pop('cell_toplist')
-                data['list'] = data['celllist']
-                for ep in data['list']:
-                    ep['image'] = ep.pop('thumbnail')
-                    ep['programtitle'] = ep.pop('alt')
-                    ep['episodeactors'] = ep.pop('actors')
-                    ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
-                    ep['targetage'] = ep.get('targetage') or '0'
-                    check_date(ep.get('releasedate'), ep.get('contentid'))
-            except:
-                PLUGIN.logger.error(traceback.format_exc())
-                PLUGIN.logger.debug(f'{code}: {data}')
-            finally:
-                return data
     return wrap
 SupportWavve.vod_program_contents_programid = wrapper_vod_program_contents_programid(SupportWavve.vod_program_contents_programid)
 
