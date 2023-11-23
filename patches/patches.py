@@ -6,11 +6,13 @@ import traceback
 import pathlib
 import shutil
 import os
+import json
 from unittest.mock import patch
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 import redis
 import yaml
+import requests
 
 from framework.init_main import Framework
 from support_site import SupportWavve
@@ -52,11 +54,12 @@ def get_config() -> dict:
     try:
         if not CONFIG_FILE.exists():
             shutil.copyfile(default, CONFIG_FILE)
-        with CONFIG_FILE.open(encoding='utf-8', newline='\n') as file:
-            return yaml.safe_load(file)
+        conf = CONFIG_FILE
     except Exception as e:
         PLUGIN.logger.warning(e)
-        with default.open(encoding='utf-8', newline='\n') as file:
+        conf = default
+    finally:
+        with conf.open(encoding='utf-8', newline='\n') as file:
             return yaml.safe_load(file)
 CONFIG = get_config()
 
@@ -154,31 +157,27 @@ def wrapper_vod_program_contents_programid(f: callable) -> callable:
     @functools.wraps(f)
     def wrap(code: str, page: int = 1) -> dict:
         '''
-        기존 API에서 정보를 가져오지 못 할 경우 새로운 API로 시도
+        새로운 API가 실패할 경우 기존 API로 시도
         '''
-        data = f(code, page)
-        if data.get('list'):
+        query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
+        query['offset'] = (page - 1) * 10
+        try:
+            data = vod_programs_contents(code, query)
+            data = data.pop('cell_toplist')
+            data['list'] = data['celllist']
+            for ep in data['list']:
+                ep['image'] = ep.pop('thumbnail')
+                ep['programtitle'] = ep.pop('alt')
+                ep['episodeactors'] = ep.pop('actors')
+                ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
+                ep['targetage'] = ep.get('targetage') or '0'
+                check_date(ep.get('releasedate'), ep.get('contentid'))
+        except:
+            PLUGIN.logger.error(traceback.format_exc())
+            PLUGIN.logger.debug(f'{code}: {data}')
+            data = f(code, page)
+        finally:
             return data
-        else:
-            PLUGIN.logger.debug(f'No episode list of {code} on page {page}: {data}')
-            query = dict(parse_qsl(CONFIG['patches']['wavve']['query']))
-            query['offset'] = (page - 1) * 10
-            try:
-                data = vod_programs_contents(code, query)
-                data = data.pop('cell_toplist')
-                data['list'] = data['celllist']
-                for ep in data['list']:
-                    ep['image'] = ep.pop('thumbnail')
-                    ep['programtitle'] = ep.pop('alt')
-                    ep['episodeactors'] = ep.pop('actors')
-                    ep['episodetitle'] = ep.get('episodetitle') or ep.get('title_list', [{}])[0].get('text') or ep.get('contentid')
-                    ep['targetage'] = ep.get('targetage') or '0'
-                    check_date(ep.get('releasedate'), ep.get('contentid'))
-            except:
-                PLUGIN.logger.error(traceback.format_exc())
-                PLUGIN.logger.debug(f'{code}: {data}')
-            finally:
-                return data
     return wrap
 SupportWavve.vod_program_contents_programid = wrapper_vod_program_contents_programid(SupportWavve.vod_program_contents_programid)
 
@@ -205,7 +204,7 @@ def check_empty_json(response, keyword, dummy, match):
         return response
 
 
-def patch_session_get(*args, **kwds):
+def patch_search_movie_session_get(*args, **kwds):
     '''
     웨이브 list.js api 검색 응답이 '{}'일 경우:
         search_movie(): list.js api: KeyError: 'cell_toplist'
@@ -226,7 +225,7 @@ def patch_session_get(*args, **kwds):
         args[0] = urlunparse(url_parts)
     response = SupportWavve.session.request('GET', *args, **kwds)
     return check_empty_json(response, query.get("keyword", [None])[0], r'{"cell_toplist": {}}', PTN_WAVVE_URL_LIST.search(url_parts[2]))
-SupportWavve.search_movie = patch_wrapper(SupportWavve.search_movie, 'support_site.SupportWavve.session.get', patch_session_get)
+SupportWavve.search_movie = patch_wrapper(SupportWavve.search_movie, 'support_site.SupportWavve.session.get', patch_search_movie_session_get)
 
 
 def patch_search_session_get(*args, **kwds):
@@ -488,3 +487,24 @@ def hget(key: str, field: str) -> str | None:
 @check_redis
 def hgetall(key: str) -> dict:
     return REDIS_CONN.hgetall(key)
+
+
+def patch_streaming_session_get(*args, **kwds) -> requests.Response:
+    '''
+    streaming API의 key 이름이 일부 변경됨
+    drmhost -> licenseurl
+    customdata -> licensetoken
+    '''
+    response = SupportWavve.session.request('GET', *args, **kwds)
+    try:
+        data = response.json()
+        drm = data.get('drm')
+        if drm:
+            drm['drmhost'] = drm.get('licenseurl', drm.get('drmhost'))
+            drm['customdata'] = drm.get('licensetoken', drm.get('customdata'))
+            response._content = bytes(json.dumps(data), response.encoding or 'utf-8')
+    except:
+        PLUGIN.logger.error(traceback.format_exc())
+    finally:
+        return response
+SupportWavve.streaming = patch_wrapper(SupportWavve.streaming, 'support_site.SupportWavve.session.get', patch_streaming_session_get)
