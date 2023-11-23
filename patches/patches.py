@@ -6,11 +6,13 @@ import traceback
 import pathlib
 import shutil
 import os
+import json
 from unittest.mock import patch
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 import redis
 import yaml
+import requests
 
 from framework.init_main import Framework
 from support_site import SupportWavve
@@ -202,7 +204,7 @@ def check_empty_json(response, keyword, dummy, match):
         return response
 
 
-def patch_session_get(*args, **kwds):
+def patch_search_movie_session_get(*args, **kwds):
     '''
     웨이브 list.js api 검색 응답이 '{}'일 경우:
         search_movie(): list.js api: KeyError: 'cell_toplist'
@@ -223,7 +225,7 @@ def patch_session_get(*args, **kwds):
         args[0] = urlunparse(url_parts)
     response = SupportWavve.session.request('GET', *args, **kwds)
     return check_empty_json(response, query.get("keyword", [None])[0], r'{"cell_toplist": {}}', PTN_WAVVE_URL_LIST.search(url_parts[2]))
-SupportWavve.search_movie = patch_wrapper(SupportWavve.search_movie, 'support_site.SupportWavve.session.get', patch_session_get)
+SupportWavve.search_movie = patch_wrapper(SupportWavve.search_movie, 'support_site.SupportWavve.session.get', patch_search_movie_session_get)
 
 
 def patch_search_session_get(*args, **kwds):
@@ -485,3 +487,24 @@ def hget(key: str, field: str) -> str | None:
 @check_redis
 def hgetall(key: str) -> dict:
     return REDIS_CONN.hgetall(key)
+
+
+def patch_streaming_session_get(*args, **kwds) -> requests.Response:
+    '''
+    streaming API의 key 이름이 일부 변경됨
+    drmhost -> licenseurl
+    customdata -> licensetoken
+    '''
+    response = SupportWavve.session.request('GET', *args, **kwds)
+    try:
+        data = response.json()
+        drm = data.get('drm')
+        if drm:
+            drm['drmhost'] = drm.get('licenseurl', drm.get('drmhost'))
+            drm['customdata'] = drm.get('licensetoken', drm.get('customdata'))
+            response._content = bytes(json.dumps(data), response.encoding or 'utf-8')
+    except:
+        PLUGIN.logger.error(traceback.format_exc())
+    finally:
+        return response
+SupportWavve.streaming = patch_wrapper(SupportWavve.streaming, 'support_site.SupportWavve.session.get', patch_streaming_session_get)
