@@ -7,6 +7,7 @@ class ModuleSite(PluginModuleBase):
         f"site_wavve_credential": "",
         f"site_wavve_use_proxy": "False",
         f"site_wavve_proxy_url": "",
+        f"site_wavve_profile":'{"id": "", "password": "", "profile": "0"}',
 
         'site_daum_cookie' : 'TIARA=2KF1ajSnpkcUMt_AybEXcWY4pblBYRevTpfe177Yr-Z4As9lEoe5RS1i4nDhXbJiy2e.l5weR5Qq38qWoaUNFU7gxRChQhkpe5DL.Aex4vM0',
         'site_daum_use_proxy' : 'False',
@@ -47,6 +48,29 @@ class ModuleSite(PluginModuleBase):
                 ret['ret'] = True
                 ret['json'] = device_list
             return jsonify(ret)
+        elif command == 'wavve_login':
+            try:
+                ret['ret'] = 'warning'
+                ret['msg'] = "로그인에 실패하였습니다."
+                from . import SupportWavve
+                account = json.loads(arg1)
+                P.ModelSetting.set('site_wavve_profile', arg1)
+                result = SupportWavve.do_login(account['id'], account['password'], account['profile'])
+                if result[0]:
+                    P.ModelSetting.set('site_wavve_credential', result[1]['credential'])
+                    ret['msg'] = "로그인 성공<br>Credential을 갱신하였습니다."
+                    ret['credential'] = result[1]['credential']
+                else:
+                    ret['ret'] = 'warning'
+                    ret['msg'] = "로그인에 실패하였습니다."
+            except Exception as e:
+                logger.error(f'Exception:{str(e)}')
+                logger.error(traceback.format_exc())
+                ret['ret'] = 'error'
+                ret['msg'] = f"에러: {str(e)}"               
+            
+
+
         return jsonify(ret)
 
 

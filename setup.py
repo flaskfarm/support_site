@@ -5,8 +5,12 @@ setting = {
     'home_module': None,
     'menu': None,
     'setting_menu': {
-        'uri': f"support_site/site/setting",
+        'uri': f"support_site",
         'name': 'SUPPORT SITE 설정',
+        'list': [
+            {'uri': 'setting', 'name': '설정'},
+            {'uri': 'manual/files/스캔.md', 'name': '매뉴얼'},
+        ]
     },
     'default_route': 'normal',
 }
