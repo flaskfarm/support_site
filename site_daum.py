@@ -123,21 +123,28 @@ class SiteDaum(object):
                 logger.debug('Not More!')
                 logger.debug(traceback.format_exc())
 
-            tags = root.xpath('//*[@id="tv_series"]/div/ul/li')
+            # 2025-05-29
+            # 이전에는 하단에 시리즈가 나왔으나 탭으로 변경된 것으로 보임.
+            # 지금은 후속방송 정보가 나옴
 
-            if tags:
+            serise_tab_tag = root.xpath('//li[@data-tab="tv_series"]')
+            if serise_tab_tag:
+                
                 # 2019-03-05 시리즈 더보기 존재시
                 try:
-                    more = root.xpath('//*[@id="tv_series"]/div/div/a')
-                    if more:
-                        url = more[0].attrib['href']
-                        if not url.startswith('http'):
-                            url = 'https://search.daum.net/search%s' % url
-                        #logger.debug('MORE URL : %s', url)
-                        if more[0].xpath('span')[0].text == u'시리즈 더보기':
-                            #more_root = HTML.ElementFromURL(url)
-                            more_root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
-                            tags = more_root.xpath('//*[@id="series"]/ul/li')
+                    #more = root.xpath('//*[@id="tv_series"]/div/div/a')
+                    #if more:
+                    #url = more[0].attrib['href']
+                    url = serise_tab_tag[0].xpath('a')[0].attrib['href']
+                    if not url.startswith('http'):
+                        url = 'https://search.daum.net/search%s' % url
+                    #logger.debug('MORE URL : %s', url)
+                    #if more[0].xpath('span')[0].text == u'시리즈 더보기':
+                        #more_root = HTML.ElementFromURL(url)
+                    more_root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+                    #tags = more_root.xpath('//*[@id="series"]/ul/li')
+                    # 2024-05-29
+                    tags = more_root.xpath('//*[@id="tv_series"]/div/ul/li[1]')
                 except Exception as exception:
                     logger.debug('Not More!')
                     logger.debug(traceback.format_exc())
