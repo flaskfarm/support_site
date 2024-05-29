@@ -35,7 +35,7 @@
   <div id="site_wavve_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_wavve_proxy_url', 'Proxy URL', value=arg['site_wavve_proxy_url'], desc=None) }}
   </div>
-{{ macros.m_tab_content_end() }} 
+{{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('tving', false) }}
   {{ macros.setting_radio_with_value('site_tving_login_type', '로그인 타입', [['cjone', 'CJONE'], ['tving', 'TVING']], value=arg['site_tving_login_type']) }}
@@ -79,21 +79,21 @@ $('#site_tving_use_proxy').change(function() {
 
 
 $("body").on('click', '#site_tving_login_btn', function(e) {
-  e.preventDefault(); 
-  globalSendCommand('tving_login', $('#site_tving_id').val(), $('#site_tving_pw').val(), $('#site_tving_login_type0').val(), function(ret){
+  e.preventDefault();
+  globalSendCommand('tving_login', $('#site_tving_id').val(), $('#site_tving_pw').val(), $('input[name="site_tving_login_type"]:checked').val(), function(ret){
     if (ret['ret'] == 'success')
       $("#site_tving_token").val(ret['token']);
   });
 });
 
 $("body").on('click', '#site_tving_deviceid_btn', function(e) {
-  e.preventDefault(); 
+  e.preventDefault();
   globalSendCommand('tving_deviceid', $('#site_tving_token').val(), null, null, function(ret){
   });
 });
 
 $("body").on('click', '#site_wavve_login_btn', function(e) {
-  e.preventDefault(); 
+  e.preventDefault();
   globalSendCommand('wavve_login', $('#site_wavve_profile').val(), null, null, function(ret){
     if (ret['ret'] == 'success') {
       $("#site_wavve_credential").val(ret['credential']);
@@ -101,5 +101,5 @@ $("body").on('click', '#site_wavve_login_btn', function(e) {
   });
 });
 
-</script>    
+</script>
 {% endblock %}
