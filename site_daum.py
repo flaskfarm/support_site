@@ -65,7 +65,8 @@ class SiteDaum(object):
             #entity.image_url = 'https:' + root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0].attrib['src']
             # 악동탐정스 시즌2
             try:
-                entity.image_url = cls.process_image_url(root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0].attrib['src'])
+                # 2024-05-29 src => data-original-src
+                entity.image_url = cls.process_image_url(root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0].attrib['data-original-src'])
             except:
                 entity.image_url = None
 
@@ -86,7 +87,7 @@ class SiteDaum(object):
 
             tags = root.xpath('//*[@id="tvpColl"]/div[2]/div/div[1]/div/span')
             extra_infos = [tag.text_content() for tag in tags]
-            logger.debug(extra_infos)
+            #logger.debug(extra_infos)
             #tmps = extra_infos[1].strip().split(' ')
             # 2021-11-03 
             # 홍루몽.  중국 방송사는 a 태그가 없기 떄문에 방송사가 장르가 되어버린다.
