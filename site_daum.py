@@ -144,7 +144,7 @@ class SiteDaum(object):
                     more_root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
                     #tags = more_root.xpath('//*[@id="series"]/ul/li')
                     # 2024-05-29
-                    tags = more_root.xpath('//*[@id="tv_series"]/div/ul/li[1]')
+                    tags = more_root.xpath('//*[@id="tv_series"]/div/ul/li')
                 except Exception as exception:
                     logger.debug('Not More!')
                     logger.debug(traceback.format_exc())
