@@ -32,6 +32,7 @@ class SiteDaumTv(SiteDaum):
     @classmethod 
     def search(cls, keyword, daum_id=None, year=None, image_mode='0'):
         try:
+            keyword = keyword.replace(' | 시리즈', '').strip()
             keyword = cls.get_search_name_from_original(keyword)
             ret = {}
             if daum_id is None:
