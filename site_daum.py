@@ -1,5 +1,5 @@
 import urllib.parse
-
+from datetime import datetime
 import requests
 
 from .entity_base import EntityExtra, EntitySearchItemTvDaum
@@ -243,7 +243,8 @@ class SiteDaum(object):
         except Exception as exception:
             logger.debug('Exception : %s', exception)
             logger.debug(traceback.format_exc())
-        return text
+        #return text
+        return datetime.now().strftime('%Y-%m-%d')
 
     @classmethod
     def get_kakao_video(cls, kakao_id, sort='CreateTime', size=20):

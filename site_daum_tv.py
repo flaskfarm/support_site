@@ -4,7 +4,7 @@ from . import SiteDaum, SiteUtil
 from .entity_base import (EntityActor, EntityEpisode, EntityExtra, EntityShow,
                           EntityThumb)
 from .setup import *
-
+from support.base.string import SupportString
 
 class SiteDaumTv(SiteDaum):
     
@@ -142,6 +142,9 @@ class SiteDaumTv(SiteDaum):
                         content_type = 'Featurette'
                         if title.find(u'예고') != -1:
                             content_type = 'Trailer'
+                        # 2024-06-01 이모지 제거
+                        title = SupportString.remove_emoji(title).strip()
+                        #title = "title"
                         show.extras.append(EntityExtra(content_type, title, 'kakao', video_url, premiered=date, thumb=thumb))
 
 
