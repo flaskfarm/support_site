@@ -18,27 +18,27 @@ channel_code_map = {
     'C01582' : 'JTBC',
     'C01583' : '채널A',
     'C05901' : '채널W',
-    'C06941' : 'tooniverse',    
+    'C06941' : 'tooniverse',
     'C07381' : 'OCN',
     'C15152' : 'CH.DIA',
     'C18641' : 'IHQ',
-    'C30541' : 'JAYE Ent.', 
+    'C30541' : 'JAYE Ent.',
     'C35741' : 'iMBC',
-    'C43441' : '채널차이나', 
+    'C43441' : '채널차이나',
     'C44742' : 'KTH',
-    'C45541' : 'AsiaN',    
-    'C47841' : 'SPO KOREA', 
-    'C48241' : '엔케이컨텐츠', 
-    'C48341' : '얼리버드 픽쳐스', 
-    'C49441' : 'tvN D ENT', 
-    'C50241' : 'TVING', 
-    'C51247' : 'KCONTACT Main', 
+    'C45541' : 'AsiaN',
+    'C47841' : 'SPO KOREA',
+    'C48241' : '엔케이컨텐츠',
+    'C48341' : '얼리버드 픽쳐스',
+    'C49441' : 'tvN D ENT',
+    'C50241' : 'TVING',
+    'C51247' : 'KCONTACT Main',
     'C51253' : '콘텐츠판다',
     'C51261' : 'CNTV',
 }
 
 product_country_map = {
-    'CACT1001':u'한국', 
+    'CACT1001':u'한국',
     'CACT4017':u'프랑스',
     'CACT4004':u'독일',
     'CACT4010':u'영국',
@@ -113,13 +113,13 @@ class SiteTvingTv(SiteTving):
     site_char = 'V'
 
 
-    @classmethod 
+    @classmethod
     def apply_tv_by_episode_code(cls, show, episode_code, apply_plot=True, apply_image=True):
         try:
             data = SupportTving.get_info(episode_code, 'stream50')
             tving_program = data['content']['info']['program']
             cls._apply_tv_by_program(show, tving_program, apply_plot=apply_plot, apply_image=apply_image)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return
@@ -135,19 +135,19 @@ class SiteTvingTv(SiteTving):
             if apply_plot:
                 show['plot'] = program_info['synopsis']['ko']
                 show['plot'] = show['plot'].replace(u'[이용권 전용 VOD] 티빙 이용권 전용 프로그램입니다.\r\n모든 방송과 4천여편의 영화를 티빙 이용권으로 즐겨보세요!\r\n\r\n', '').strip()
-            
+
             if apply_image:
                 score = 80
                 for idx, img in enumerate(program_info['image']):
                     tmp_score = score - idx
                     if img['code'] in ['CAIP0200', 'CAIP1500', 'CAIP2100', 'CAIP2200']: # land
-                        show['thumb'].append(EntityThumb(aspect='landscape', value=cls.tving_base_image + img['url'], site=cls.site_name, score=tmp_score).as_dict())   
+                        show['thumb'].append(EntityThumb(aspect='landscape', value=cls.tving_base_image + img['url'], site=cls.site_name, score=tmp_score).as_dict())
                     elif img['code'] in ['CAIP0900', 'CAIP2300', 'CAIP2400']: #poster
-                        show['thumb'].append(EntityThumb(aspect='poster', value=cls.tving_base_image + img['url'], site=cls.site_name, score=tmp_score).as_dict())   
+                        show['thumb'].append(EntityThumb(aspect='poster', value=cls.tving_base_image + img['url'], site=cls.site_name, score=tmp_score).as_dict())
                     elif img['code'] in ['CAIP1800', 'CAIP1900']: #banner
                         if img['code'] == 'CAIP1900':
                             tmp_score += 10
-                        show['thumb'].append(EntityThumb(aspect='banner', value=cls.tving_base_image + img['url'], site=cls.site_name, score=tmp_score).as_dict())   
+                        show['thumb'].append(EntityThumb(aspect='banner', value=cls.tving_base_image + img['url'], site=cls.site_name, score=tmp_score).as_dict())
                     elif img['code'] in ['CAIP2000']: #square
                         show['thumb'].append(EntityThumb(aspect='square', value=cls.tving_base_image + img['url'], site=cls.site_name, score=tmp_score).as_dict())
             if True:
@@ -165,20 +165,20 @@ class SiteTvingTv(SiteTving):
                                 'code' : cls.module_char + cls.site_char + epi['code'],
                                 'thumb' : tmp,
                                 'plot' : epi['synopsis']['ko'],
-                                'premiered' : cls.change_to_premiered(epi['broadcast_date']), 
+                                'premiered' : cls.change_to_premiered(epi['broadcast_date']),
                                 'title' : '',
                             }
-                        except Exception as e: 
+                        except Exception as e:
                             logger.error(f"Exception:{str(e)}")
                             logger.error(traceback.format_exc())
                     page += 1
                     if episode_data['has_more'] == 'N' or page == 10:
                         break
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
-    @classmethod 
+    @classmethod
     def apply_tv_by_search(cls, show, apply_plot=True, apply_image=True, force_search_title=None):
         try:
             keyword = force_search_title if force_search_title is not None else show['title']
@@ -192,19 +192,19 @@ class SiteTvingTv(SiteTving):
                         tving_program = SupportTving.get_program_programid(item['mast_cd'])
                         cls._apply_tv_by_program(show, tving_program, apply_plot=apply_plot, apply_image=apply_image)
                         break
-                        
+
                         #if show['premiered'] == ''
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
-    
+
 #https://search.tving.com/search/common/module/getAkc.jsp?kwd=SKY+%EC%BA%90%EC%8A%AC
 
 # CAIP0200, CAIP0400, CAIP0500 : 동일 1280*720 0.5625   landscape
 # CAIP0900 : 480*693 1.4437  poster
 # CAIP1500 : 1280*720    landscape
 # CAIP1800 : 757*137 배너
-# CAIP1900 : 1248*280 배너  
+# CAIP1900 : 1248*280 배너
 # CAIP2000 : 152*152    square
 # CAIP2100 : 1000*692   landscape
 # CAIP2200 : 1600*795   landscape
@@ -212,7 +212,7 @@ class SiteTvingTv(SiteTving):
 # CAIP2400 : 663*960 - 1.4479   poster
 
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, **kwargs):
         try:
             ret = {}
@@ -237,14 +237,14 @@ class SiteTvingTv(SiteTving):
                 ret['data'] = show_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
 
-    @classmethod 
+    @classmethod
     def info(cls, code):
         try:
             ret = {}
@@ -252,7 +252,7 @@ class SiteTvingTv(SiteTving):
             show = EntityShow(cls.site_name, code)
             show.title = tving_program['name']['ko']
             show.originaltitle = show.title
-            show.sorttitle = show.title 
+            show.sorttitle = show.title
 
             # 2022-02-14 채널정보 프로그램 정보에서 빠지고, 에피소드에만 있음
             #show.studio = cls.change_channel_code(tving_program['channel_code'])
@@ -277,12 +277,12 @@ class SiteTvingTv(SiteTving):
             #    show.status = 2
             show.genre = [tving_program['category1_name']['ko']]
             #show.episode = home_data['episode']
-            
+
             for item in tving_program['actor']:
                 actor = EntityActor(item)
                 actor.name = item
                 show.actor.append(actor)
-            
+
             for item in tving_program['director']:
                 actor = EntityActor(item)
                 actor.name = item
@@ -293,7 +293,7 @@ class SiteTvingTv(SiteTving):
             ret['ret'] = 'success'
             ret['data'] = show
 
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -307,9 +307,9 @@ class SiteTvingMovie(SiteTving):
     module_char = 'M'
     site_char = 'V'
 
-    
 
-    @classmethod 
+
+    @classmethod
     def search(cls, keyword, year=1900):
         try:
             ret = {}
@@ -329,14 +329,14 @@ class SiteTvingMovie(SiteTving):
                         else:
                             entity.score = 80 - (idx*5)
                         result_list.append(entity.as_dict())
-                result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)  
+                result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)
             if result_list:
                 ret['ret'] = 'success'
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
 
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -345,19 +345,19 @@ class SiteTvingMovie(SiteTving):
 
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code):
         try:
             logger.debug('tving info code:%s', code)
             ret = {}
-            
+
             entity = EntityMovie2(cls.site_name, code)
             entity.code_list.append(['tving_id', code[2:]])
             #wavve_data = cls.info_api(code)
 
             tving_data_all = SupportTving.get_info(code[2:], 'stream50')
             tving_data = tving_data_all['content']['info']
-   
+
             entity.title = tving_data['movie']['name']['ko']
             entity.extra_info['title_en'] = tving_data['movie']['name']['en']
             for item in tving_data['movie']['actor']:
@@ -370,7 +370,7 @@ class SiteTvingMovie(SiteTving):
             except: pass
             try: entity.mpaa = movie_mpaa_map[tving_data['movie']['grade_code']]
             except: entity.mpaa = tving_data['movie']['grade_code']
-            try: 
+            try:
                 entity.country.append(product_country_map[tving_data['movie']['product_country']])
             except: entity.country.append(tving_data['movie']['product_country'])
             if len(entity.country)>0 and entity.country[0] == u'한국':
@@ -393,7 +393,7 @@ class SiteTvingMovie(SiteTving):
                 entity.art.append(EntityThumb(aspect=aspect, value=cls.tving_base_image + item['url'], site=cls.site_name, score=50))
             try: entity.ratings.append(EntityRatings(float(tving_data['movie']['rating']), name=cls.site_name))
             except: pass
-            
+
             if tving_data['movie']['billing_package_tag'] == '':
                 entity.extra_info['tving_stream'] = {}
                 entity.extra_info['tving_stream']['drm'] = (tving_data['movie']['drm_yn'] == 'Y')
@@ -404,7 +404,7 @@ class SiteTvingMovie(SiteTving):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
