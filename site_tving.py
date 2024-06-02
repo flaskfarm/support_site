@@ -130,7 +130,7 @@ class SiteTvingTv(SiteTving):
             #logger.debug(show['extra_info'])
             #logger.debug(program_info['code'])
             show['extra_info']['tving_id'] = program_info['code']
-            show['mpaa'] = tv_mpaa_map[program_info['grade_code']]
+            show['mpaa'] = tv_mpaa_map.get(program_info['grade_code']) or movie_mpaa_map.get(program_info['grade_code'], tv_mpaa_map['CPTG0100'])
 
             if apply_plot:
                 show['plot'] = program_info['synopsis']['ko']
