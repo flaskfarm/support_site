@@ -8,12 +8,10 @@ class ModuleSite(PluginModuleBase):
         f"site_wavve_use_proxy": "False",
         f"site_wavve_proxy_url": "",
         f"site_wavve_profile":'{"id": "", "password": "", "profile": "0"}',
-
         'site_daum_cookie' : 'TIARA=2KF1ajSnpkcUMt_AybEXcWY4pblBYRevTpfe177Yr-Z4As9lEoe5RS1i4nDhXbJiy2e.l5weR5Qq38qWoaUNFU7gxRChQhkpe5DL.Aex4vM0',
         'site_daum_use_proxy' : 'False',
         'site_daum_proxy_url' : '',
         'site_daum_test' : '오버 더 레인보우',
-
         'site_tving_id' : '',
         'site_tving_pw' : '',
         'site_tving_login_type' : 'cjone',
@@ -21,8 +19,13 @@ class ModuleSite(PluginModuleBase):
         'site_tving_deviceid' : '',
         'site_tving_use_proxy' : 'False',
         'site_tving_proxy_url' : '',
-
         'site_naver_key': '',
+        'site_imgur_client_id': '',
+        'site_imgur_client_secret': '',
+        'site_imgur_access_token': '',
+        'site_imgur_refresh_token': '',
+        'site_imgur_account_username': '',
+        'site_imgur_account_id': '',
     }
 
     def __init__(self, P):
@@ -67,12 +70,43 @@ class ModuleSite(PluginModuleBase):
                 logger.error(f'Exception:{str(e)}')
                 logger.error(traceback.format_exc())
                 ret['ret'] = 'error'
-                ret['msg'] = f"에러: {str(e)}"               
-            
+                ret['msg'] = f"에러: {str(e)}"
+        elif command == 'imgur_upload':
+            from .tool_imgur import ToolImgur
+            tmp = ToolImgur.upload_from_paste(req.form['url'])
+            if tmp != None:
+                ret['url'] = tmp
+            else:
+                ret['msg'] = '실패'
+                ret['ret'] = 'error'
 
-
+        """
+        elif command == 'imgur_auth':
+            P.ModelSetting.set('site_imgur_client_id', arg1)
+            P.ModelSetting.set('site_imgur_client_secret', arg2)
+            from .tool_imgur import ToolImgur
+            tmp = ToolImgur.request_auth(arg1, arg2)
+            if tmp[0]:
+                ret['html'] = tmp[1]
+            else:
+                ret['ret'] = 'error'
+                ret['msg'] = f"실패: 응답코드 - {tmp[1]}"
+            return jsonify(ret)
+        """
         return jsonify(ret)
 
+    def process_normal(self, sub, req):
+        try:
+            if sub == 'imgur_callback':
+                P.ModelSetting.set('site_imgur_access_token', req.args.get('access_token'))
+                P.ModelSetting.set('site_imgur_refresh_token', req.args.get('refresh_token'))
+                P.ModelSetting.set('site_imgur_account_username', req.args.get('account_username'))
+                P.ModelSetting.set('site_imgur_account_id', req.args.get('account_id'))
+                return "토큰을 저장하였습니다.\n설정을 새로고침하세요"
+        except Exception as e: 
+            P.logger.error(f"Exception:{str(e)}")
+            P.logger.error(traceback.format_exc())
+            return f"{str(e)}"
 
     def setting_save_after(self, change_list):
         flag_wavve = False

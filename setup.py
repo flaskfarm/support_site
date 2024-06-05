@@ -9,7 +9,9 @@ setting = {
         'name': 'SUPPORT SITE 설정',
         'list': [
             {'uri': 'setting', 'name': '설정'},
-            {'uri': 'manual/files/스캔.md', 'name': '매뉴얼'},
+            {'uri': 'imgur_paste', 'name': 'imgur 업로드'},
+            {'uri': 'manual/files/manual.md', 'name': '매뉴얼'},
+            {'uri': 'manual/README.md', 'name': 'README'},
         ]
     },
     'default_route': 'normal',

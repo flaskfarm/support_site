@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<script src="{{ url_for('.static', filename='paste.js') }}"></script>
+
+<div id="clipboardList" class="dropzone clipboard-box pastable"  style="border: 1px solid gold; padding: 10px; height: 150px; text-align: left;" contenteditable>
+  <div class="clipboard-text"> 1. 이미지를 클립보드에 복사</div>
+  <div class="clipboard-text"> 2. 이곳을 한번 클릭 후 붙여넣기 하세요. (Ctrl+V) </div>
+</div>
+
+<div id="clipboardResult1" class="dropzone clipboard-box pastable"  style="font-weight: bold;  font-size: 2em; border: 1px solid gold; padding: 10px; height: 120px; text-align: center;"></div>
+<div id="clipboardResult2" style="text-align: center;">
+</div>
+
+
+<script type="text/javascript">
+$(document).on('click', '#clipboardList', function(){
+    $('#clipboardList').pastableContenteditable();
+    $("#clipboardList").focusin();
+});
+
+$(document).on('focusin', "#clipboardList", function(){
+    console.log('focus!!');
+    $("#clipboardList").addClass('box-focus');
+    $('#clipboardList[contenteditable]').pastableContenteditable();
+});
+
+$(document).on('focusout', "#clipboardList", function(){
+    console.log('focus out!!');
+    $("#clipboardList").removeClass('box-focus');
+});
+
+
+$(document).on('pasteImage', '#clipboardList', function (event, data){
+  // 이전 클릭 이벤트 클리어
+  event.preventDefault();
+
+  let img_src = data.dataURL;
+  let img_source_name = img_src.split('/').reverse()[0];
+
+  // 임시 사진 업로드 
+  $.ajax({
+      url: "/support_site/ajax/site/command",
+      type: 'POST',
+      dataType: 'JSON',
+      headers: {
+          'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+      },
+      data: {
+          'command': 'imgur_upload',
+          'url': data.dataURL,
+          'source_name' : img_source_name,
+      },
+      success: function (ret) {
+        console.log("xxxxxxxxxxxxxxxxxxxxxxxx")
+        console.log(ret);
+        // 업로드 성공 후 
+        // div 포커스 아웃
+        $('#clipboardList').blur();
+        
+        tmp = '![]("' + ret['url'] + '")';
+        tmp2 = '<img src="' + ret['url'] + '" width="400" height="300" />'
+        $('#clipboardResult1').empty().append(tmp + "<br><xmp>"+tmp2+"</xmp>");
+        $('#clipboardResult2').empty().append(tmp2);
+
+      }
+  });
+}).on('pasteImageError', function(ev, data){
+  // 이미지 붙여넣기 에러
+  alert('Oops: ' + data.message);
+  if(data.url){
+      alert('But we got its url anyway:' + data.url)
+  }
+}).on('pasteText', function (ev, data){
+  // 복사한 데이터중 텍스트가 있을 경우
+  ev.preventDefault();
+  $("#clipboardList").empty().append('<div class="clipboard-text"> 1. 이미지를 클립보드에 복사</div><div class="clipboard-text"> 2. 이곳을 한번 클릭 후 붙여넣기 하세요. (Ctrl+V) </div></div>');
+});
+</script>
+{% endblock %}

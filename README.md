@@ -1,6 +1,9 @@
 ## 공동개발
 
 ## Changelog
+- 1.1.4 (2024.06.05)   
+  imgur 관련 기능 추가   
+
 - 1.1.3 (2024.06.05)   
   daum 이미지 가져오는 부분 수정.   
   ```url = img_tag.attrib.get('data-original-src') or img_tag.attrib.get('src')```
