@@ -1,5 +1,6 @@
 import urllib.parse
 from datetime import datetime
+
 import requests
 
 from .entity_base import EntityExtra, EntitySearchItemTvDaum
@@ -66,7 +67,7 @@ class SiteDaum(object):
             # 악동탐정스 시즌2
             try:
                 # 2024-05-29 src => data-original-src
-                entity.image_url = cls.process_image_url(root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0].attrib['data-original-src'])
+                entity.image_url = cls.process_image_url(root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0])
             except:
                 entity.image_url = None
 
@@ -215,8 +216,10 @@ class SiteDaum(object):
             logger.debug('Exception get_show_info_by_html : %s', exception)
             logger.debug(traceback.format_exc())
 
+    # 2024.06.05 둘중 하나로..
     @classmethod
-    def process_image_url(cls, url):
+    def process_image_url(cls, img_tag):
+        url = img_tag.attrib.get('data-original-src') or img_tag.attrib.get('src')
         tmps = url.split('fname=')
         if len(tmps) == 2:
             return urllib.parse.unquote(tmps[1])

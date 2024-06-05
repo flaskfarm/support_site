@@ -1,10 +1,12 @@
 import urllib.parse
 
+from support.base.string import SupportString
+
 from . import SiteDaum, SiteUtil
 from .entity_base import (EntityActor, EntityEpisode, EntityExtra, EntityShow,
                           EntityThumb)
 from .setup import *
-from support.base.string import SupportString
+
 
 class SiteDaumTv(SiteDaum):
     
@@ -121,8 +123,7 @@ class SiteDaumTv(SiteDaum):
             #logger.debug(tmp)
 
             try:
-                # 2024-05-29 src => data-original-src
-                show.thumb.append(EntityThumb(aspect='poster', value=cls.process_image_url(root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0].attrib['data-original-src']), site='daum', score=-10))
+                show.thumb.append(EntityThumb(aspect='poster', value=cls.process_image_url(root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0]), site='daum', score=-10))
             except:
                 pass
 
@@ -135,7 +136,7 @@ class SiteDaumTv(SiteDaum):
                     a_tags = tag.xpath('.//a')
                     if len(a_tags) == 2:
                         # 2024-05-29 src => data-original-src
-                        thumb = cls.process_image_url(a_tags[0].xpath('.//img')[0].attrib['data-original-src'])
+                        thumb = cls.process_image_url(a_tags[0].xpath('.//img')[0])
                         video_url = a_tags[1].attrib['href'].split('/')[-1]
                         title = a_tags[1].text_content()
                         date = cls.change_date(tag.xpath('.//span')[0].text_content().strip())
@@ -157,7 +158,7 @@ class SiteDaumTv(SiteDaum):
                     #cast_img = item.xpath('.//img')
                     if len(cast_img) == 1:
                         # 2024-05-29 src => data-original-src
-                        actor.thumb = cls.process_image_url(cast_img[0].attrib['data-original-src'])
+                        actor.thumb = cls.process_image_url(cast_img[0])
                         #logger.debug(actor.thumb)
                     
                     span_tag = item.xpath('span')
@@ -280,7 +281,7 @@ class SiteDaumTv(SiteDaum):
             items = root.xpath('//*[@id="tv_episode"]/div[2]/div[1]/div/a/img')
             if len(items) == 1:
                 # 2024-05-29 src => data-original-src
-                entity.thumb.append(EntityThumb(aspect='landscape', value=cls.process_image_url(items[0].attrib['data-original-src']), site=cls.site_name, score=-10))
+                entity.thumb.append(EntityThumb(aspect='landscape', value=cls.process_image_url(items[0]), site=cls.site_name, score=-10))
 
             if include_kakao:
                 tags = root.xpath('//*[@id="tv_episode"]/div[3]/div/ul/li')
@@ -289,8 +290,7 @@ class SiteDaumTv(SiteDaum):
                         break
                     a_tags = tag.xpath('.//a')
                     if len(a_tags) == 2:
-                        # 2024-05-29 src => data-original-src
-                        thumb = cls.process_image_url(a_tags[0].xpath('.//img')[0].attrib['data-original-src'])
+                        thumb = cls.process_image_url(a_tags[0].xpath('.//img')[0])
                         #video_url = cls.get_kakao_play_url(a_tags[1].attrib['href'])
                         video_url = a_tags[1].attrib['href'].split('/')[-1]
                         title = a_tags[1].text_content()
