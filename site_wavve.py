@@ -28,6 +28,12 @@ class SiteWavve(object):
         return code
 
 
+# 2024-06-08
+#https://image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster/201904/C3701_C37000000068_2.jpg
+#https://img.pooq.co.kr/BMS/program_poster/201904/C3701_C37000000068_2.jpg
+                    
+
+
 class SiteWavveTv(SiteWavve):
     module_char = 'K'
     site_char = 'W'
@@ -50,6 +56,7 @@ class SiteWavveTv(SiteWavve):
                     match = re.search('id=(?P<code>[^&\n]+)', item['event_list'][1]['url'])
                     if match:
                         entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + match.group('code')
+                    item['thumbnail'] = item['thumbnail'].replace('img.pooq.co.kr/BMS/program_poster', 'image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster')
                     entity.image_url = 'https://' + item['thumbnail']
                     if SiteUtil.compare_show_title(entity.title, keyword):
                         entity.score = 100 - count_100
@@ -97,6 +104,7 @@ class SiteWavveTv(SiteWavve):
             show['plot'] = program_info['programsynopsis'].replace('<br>', '\r\n')
             score = 70
             show['thumb'].append(EntityThumb(aspect='landscape', value='https://' + program_info['image'], site=cls.site_name, score=0).as_dict())
+            program_info['posterimage']= program_info['posterimage'].replace('img.pooq.co.kr/BMS/program_poster', 'image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster')
             show['thumb'].append(EntityThumb(aspect='poster', value='https://' + program_info['posterimage'], site=cls.site_name, score=score).as_dict())
 
             page = 1
@@ -126,7 +134,7 @@ class SiteWavveTv(SiteWavve):
                     break
             # 방송정보에 없는 데이터 에피소드에서 빼서 입력
             if epi:
-                show['mpaa'] = mpaa_map[epi.get('targetage') or '0']
+                show['mpaa'] = mpaa_map.get(epi.get('targetage')) or mpaa_map['0']
 
                 if len(show['actor']) == 0:
                     for item in epi['episodeactors'].split(','):

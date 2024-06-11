@@ -116,7 +116,7 @@ class SiteTmdbTv(SiteTmdb):
 
 
     @classmethod
-    def search_tv(cls, title, premiered):
+    def search(cls, title, premiered):
         try:
             tmdb_search = tmdbsimple.Search().tv(query=title, language='ko', include_adult=True)
             for t in tmdb_search['results']:

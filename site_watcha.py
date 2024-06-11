@@ -53,6 +53,101 @@ class SiteWatcha(object):
             logger.error(traceback.format_exc())
             logger.debug(f'keyword: {keyword}, content_type: {content_type}, data: {data}')
 
+    @classmethod
+    def info_basic(cls, code, entity, api_return=False):
+        try:
+            url = 'https://api-mars.watcha.com/api/contents/%s.json' % code
+            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
+            if api_return:
+                return data
+            entity.title = data['title']
+            entity.year = data['year']
+            for item in data['actors']:
+                try:
+                    actor = EntityActor('', site=cls.site_name)
+                    actor.name = item['name']
+                    if item['photo'] is not None:
+                        actor.thumb = item['photo']['medium']
+                    entity.actor.append(actor)
+                except Exception as e:
+                    logger.error(f"Exception:{str(e)}")
+                    logger.error(traceback.format_exc())
+                    logger.debug(item)
+            for item in data['directors']:
+                if type(entity) != EntityShow:
+                    entity.director.append(item['name'])
+                else:
+                    entity.director.append(EntityActor(name=item['name']))
+            try: entity.runtime = int(data['duration']/60)
+            except: pass
+            entity.extra_info['title_en'] = data['eng_title']
+            entity.mpaa = data['film_rating_long']
+            for item in data['genres']:
+                entity.genre.append(item['name'])
+            try: entity.country.append(data['nations'][0]['name'])
+            except: pass
+            try:
+                if entity.country[0] == '한국':
+                    entity.originaltitle = entity.title
+                else:
+                    entity.originaltitle = entity.extra_info['title_en']
+            except: pass
+            if type(entity) != EntityShow:
+                entity.art.append(EntityThumb(aspect='poster', value=data['poster']['original'], thumb=data['poster']['small'], site=cls.site_name, score=60))
+                entity.art.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
+            else:
+                entity.thumb.append(EntityThumb(aspect='poster', value=data['poster']['original'], thumb=data['poster']['small'], site=cls.site_name, score=60))
+                entity.thumb.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
+
+            entity.plot = data['story']
+        except Exception as e:
+            logger.error(f"Exception:{str(e)}")
+            logger.error(traceback.format_exc())
+
+
+    @classmethod
+    def info_review(cls, code, entity, api_return=False):
+        try:
+            url = 'https://api-pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
+            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
+            if api_return:
+                return data
+            for item in data['result']['result']:
+                review = EntityReview(cls.site_name)
+                review.text = u'[좋아요 : %s' % item['likes_count']
+                review.source = ''
+                review.author = item['user']['name']
+                if item['user_content_action']['rating'] is not None:
+                    review.text += ' / 평점 : %s' % (item['user_content_action']['rating']/2.0)
+                    review.rating = item['user_content_action']['rating']
+                review.link = ''
+                tmp = item['text'].replace('\n', '\r\n')
+                tmp = re.sub(r'[^ %s-=+,#/\?:^$.@*\"~&%%!\\|\(\)\[\]\<\>`\'A-Za-z0-9]' % u'ㄱ-ㅣ가-힣', ' ', tmp)
+                review.text += ']   ' + tmp
+                entity.review.append(review)
+        except Exception as e:
+            logger.error(f"Exception:{str(e)}")
+            logger.error(traceback.format_exc())
+
+
+
+    @classmethod
+    def info_collection(cls, code, entity, api_return=False, like_count=100):
+        try:
+            url = 'https://api-pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
+            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
+            if api_return:
+                return data
+            for item in data['result']['result']:
+                if item['likes_count'] > like_count:
+                    entity.tag.append(item['title'])
+        except Exception as e:
+            logger.error(f"Exception:{str(e)}")
+            logger.error(traceback.format_exc())
+
+
+
+
 
 
 class SiteWatchaMovie(SiteWatcha):
@@ -139,88 +234,39 @@ class SiteWatchaMovie(SiteWatcha):
         return ret
 
 
-    @classmethod
-    def info_basic(cls, code, entity, api_return=False):
-        try:
-            url = 'https://api-mars.watcha.com/api/contents/%s.json' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
-            if api_return:
-                return data
-            entity.title = data['title']
-            entity.year = data['year']
-            for item in data['actors']:
-                try:
-                    actor = EntityActor('', site=cls.site_name)
-                    actor.name = item['name']
-                    if item['photo'] is not None:
-                        actor.thumb = item['photo']['medium']
-                    entity.actor.append(actor)
-                except Exception as e:
-                    logger.error(f"Exception:{str(e)}")
-                    logger.error(traceback.format_exc())
-                    logger.debug(item)
-            for item in data['directors']:
-                entity.director.append(item['name'])
-            try: entity.runtime = int(data['duration']/60)
-            except: pass
-            entity.extra_info['title_en'] = data['eng_title']
-            entity.mpaa = data['film_rating_long']
-            for item in data['genres']:
-                entity.genre.append(item['name'])
-            try: entity.country.append(data['nations'][0]['name'])
-            except: pass
-            try:
-                if entity.country[0] == '한국':
-                    entity.originaltitle = entity.title
-                else:
-                    entity.originaltitle = entity.extra_info['title_en']
-            except: pass
-            entity.art.append(EntityThumb(aspect='poster', value=data['poster']['original'], thumb=data['poster']['small'], site=cls.site_name, score=60))
-            entity.art.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
-            entity.plot = data['story']
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+    
 
 
-    @classmethod
-    def info_review(cls, code, entity, api_return=False):
-        try:
-            url = 'https://api-pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
-            if api_return:
-                return data
-            for item in data['result']['result']:
-                review = EntityReview(cls.site_name)
-                review.text = u'[좋아요 : %s' % item['likes_count']
-                review.source = ''
-                review.author = item['user']['name']
-                if item['user_content_action']['rating'] is not None:
-                    review.text += ' / 평점 : %s' % (item['user_content_action']['rating']/2.0)
-                    review.rating = item['user_content_action']['rating']
-                review.link = ''
-                tmp = item['text'].replace('\n', '\r\n')
-                tmp = re.sub(r'[^ %s-=+,#/\?:^$.@*\"~&%%!\\|\(\)\[\]\<\>`\'A-Za-z0-9]' % u'ㄱ-ㅣ가-힣', ' ', tmp)
-                review.text += ']   ' + tmp
-                entity.review.append(review)
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
 
 
-    @classmethod
-    def info_collection(cls, code, entity, api_return=False, like_count=100):
-        try:
-            url = 'https://api-pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
-            if api_return:
-                return data
-            for item in data['result']['result']:
-                if item['likes_count'] > like_count:
-                    entity.tag.append(item['title'])
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class SiteWatchaTv(SiteWatcha):
@@ -234,8 +280,6 @@ class SiteWatchaTv(SiteWatcha):
                 code = code[2:]
             ret = {}
             ret['basic'] = cls.info_basic(code, None, api_return=True)
-            ret['review'] = cls.info_review(code, None, api_return=True)
-            ret['collection'] = cls.info_collection(code, None, api_return=True)
             return ret
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
@@ -366,57 +410,8 @@ class SiteWatchaTv(SiteWatcha):
         return ret
 
 
-    @classmethod
-    def info_basic(cls, code, entity, api_return=False):
-        try:
-            logger.debug('code :%s', code)
-            if code.startswith(cls.module_char + cls.site_char):
-                code = code[2:]
-            url = 'https://api-mars.watcha.com/api/contents/%s.json' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
-            if api_return:
-                return data
-            entity.plot = data['story']
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
 
 
-    @classmethod
-    def info_review(cls, code, entity, api_return=False):
-        try:
-            url = 'https://api-pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
-            if api_return:
-                return data
-            for item in data['result']['result']:
-                review = EntityReview(cls.site_name)
-                review.text = '[좋아요 : %s' % item['likes_count']
-                review.source = ''
-                review.author = item['user']['name']
-                if item['user_content_action']['rating'] is not None:
-                    review.text += ' / 평점 : %s' % (item['user_content_action']['rating']/2.0)
-                    review.rating = item['user_content_action']['rating']
-                review.link = ''
-                tmp = item['text'].replace('\n', '\r\n')
-                tmp = re.sub(r'[^ %s-=+,#/\?:^$.@*\"~&%%!\\|\(\)\[\]\<\>`\'A-Za-z0-9]' % u'ㄱ-ㅣ가-힣', ' ', tmp)
-                review.text += ']   ' + tmp
-                entity.review.append(review)
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
 
-
-    @classmethod
-    def info_collection(cls, code, entity, api_return=False):
-        try:
-            url = 'https://api-pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
-            if api_return:
-                return data
-            for item in data['result']['result']:
-                if item['likes_count'] > 100:
-                    entity.tag.append(item['title'])
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+class SiteWatchaKTv(SiteWatchaTv):
+    module_char = 'K'

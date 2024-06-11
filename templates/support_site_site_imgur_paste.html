@@ -51,14 +51,12 @@ $(document).on('pasteImage', '#clipboardList', function (event, data){
           'source_name' : img_source_name,
       },
       success: function (ret) {
-        console.log("xxxxxxxxxxxxxxxxxxxxxxxx")
-        console.log(ret);
         // 업로드 성공 후 
         // div 포커스 아웃
         $('#clipboardList').blur();
         
-        tmp = '![]("' + ret['url'] + '")';
-        tmp2 = '<img src="' + ret['url'] + '" width="400" height="300" />'
+        tmp = '![](' + ret['url'] + ')';
+        tmp2 = '<img src="' + ret['url'] + '" width="70%" height="70%" />'
         $('#clipboardResult1').empty().append(tmp + "<br><xmp>"+tmp2+"</xmp>");
         $('#clipboardResult2').empty().append(tmp2);
 
