@@ -248,22 +248,9 @@ class SiteUtil(object):
 
     @classmethod
     def is_include_hangul(cls, text):
-        try:
-            pyVer3 =  sys.version_info >= (3, 0)
-            if pyVer3 : # for Ver 3 or later
-                encText = text
-            else: # for Ver 2.x
-                if type(text) is not unicode:
-                    encText = text.decode('utf-8')
-                else:
-                    encText = text
-            hanCount = len(re.findall(u'[\u3130-\u318F\uAC00-\uD7A3]+', encText))
-            return hanCount > 0
-        except:
-            return False
-
-
-    
+        hanCount = len(re.findall(u'[\u3130-\u318F\uAC00-\uD7A3]+', text))
+        return hanCount > 0
+     
 
     # 의미상으로 여기 있으면 안되나 예전 코드에서 많이 사용하기 때문에 잠깐만 나둔다.
     @classmethod 

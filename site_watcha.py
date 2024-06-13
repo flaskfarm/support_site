@@ -302,6 +302,8 @@ class SiteWatchaTv(SiteWatcha):
                 entity = EntitySearchItemFtv(cls.site_name)
                 entity.code = cls.module_char + cls.site_char + item['code']
                 entity.studio = item['channel_name']
+                if entity.studio == None:
+                    entity.studio = ''
                 for tmp in item['nations']:
                     entity.country.append(tmp['name'])
                 entity.title = item['title']
