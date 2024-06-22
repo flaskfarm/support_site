@@ -36,6 +36,10 @@ class SiteDaum(object):
             cls._proxy_url = proxy_url
         else:
             cls._proxy_url = None
+    
+    @classmethod
+    def get_tree(cls, url):
+        return SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
 
 
     @classmethod

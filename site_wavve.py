@@ -98,7 +98,7 @@ class SiteWavveTv(SiteWavve):
 
 
     @classmethod
-    def _apply_tv_by_program(cls, show, program_info):
+    def _apply_tv_by_program(cls, show, program_info, all_episode=True):
         try:
             show['extra_info']['wavve_id'] = program_info['programid']
             show['plot'] = program_info['programsynopsis'].replace('<br>', '\r\n')
@@ -132,6 +132,8 @@ class SiteWavveTv(SiteWavve):
                 page += 1
                 if episode_data['pagecount'] == episode_data['count'] or page == 10:
                     break
+                if all_episode == False:
+                    break
             # 방송정보에 없는 데이터 에피소드에서 빼서 입력
             if epi:
                 show['mpaa'] = mpaa_map.get(epi.get('targetage')) or mpaa_map['0']
@@ -148,7 +150,7 @@ class SiteWavveTv(SiteWavve):
 
 
     @classmethod
-    def info(cls, code):
+    def info(cls, code, all_episode=True):
         try:
             ret = {}
             code = cls.trim_program_id(code)
@@ -161,7 +163,7 @@ class SiteWavveTv(SiteWavve):
             show.premiered = program_info['firstreleasedate']
             if show.premiered != '':
                 show.year = int(show.premiered.split('-')[0])
-            logger.warning(program_info['closedate'])
+            #logger.warning(program_info['closedate'])
             show.status = 1
             if program_info['tags']['list']:
                 show.genre = [program_info['tags']['list'][0]['text']]
@@ -170,7 +172,7 @@ class SiteWavveTv(SiteWavve):
                 actor.name = item['text']
                 show.actor.append(actor)
             show = show.as_dict()
-            cls._apply_tv_by_program(show, program_info)
+            cls._apply_tv_by_program(show, program_info, all_episode=all_episode)
             ret['ret'] = 'success'
             ret['data'] = show
         except Exception as e:

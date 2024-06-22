@@ -299,7 +299,10 @@ class SiteTvingTv(SiteTving):
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
-
+    
+    @classmethod
+    def get_tv_mpaa(cls, grade_code):
+        return tv_mpaa_map.get(grade_code) or movie_mpaa_map.get(grade_code, tv_mpaa_map['CPTG0100'])
 
 
 
@@ -410,3 +413,5 @@ class SiteTvingMovie(SiteTving):
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
+    
+    

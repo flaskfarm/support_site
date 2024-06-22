@@ -253,6 +253,7 @@ class SiteUtil(object):
      
 
     # 의미상으로 여기 있으면 안되나 예전 코드에서 많이 사용하기 때문에 잠깐만 나둔다.
+    """
     @classmethod 
     def get_tree_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
@@ -289,7 +290,7 @@ class SiteUtil(object):
 
         res = cls.get_response(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies)
         return res
-    
+    """
 
     @classmethod
     def process_image_book(cls, url):
