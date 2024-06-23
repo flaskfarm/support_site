@@ -5,13 +5,11 @@ from .entity_base import (EntityActor2, EntityEpisode2, EntityFtv,
 from .setup import *
 
 try:
-    import tvdb_api
+    from .tvdb_api import tvdb_api
 except:
     try:
-        #os.system("{} install requests_cache==0.5.2".format(app.config['config']['pip']))
-        os.system("pip install requests_cache==0.5.2")
-        os.system("pip install tvdb-api")
-        import tvdb_api
+        os.system("pip install requests_cache")
+        from .tvdb_api import tvdb_api
     except Exception as e: 
         logger.error(f"Exception:{str(e)}")
         logger.error(traceback.format_exc())
