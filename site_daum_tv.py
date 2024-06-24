@@ -66,6 +66,7 @@ class SiteDaumTv(SiteDaum):
     @classmethod 
     def info(cls, code, title):
         try:
+            logger.debug(f"{code} - {title}")
             if title  == '모델': title = '드라마 모델'
             ret = {}
             show = EntityShow(cls.site_name, code)
@@ -79,6 +80,8 @@ class SiteDaumTv(SiteDaum):
             #logger.debug(home_url)
             home_root = SiteUtil.get_tree(home_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
             home_data = cls.get_show_info_on_home(home_root)
+            if home_data == None:
+                return {'ret':'fail'}
 
             #logger.debug('home_datahome_datahome_datahome_datahome_datahome_datahome_datahome_datahome_data')
             #logger.debug(home_data)
@@ -102,7 +105,7 @@ class SiteDaumTv(SiteDaum):
                 if match:
                     show.premiered = match.group(1)
             """
-            show.studio = home_data['studio']
+            show.studio = home_data.get('studio', '')
             show.plot = home_data['desc']
             match = re.compile(r'(?P<year>\d{4})\.(?P<month>\d{1,2})\.(?P<day>\d{1,2})').search(home_data['broadcast_term'])
             if match:
