@@ -2,8 +2,11 @@
 
 ## Changelog
 
+- 1.1.11 (2024.06.24)
+  alive와 연동을 위한 tving 모듈 수정
+
 - 1.1.10 (2024.06.23)
-  최신 requests_cache과 호환되도록 패치한 tvdb_api 버전을 내장
+  최신 `requests_cache`과 호환되도록 패치한 `tvdb_api`를 내장
 
 - 1.1.9 (2024.06.22)
   EPG 관련 수정.
