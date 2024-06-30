@@ -22,13 +22,6 @@ try:
 except:
     pass
 
-try:
-    if os.path.exists(os.path.join(os.path.dirname(__file__), 'kakaotv.py')):
-        from .kakaotv import SupportKakaotv
-    else:
-        SupportKakaotv = SupportSC.load_module_f(__file__, 'kakaotv').SupportKakaotv
-except:
-    pass
 
 try:
     if os.path.exists(os.path.join(os.path.dirname(__file__), 'tving.py')):
@@ -47,14 +40,6 @@ try:
 except:
     pass
 
-
-try:
-    if os.path.exists(os.path.join(os.path.dirname(__file__), 'dl_watcha.py')):
-        from .dl_watcha import DL_Watcha
-    else:
-        DL_Watcha = SupportSC.load_module_f(__file__, 'dl_watcha').DL_Watcha
-except:
-    pass
 
 
 from .server_util import MetadataServerUtil
