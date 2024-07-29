@@ -1,6 +1,8 @@
 ## 공동개발
 
 ## Changelog
+- 1.1.15 (2024.07.29)    
+  tving drm request header 정리.   
 
 - 1.1.14 (2024.07.27)
   alive와 연동을 위한 wavve 모듈 수정
