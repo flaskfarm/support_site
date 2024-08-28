@@ -355,7 +355,7 @@ class SiteTmdbMovie(SiteTmdb):
     @classmethod
     def info_actor(cls, tmdb, entity, primary=True, kor_trans=True):
         try:
-            info = tmdb.credits(language='en')
+            info = tmdb.credits(language='ko')
             trans = False
             if kor_trans and ((len(entity.country) > 0 and entity.country[0] in ['South Korea', u'한국', u'대한민국']) or (entity.extra_info['original_language'] == 'ko')):
                 trans = True
@@ -364,54 +364,50 @@ class SiteTmdbMovie(SiteTmdb):
             if primary:
                 #logger.debug(len(info['cast']))
                 for tmdb_item in info['cast'][:20]:
-                    name = tmdb_item['original_name']
+                    #name = tmdb_item['original_name']
+                    name = tmdb_item['name']
                     #logger.debug(tmdb_item)
 
-                    try:
-                        if SiteUtil.is_include_hangul(tmdb_item['original_name']) == False:
-                            people_info = tmdbsimple.People(tmdb_item['id']).info()
-                            for tmp in people_info['also_known_as']:
-                                if SiteUtil.is_include_hangul(tmp):
-                                    name = tmp
-                                    break
-                    except: pass
+                    #try:
+                    #    if SiteUtil.is_include_hangul(tmdb_item['original_name']) == False:
+                    #        people_info = tmdbsimple.People(tmdb_item['id']).info()
+                    #        for tmp in people_info['also_known_as']:
+                    #            if SiteUtil.is_include_hangul(tmp):
+                    #                name = tmp
+                    #                break
+                    #except: pass
 
                     actor = EntityActor('', site=cls.site_name)
+                    actor.name = name
+                    actor.role = tmdb_item['character']
                     try:
                         try:
-                            actor.name = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
-                            actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
+                            if SiteUtil.is_include_hangul(name) == False:
+                                actor.name = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
+                            if SiteUtil.is_include_hangul(tmdb_item['character']) == False:
+                                actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
                         except:
-                            actor.name = name
-                            actor.role = tmdb_item['character']
+                            pass
                     except:
-                        actor.name = name
-                        actor.role = tmdb_item['character']
+                        pass
                     if tmdb_item['profile_path'] is not None:
                         actor.thumb = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
 
                     entity.actor.append(actor)
                 for tmdb_item in info['crew'][:20]:
-                    if tmdb_item['job'] == 'Director':
+                    target_list = None
+                    if tmdb_item['job'] == 'Director': target_list = entity.director
+                    elif tmdb_item['job'] == 'Executive Producer': target_list = entity.producers
+                    elif tmdb_item['job'] == 'Producer': target_list = entity.producers
+                    elif tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']: target_list = entity.credits
+                    if target_list != None:
                         try:
-                            entity.director.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
+                            _ = tmdb_item['name']
+                            if SiteUtil.is_include_hangul(_) == False:
+                                _ = SiteUtil.trans(_, source='en', target='ko').replace(' ', '') if trans else tmdb_item['name']
+                            target_list.append(_)
                         except:
-                            entity.director.append(tmdb_item['original_name'])
-                    if tmdb_item['job'] == 'Executive Producer':
-                        try:
-                            entity.producers.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
-                        except:
-                            entity.producers.append(tmdb_item['original_name'])
-                    if tmdb_item['job'] == 'Producer':
-                        try:
-                            entity.producers.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
-                        except:
-                            entity.producers.append(tmdb_item['original_name'])
-                    if tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']:
-                        try:
-                            entity.credits.append(SiteUtil.trans(tmdb_item['original_name'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['original_name'])
-                        except:
-                            entity.credits.append(tmdb_item['original_name'])
+                            target_list.append(tmdb_item['name'])
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
