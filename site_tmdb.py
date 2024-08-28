@@ -181,7 +181,6 @@ class SiteTmdbTv(SiteTmdb):
 
             if apply_actor_image:
                 cls.process_actor_image(tmdb, show)
-            #ret['tmdb']['info'] = tmdb.credits(language='en')
             return True
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
@@ -231,7 +230,7 @@ class SiteTmdbMovie(SiteTmdb):
             ret = {}
             ret['info'] = tmdb.info(language='ko')
             ret['image'] = tmdb.images()
-            ret['credits'] = tmdb.credits(language='en')
+            ret['credits'] = tmdb.credits(language='ko')
             ret['video'] = tmdb.videos()
 
             return ret
@@ -696,7 +695,7 @@ class SiteTmdbFtv(SiteTmdb):
     @classmethod
     def info_credits(cls, tmdb, entity, crew=True):
         try:
-            info = tmdb.credits(language='en')
+            info = tmdb.credits(language='ko')
 
             for tmdb_item in info['cast']:#[:20]:
                 actor = EntityActor2(site=cls.site_name)
@@ -709,15 +708,16 @@ class SiteTmdbFtv(SiteTmdb):
                     continue
 
                 actor.order = tmdb_item['order']
-                actor.name_original = tmdb_item['original_name']
-                if SiteUtil.is_include_hangul(actor.name_original):
-                    actor.name = actor.name_ko = actor.name_original
-                else:
-                    people_info = tmdbsimple.People(actor.tmdb_id).info()
-                    for tmp in people_info['also_known_as']:
-                        if SiteUtil.is_include_hangul(tmp):
-                            actor.name = actor.name_ko = tmp
-                            break
+                actor.name_original = tmdb_item['name']
+                actor.name = tmdb_item['name']
+                #if SiteUtil.is_include_hangul(actor.name_original):
+                #    actor.name = actor.name_ko = actor.name_original
+                #else:
+                #    people_info = tmdbsimple.People(actor.tmdb_id).info()
+                #    for tmp in people_info['also_known_as']:
+                #        if SiteUtil.is_include_hangul(tmp):
+                #            actor.name = actor.name_ko = tmp
+                #            break
                 actor.role = tmdb_item['character']
                 if 'profile_path' in tmdb_item and tmdb_item['profile_path'] is not None:
                     actor.image = cls.get_poster_path(tmdb_item['profile_path'])
@@ -728,13 +728,13 @@ class SiteTmdbFtv(SiteTmdb):
 
             for tmdb_item in info['crew'][:20]:
                 if tmdb_item['job'] == 'Director':
-                    entity.director.append(tmdb_item['original_name'])
+                    entity.director.append(tmdb_item['name'])
                 if tmdb_item['job'] == 'Executive Producer':
-                    entity.producer.append(tmdb_item['original_name'])
+                    entity.producer.append(tmdb_item['name'])
                 if tmdb_item['job'] == 'Producer':
-                    entity.producer.append(tmdb_item['original_name'])
+                    entity.producer.append(tmdb_item['name'])
                 if tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']:
-                    entity.writer.append(tmdb_item['original_name'])
+                    entity.writer.append(tmdb_item['name'])
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -854,7 +854,7 @@ class SiteTmdbFtv(SiteTmdb):
             tmdb = tmdbsimple.TV_Seasons(tmdb_id, season_number)
             ret = {}
             ret['info'] = tmdb.info(language='ko')
-            ret['credits'] = tmdb.credits(language='en')
+            ret['credits'] = tmdb.credits(language='ko')
             ret['image'] = tmdb.images()
             ret['video'] = tmdb.videos()
             ret['external_ids'] = tmdb.external_ids()
