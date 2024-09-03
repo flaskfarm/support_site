@@ -1,6 +1,9 @@
 ## 공동개발
 
 ## Changelog
+- 1.1.17 (2024.09.03)    
+  tving 로그인 수정.   
+
 - 1.1.17 (2024.09.01)    
   wavve redis 초기화를 use_celery=False 경우 하지 않도록 수정.   
 

@@ -35,13 +35,17 @@ class ModuleSite(PluginModuleBase):
         ret = {'ret':'success'}
         if command == 'tving_login':
             from . import SupportTving
-            token = SupportTving.do_login(arg1, arg2, arg3)
-            if token is None:
+            login_ret = SupportTving.do_login(arg1, arg2, arg3)
+            if login_ret == None:
                 ret['ret'] = 'warning'
-                ret['msg'] = "로그인에 실패하였습니다."
+                ret['msg'] = f"로그인에 실패하였습니다."
             else:
-                ret['token'] = token
-                ret['msg'] = "토큰값을 가져왔습니다.<br>저장버튼을 눌러야 값을 저장합니다."
+                if login_ret['status_code'] == 200:
+                    ret['token'] = login_ret['token']
+                    ret['msg'] = "토큰값을 가져왔습니다.<br>저장버튼을 눌러야 값을 저장합니다."
+                else:
+                    ret['ret'] = 'warning'
+                    ret['msg'] = f"로그인에 실패하였습니다.<br>응답코드: {login_ret['status_code']}"
         elif command == 'tving_deviceid':
             from . import SupportTving
             device_list = SupportTving.get_device_list(token=arg1)
