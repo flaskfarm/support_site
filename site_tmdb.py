@@ -231,7 +231,8 @@ class SiteTmdbMovie(SiteTmdb):
             ret['info'] = tmdb.info(language='ko')
             ret['image'] = tmdb.images()
             ret['credits'] = tmdb.credits(language='ko')
-            ret['video'] = tmdb.videos()
+            #ret['video'] = tmdb.videos()
+            ret['releases'] = tmdb.releases()
 
             return ret
         except Exception as e:
@@ -302,7 +303,8 @@ class SiteTmdbMovie(SiteTmdb):
             entity.code_list.append(['tmdb_id', code[2:]])
             cls.info_basic(tmdb, entity)
             cls.info_actor(tmdb, entity)
-            cls.info_videos(tmdb, entity)
+            #cls.info_videos(tmdb, entity)
+            cls.info_releases(tmdb, entity)
 
             entity = entity.as_dict()
             cls._process_image(tmdb, entity['art'])
@@ -503,7 +505,27 @@ class SiteTmdbMovie(SiteTmdb):
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
-
+    @classmethod
+    def info_releases(cls, tmdb, entity):
+        try:
+            info = tmdb.releases()
+            datas = []
+            for item in info['countries']:
+                if item['certification'] == '':
+                    continue
+                value = f"{item['iso_3166_1'].lower()}/{item['certification']}"
+                if item['iso_3166_1'] == 'KR':
+                    entity.mpaa = value
+                    return
+                if item['iso_3166_1'] == 'US':
+                    datas.insert(0, value)
+                else:
+                    datas.append(value)
+            if len(datas):
+                entity.mpaa = datas[0]
+        except Exception as e:
+            logger.error(f"Exception:{str(e)}")
+            logger.error(traceback.format_exc())
 
 
 
