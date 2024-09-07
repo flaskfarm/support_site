@@ -99,7 +99,7 @@ class SiteWatcha(object):
                 entity.thumb.append(EntityThumb(aspect='poster', value=data['poster']['original'], thumb=data['poster']['small'], site=cls.site_name, score=60))
                 entity.thumb.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
 
-            entity.plot = data['story']
+            entity.plot = data['story'] if data['story'] else ''
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
