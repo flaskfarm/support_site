@@ -561,7 +561,8 @@ class SiteUtil(object):
         "A2" : u"인공위성IP",
         "PS" : u"팔레스타인",
         "RS" : u"세르비아",
-        "JE" : u"저지"
+        "JE" : u"저지",
+        "YU" : "유고슬라비아",
     }
 
 
