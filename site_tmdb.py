@@ -513,7 +513,7 @@ class SiteTmdbMovie(SiteTmdb):
             for item in info['countries']:
                 if item['certification'] == '':
                     continue
-                value = f"{item['iso_3166_1'].lower()}/{item['certification']}"
+                value = f"{item['iso_3166_1'].lower()}/{item['certification']}".replace(' ', '')
                 if item['iso_3166_1'] == 'KR':
                     entity.mpaa = value
                     return
