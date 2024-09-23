@@ -699,7 +699,7 @@ class EntityFtv(object):
             'plot' : self.plot,
             'studio' : self.studio,
             'country' : self.country,
-            'seasons' : [x.as_dict() for x in self.seasons] if len(self.seasons) > 0 else [],
+            'seasons' : [x.as_dict() if x else None for x in self.seasons] if len(self.seasons) > 0 else [],
             'status' : self.status,
             'ratings' : [x.as_dict() for x in self.ratings] if len(self.ratings) > 0 else [],
             'extra_info' : self.extra_info,

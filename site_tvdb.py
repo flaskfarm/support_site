@@ -1,18 +1,14 @@
+try:
+    import tvdb_api
+except:
+    os.system("pip install tvdb_api")
+    import tvdb_api
+
 from . import SiteUtil
 from .entity_base import (EntityActor2, EntityEpisode2, EntityFtv,
                           EntityRatings, EntitySearchItemFtv, EntitySeason,
                           EntityThumb)
 from .setup import *
-
-try:
-    from .tvdb_api import tvdb_api
-except:
-    try:
-        os.system("pip install requests_cache")
-        from .tvdb_api import tvdb_api
-    except Exception as e: 
-        logger.error(f"Exception:{str(e)}")
-        logger.error(traceback.format_exc())
 
 APIKEY = 'D4DDDAEFAD083E6F'
 
@@ -138,6 +134,7 @@ class SiteTvdbTv(SiteTvdb):
             if series['banner'] != 'http://thetvdb.com/banners/':
                 entity.art.append(EntityThumb(aspect='banner', value=series['banner'], site=cls.site_name, score=80))
             entity.season_count = int(series['season'])
+            entity.seasons = [None] * (entity.season_count+1)
             for i in range(1, entity.season_count+1):
                 entity.seasons[i] = EntitySeason(code, i)
             entity.extra_info['imdbId'] = series['imdbId']
@@ -174,7 +171,7 @@ class SiteTvdbTv(SiteTvdb):
                 episode_count = len(series[season_no].keys())
                 for epi_no in range(1, episode_count+1):
                     episode_info = series[season_no][epi_no]
-                    episode = EntityEpisode2(season_no, epi_no)
+                    episode = EntityEpisode2(cls.site_name, season_no, epi_no)
                     episode.title = episode_info['episodeName']
                     episode.plot = episode_info['overview']
                     episode.guests = episode_info['guestStars']
@@ -183,8 +180,8 @@ class SiteTvdbTv(SiteTvdb):
                     episode.directors = episode_info['directors']
                     episode.writers = episode_info['writers']
                     episode.art.append(episode_info['filename'])
-                    entity.seasons[season_no].episodes[epi_no] = episode
-            return entity.as_dict()
+                    entity.seasons[season_no].episodes[epi_no] = episode.as_dict()
+            return {'ret': 'success', 'data':entity.as_dict()}
         except Exception as e: 
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
