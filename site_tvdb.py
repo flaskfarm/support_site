@@ -1,6 +1,7 @@
 try:
     import tvdb_api
 except:
+    import os
     os.system("pip install tvdb_api")
     import tvdb_api
 
