@@ -155,15 +155,6 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get_bool('site_wavve_use_proxy'),
             P.ModelSetting.get('site_wavve_proxy_url'),
         )
-        '''
-        ssokka:
-            Fix Proxy
-            국내 IP가 적용되는 Proxy 주소 사용, warproxy/wgcf 불가
-        '''
-        if P.ModelSetting.get_bool('site_wavve_use_proxy'):
-            SupportWavve.session.proxies = SupportWavve._SupportWavve__get_proxies()
-        else:
-            SupportWavve.session.proxies = {}
 
     def __daum_init(self):
         from . import SiteDaum
