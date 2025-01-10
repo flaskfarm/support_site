@@ -38,9 +38,17 @@ class SiteDaumTv(SiteDaum):
             keyword = cls.get_search_name_from_original(keyword)
             ret = {}
             if daum_id is None:
-                url = 'https://search.daum.net/search?q=%s' % (urllib.parse.quote(str(keyword)))
+                #url = 'https://search.daum.net/search?q=%s' % (urllib.parse.quote(str(keyword)))
+                url = f'https://search.daum.net/search?w=tv&q={urllib.parse.quote(str(keyword))}&coll=tv-main&spt=tv-info&DA=TVP&rtmaxcoll=TVP'
             else:
-                url = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(keyword)), daum_id)
+                #url = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(keyword)), daum_id)
+                '''
+                spt=tv-info # 정보
+                spt=tv-casting # 출연
+                spt=tv-ott # 감상하기
+                spt=tv-series # 시리즈
+                '''
+                url = f'https://search.daum.net/search?w=tv&q={urllib.parse.quote(str(keyword))}&coll=tv-main&spId={daum_id}&spt=tv-info&DA=TVP&rtmaxcoll=TVP'
 
             root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
             data = cls.get_show_info_on_home(root)
@@ -67,17 +75,17 @@ class SiteDaumTv(SiteDaum):
     def info(cls, code, title):
         try:
             logger.debug(f"{code} - {title}")
-            if title  == '모델': title = '드라마 모델'
+            if title == '모델': title = '드라마 모델'
             ret = {}
             show = EntityShow(cls.site_name, code)
             # 종영와, 방송중이 표현 정보가 다르다. 종영은 studio가 없음
-            url = 'https://search.daum.net/search?w=tv&q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(title)), code[2:])
+            #url = 'https://search.daum.net/search?w=tv&q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(title)), code[2:])
+            url = f'https://search.daum.net/search?w=tv&q={urllib.parse.quote(str(title))}&coll=tv-main&spId={code[2:]}&spt=tv-info&DA=TVP&rtmaxcoll=TVP'
             show.home = url
             root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
 
-            home_url = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(title)), code[2:])
-            
-            #logger.debug(home_url)
+            #home_url = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(title)), code[2:])
+            home_url = f'https://search.daum.net/search?w=tv&q={urllib.parse.quote(str(title))}&coll=tv-main&spId={code[2:]}&spt=tv-info&DA=TVP&rtmaxcoll=TVP'
             home_root = SiteUtil.get_tree(home_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
             home_data = cls.get_show_info_on_home(home_root)
             if home_data == None:
@@ -86,13 +94,19 @@ class SiteDaumTv(SiteDaum):
             #logger.debug('home_datahome_datahome_datahome_datahome_datahome_datahome_datahome_datahome_data')
             #logger.debug(home_data)
 
+            show.title = home_data['title']
+            show.originaltitle = show.sorttitle = show.title
+
+            TV_INFO_TAB_ELEMENTS = root.xpath('//ul[@class="grid_xscroll"]/li/a')
+
+            """
             tags = root.xpath('//*[@id="tv_program"]/div[1]/div[2]/strong')
             if len(tags) == 1:
                 show.title = tags[0].text_content().strip()
                 show.originaltitle = show.title
                 show.sorttitle = show.title #unicodedata.normalize('NFKD', show.originaltitle)
                 #logger.debug(show.sorttitle)
-            """
+
             tags = root.xpath('//*[@id="tv_program"]/div[1]/div[3]/span')
             # 이 정보가 없다면 종영
             if tags:
@@ -122,6 +136,7 @@ class SiteDaumTv(SiteDaum):
             show.genre = [home_data['genre']]
             show.episode = home_data['episode']
 
+            '''
             tmp = root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')
             #logger.debug(tmp)
 
@@ -129,9 +144,12 @@ class SiteDaumTv(SiteDaum):
                 show.thumb.append(EntityThumb(aspect='poster', value=cls.process_image_url(root.xpath('//*[@id="tv_program"]/div[1]/div[1]/a/img')[0]), site='daum', score=-10))
             except:
                 pass
+            '''
+            show.thumb.append(EntityThumb(aspect='poster', value=home_data['image_url'], site='daum', score=-10))
 
-
-            if True: 
+            '''
+            # 보류
+            if True:
                 tags = root.xpath('//ul[@class="col_size3 list_video"]/li')
                 for idx, tag in enumerate(tags):
                     if idx > 9:
@@ -150,8 +168,57 @@ class SiteDaumTv(SiteDaum):
                         title = SupportString.remove_emoji(title).strip()
                         #title = "title"
                         show.extras.append(EntityExtra(content_type, title, 'kakao', video_url, premiered=date, thumb=thumb))
+            '''
+            actor_tab_element = None
+            for element in TV_INFO_TAB_ELEMENTS:
+                if element.text and element.text.strip() == '출연':
+                    actor_tab_element = element
+                    break
+            if actor_tab_element is not None:
+                actor_tab_url = urllib.parse.urljoin('https://search.daum.net/search', actor_tab_element.attrib['href'])
+                actor_root = SiteUtil.get_tree(actor_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
 
+                actor_elements = actor_root.xpath('//div[@data-tab="출연"]//ul/li/div')
+                for element in actor_elements:
+                    actor = EntityActor(None)
+                    actor.type = 'actor'
 
+                    title_elements = element.xpath('.//div[@class="item-title"]')
+                    title_text = title_elements[0].text_content().strip()
+                    '''
+                    인물관계도      .item-title
+                    (blank)        .item-contents
+                    '''
+                    if title_text == '인물관계도':
+                        continue
+                    '''
+                    이지안 역       .item-title
+                    이지은          .item-contents
+                    '''
+                    content_elements = element.xpath('.//div[@class="item-contents"]/p')
+                    if content_elements:
+                        actor.name = content_elements[0].text_content().strip()
+                        actor.role = title_text.replace('역', '').strip()
+                    '''
+                    유재석          .item-title
+                    출연            .item-contents
+                    '''
+                    content_elements = element.xpath('.//div[@class="item-contents"]/span')
+                    if content_elements:
+                        actor.name = title_text
+                        actor.role = content_elements[0].text_content().strip()
+
+                    cast_img_elements = element.xpath('.//img')
+                    logger.debug(f'{cast_img_elements=}')
+                    if cast_img_elements:
+                        thumb_url = cls.process_image_url(cast_img_elements[0])
+                        if thumb_url.startswith('http'):
+                            actor.thumb = thumb_url
+
+                    logger.debug(f'{actor.role=} {actor.name=} {actor.thumb=}')
+                    show.actor.append(actor)
+
+            '''
             for i in range(1,3):
                 items = root.xpath('//*[@id="tv_casting"]/div[%s]/ul//li' % i)
                 #logger.debug('CASTING ITEM LEN : %s' % len(items))
@@ -190,7 +257,39 @@ class SiteDaumTv(SiteDaum):
                         show.credits.append(actor)
                     elif actor.name != u'인물관계도':
                         show.actor.append(actor)
+            '''
 
+            epno_tab_element = None
+            for element in TV_INFO_TAB_ELEMENTS:
+                if element.text and element.text.strip() == '회차':
+                    epno_tab_element = element
+                    break
+
+            if epno_tab_element is not None:
+                epno_tab_url = urllib.parse.urljoin('https://search.daum.net/search', epno_tab_element.attrib['href'])
+                epno_root = SiteUtil.get_tree(epno_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+                episode_elements = epno_root.xpath('//q-select/option')
+                for element in episode_elements:
+                    try:
+                        ep_no = int(element.attrib['value'].strip().replace('회', ''))
+                    except:
+                        logger.error(traceback.format_exc())
+                        continue
+                    try:
+                        ep_id = int(element.attrib['data-sp-id'].strip())
+                    except:
+                        logger.error(traceback.format_exc())
+                        continue
+                    epi = {}
+                    epi['no'] = ep_no
+                    epi['id'] = ep_id
+                    query = f"{home_data['title']} {ep_no}회"
+                    epi['url'] = f"https://search.daum.net/search?w=tv&q={query}&spId={ep_id}&coll=tv-episode&spt=tv-episode&DA=TVP&rtmaxcoll=TVP"
+                    epi['premiered'] = 'unknown'
+                    show.extra_info['episodes'][epi['no']] = {'daum': {'code' : cls.module_char + cls.site_char + epi['url'], 'premiered':epi['premiered']}}
+                    logger.debug(f'{epi}')
+
+            '''
             # 에피소드
             items = root.xpath('//*[@id="clipDateList"]/li')
             #show.extra_info['episodes'] = {}
@@ -206,6 +305,7 @@ class SiteDaumTv(SiteDaum):
                 if match:
                     epi['no'] = int(match.group('no'))
                     show.extra_info['episodes'][epi['no']] = {'daum': {'code' : cls.module_char + cls.site_char + epi['url'], 'premiered':epi['premiered']}}
+            '''
 
             tags = root.xpath('//*[@id="tv_program"]//div[@class="clipList"]//div[@class="mg_expander"]/a')
             show.extra_info['kakao_id'] = None
@@ -236,6 +336,56 @@ class SiteDaumTv(SiteDaum):
             episode_code = episode_code[2:]
             root = SiteUtil.get_tree(episode_code, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
 
+            entity = EntityEpisode(cls.site_name, episode_code)
+
+            epno_elements = root.xpath('//q-select/option')
+
+            for element in epno_elements:
+                if 'selected' in element.attrib:
+                    try:
+                        entity.episode = int(element.attrib['value'].strip().replace('회', ''))
+                    except:
+                        logger.error(traceback.format_exc())
+
+            date_text = root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
+            if date_text:
+                dates = date_text[0].strip().split('.')
+                tmp = []
+                for date_text in dates:
+                    if date_text.isdigit():
+                        tmp.append(date_text)
+                entity.premiered = '-'.join(tmp)
+            entity.title = entity.premiered
+
+            strong_titles = root.xpath('//div[@id="tvpColl"]//strong[@class="tit_story"]')
+            if strong_titles and strong_titles[0].text:
+                entity.title = strong_titles[0].text.strip()
+
+            plot_text = root.xpath('//p[@class="desc_story"]/text()')
+            entity.plot = plot_text[0].strip() if plot_text is not None else entity.premiered
+
+            epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
+            if epi_thumbs:
+                thumb_url = cls.process_image_url(epi_thumbs[0])
+                entity.thumb.append(EntityThumb(aspect='landscape', value=thumb_url, site=cls.site_name, score=-10))
+
+                '''
+                if 'alt' in epi_thumbs[0].attrib and epi_thumbs[0].attrib['alt']:
+                    sub = re.compile('\[.+\]')
+                    tmp = epi_thumbs[0].attrib['alt'].split('|')
+                    tmp = sub.sub('', tmp[0]).strip()
+                    if tmp:
+                        entity.title = tmp
+                '''
+
+            entity.extras
+
+            ret['ret'] = 'success'
+            ret['data'] = entity.as_dict()
+
+            logger.debug(ret['data'])
+
+            '''
             items = root.xpath('//div[@class="tit_episode"]')
             entity = EntityEpisode(cls.site_name, episode_code)
 
@@ -304,6 +454,7 @@ class SiteDaumTv(SiteDaum):
 
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
+            '''
         except Exception as e: 
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())

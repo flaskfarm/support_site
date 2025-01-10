@@ -45,6 +45,125 @@ class SiteDaum(object):
     @classmethod
     def get_show_info_on_home(cls, root):
         try:
+            entity = EntitySearchItemTvDaum(cls.site_name)
+
+            title_elements = root.xpath('//div[@id="tvpColl"]//div[@class="inner_header"]/strong/a')
+            if title_elements:
+                entity.title = title_elements[0].text.strip()
+                query = urllib.parse.parse_qs(title_elements[0].attrib['href'])
+                entity.code = f'{cls.module_char}{cls.site_char}{query["spId"][0].strip()}'
+            else:
+                logger.error(f'Could not find the title...')
+                return
+
+            entity.episode = -1
+
+            '''
+            중국드라마 | 50부작 | 10.06.24. ~ 10. | 완결
+            예능 | 10.07.11. ~
+            영국드라마 | 10부작 | 24.11.15. ~
+            뉴스 | 70.10.05. ~
+            '''
+            sub_headers = root.xpath('//div[@id="tvpColl"]//div[@class="sub_header"]/span/span')
+            entity.genre = sub_headers[0].xpath('string()').strip()
+            del sub_headers[0]
+
+            entity.status = 1
+            if sub_headers[-1].xpath('string()').strip() in ['방송종료', '완결']:
+                entity.status = 2
+                del sub_headers[-1]
+            elif sub_headers[-1].xpath('string()').strip() in ['방송예정']:
+                entity.status = 0
+                del sub_headers[-1]
+
+            regex_term = re.compile(r'(.+)\s~(\s.+)?')
+            current_year = datetime.now().year
+            for sub_header in sub_headers:
+                text = sub_header.xpath('string()').strip()
+                if not text:
+                    continue
+                match = regex_term.search(text)
+                if match:
+                    entity.broadcast_term = match.group(1)
+                    year, _, month_day = match.group(1).partition('.')
+                    #logger.debug(f'{year=} {month_day=}')
+                    twenty_century = int(f'20{year}')
+                    if twenty_century < current_year + 2:
+                        entity.year = twenty_century
+                    else:
+                        entity.year = int(f'19{year}')
+
+            # 포스터
+            try:
+                poster_elements = root.xpath('//*[@id="tvpColl"]//*[@class="c-item-exact"]//*[@class="thumb_bf"]/img')
+                if poster_elements:
+                    entity.image_url = cls.process_image_url(poster_elements[0])
+            except:
+                logger.error(traceback.format_exc())
+                entity.image_url = None
+
+            # extra_info?
+            '''
+            https://github.com/soju6jan/SjvaAgent.bundle/blob/55eeacd759a14d8651a41b5e8cdabc5dd1cd3219/Contents/Code/module_ktv.py#L137
+            tmp = data['extra_info'] + ' '
+            if data['status'] == 0:
+                tmp = tmp + u'방송예정'
+            elif data['status'] == 1:
+                tmp = tmp + u'방송중'
+            elif data['status'] == 2:
+                tmp = tmp + u'방송종료'
+            tmp = tmp + self.search_result_line() + data['desc']
+            '''
+            entity.extra_info = ''
+
+            studio_element = root.xpath('//div[@id="tvpColl"]//dd[@class="program"]//span[@class="inner"]')[0]
+            studio_element_a = studio_element.xpath('a')
+            if studio_element_a:
+                entity.studio = studio_element_a[0].text
+            else:
+                entity.studio = studio_element.xpath('string()')
+            entity.studio = entity.studio.strip()
+
+            entity.desc = root.xpath('//div[@id="tvpColl"]//dt[contains(text(),"소개")]/following-sibling::dd//p/text()')[0].strip()
+
+            entity.series = []
+            entity.series.append({'title':entity.title, 'code' : entity.code, 'year' : entity.year, 'status':entity.status, 'date':'%s' % (entity.year)})
+
+            tab_elements = root.xpath('//ul[@class="grid_xscroll"]/li/a')
+            series_tab_element = None
+            for element in tab_elements:
+                if element.text and element.text.strip() == '시리즈':
+                    series_tab_element = element
+                    break
+            if series_tab_element is not None:
+                series_tab_url = urllib.parse.urljoin('https://search.daum.net/search', series_tab_element.attrib['href'])
+                series_root = SiteUtil.get_tree(series_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+
+                series_elements = series_root.xpath('//div[@id="tvpColl"]//strong[contains(text(), "시리즈")]/following-sibling::div/ul/li')
+                for series_element in series_elements:
+                    series = {}
+                    series_info_element = series_element.xpath('div/div[2]')[0]
+                    a_element = series_info_element.xpath('div[1]//a')[0]
+                    series['title'] = a_element.text.strip()
+                    query = urllib.parse.parse_qs(a_element.attrib['href'])
+                    series['code'] = f'{cls.module_char}{cls.site_char}{query["spId"][0].strip()}'
+                    date_element = series_info_element.xpath('div[2]/span')[0]
+                    series['year'] = 1900
+                    if date_element.text:
+                        year, _, month = date_element.text.strip().partition('.')
+                        if year:
+                            series['year'] = int(year)
+                        dates = date_element.text.split('.')
+                        date_texts = []
+                        for tmp in dates:
+                            if tmp.isdigit():
+                                date_texts.append(tmp)
+                        series['date'] = '-'.join(filter(None, date_texts))
+                    entity.series.append(series)
+
+                entity.series = sorted(entity.series, key=lambda k: (int(k['year'] if k['year'] else 1900), int(k['code'][2:])))
+
+            '''
             tags = root.xpath('//*[@id="tvpColl"]/div[2]/div/div[1]/span/a')
             # 2019-05-13
             #일밤- 미스터리 음악쇼 복면가왕 A 태그 2개
@@ -194,6 +313,7 @@ class SiteDaum(object):
                         elif len(tmp) == 1:
                             item['sort_value'] = int(tmp[0])
                     entity.series = sorted(entity.series, key=lambda k: (k['sort_value'], int(k['code'][2:])))
+            '''
 
             #동명
             entity.equal_name = []

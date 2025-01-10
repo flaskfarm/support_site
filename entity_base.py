@@ -241,6 +241,8 @@ class EntitySearchItemTvDaum(object):
         tmp += 'broadcast_term : %s\n' % self.broadcast_term
         tmp += 'series : %s\n' % self.series
 
+        tmp += f'genre: {self.genre}\n'
+
         return tmp
 
 
