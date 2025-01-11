@@ -53,7 +53,12 @@ class SiteDaum(object):
                 query = urllib.parse.parse_qs(title_elements[0].attrib['href'])
                 entity.code = f'{cls.module_char}{cls.site_char}{query["spId"][0].strip()}'
             else:
-                logger.error(f'Could not find the title...')
+                html_titles = root.xpath('//title/text()')
+                if html_titles:
+                    html_titles_text = ' '.join(html_titles).strip()
+                    logger.error(f'Could not find a show: {html_titles_text}')
+                else:
+                    logger.error(f'Could not find a show')
                 return
 
             entity.episode = -1
@@ -154,10 +159,7 @@ class SiteDaum(object):
                         if year:
                             series['year'] = int(year)
                         dates = date_element.text.split('.')
-                        date_texts = []
-                        for tmp in dates:
-                            if tmp.isdigit():
-                                date_texts.append(tmp)
+                        date_texts = [d for d in dates if d.isdigit()]
                         series['date'] = '-'.join(filter(None, date_texts))
                     entity.series.append(series)
 
