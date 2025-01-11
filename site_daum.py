@@ -56,9 +56,9 @@ class SiteDaum(object):
                 html_titles = root.xpath('//title/text()')
                 if html_titles:
                     html_titles_text = ' '.join(html_titles).strip()
-                    logger.error(f'Could not find a show: {html_titles_text}')
+                    logger.warning(f'검색 실패: {html_titles_text}')
                 else:
-                    logger.error(f'Could not find a show')
+                    logger.warning(f'검색 실패')
                 return
 
             entity.episode = -1

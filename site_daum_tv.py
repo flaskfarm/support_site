@@ -295,35 +295,40 @@ class SiteDaumTv(SiteDaum):
                         show.actor.append(actor)
             '''
 
-            epno_tab_element = None
-            for element in TV_INFO_TAB_ELEMENTS:
-                if element.text and element.text.strip() == '회차':
-                    epno_tab_element = element
+            last_ep_no = 99999
+            last_ep_url = ''
+            max_loop_counter = 0
+
+            while last_ep_no > 1:
+                if last_ep_url:
+                    more_episode_root = SiteUtil.get_tree(last_ep_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+                    tv_info_tab_elements = more_episode_root.xpath('//ul[@class="grid_xscroll"]/li/a')
+                else:
+                    tv_info_tab_elements = TV_INFO_TAB_ELEMENTS
+
+                epno_tab_element = None
+                for element in tv_info_tab_elements:
+                    if element.text and element.text.strip() == '회차':
+                        epno_tab_element = element
+                        break
+
+                if epno_tab_element is not None:
+                    epno_tab_url = urllib.parse.urljoin(f'{cls.site_base_url}/search', epno_tab_element.attrib['href'])
+                    epno_root = SiteUtil.get_tree(epno_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+                    episode_elements = epno_root.xpath('//q-select/option')
+                    ep_no, ep_url = cls.parse_episode_list(episode_elements, show.extra_info['episodes'], show.title)
+                    if last_ep_no == ep_no:
+                        logger.debug(f'No more episode information after: {ep_no}')
+                        break
+                    else:
+                        last_ep_no = ep_no
+                        last_ep_url = ep_url
+                else:
                     break
 
-            if epno_tab_element is not None:
-                epno_tab_url = urllib.parse.urljoin(f'{cls.site_base_url}/search', epno_tab_element.attrib['href'])
-                epno_root = SiteUtil.get_tree(epno_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
-                episode_elements = epno_root.xpath('//q-select/option')
-                for element in episode_elements:
-                    try:
-                        ep_no = int(element.attrib['value'].strip().replace('회', ''))
-                    except:
-                        logger.error(traceback.format_exc())
-                        continue
-                    try:
-                        ep_id = int(element.attrib['data-sp-id'].strip())
-                    except:
-                        logger.error(traceback.format_exc())
-                        continue
-                    epi = {}
-                    epi['no'] = ep_no
-                    epi['id'] = ep_id
-                    query = f"{home_data['title']} {ep_no}회"
-                    epi['url'] = f"{cls.site_base_url}/search?w=tv&q={query}&spId={ep_id}&coll=tv-episode&spt=tv-episode&DA=TVP&rtmaxcoll=TVP"
-                    epi['premiered'] = 'unknown'
-                    show.extra_info['episodes'][epi['no']] = {'daum': {'code' : cls.module_char + cls.site_char + epi['url'], 'premiered':epi['premiered']}}
-                    logger.debug(f'{epi}')
+                if max_loop_counter > 100:
+                    break
+                max_loop_counter += 1
 
             '''
             # 에피소드
@@ -404,16 +409,20 @@ class SiteDaumTv(SiteDaum):
             strong_titles = root.xpath('//div[@id="tvpColl"]//strong[@class="tit_story"]')
             if strong_titles and strong_titles[0].text:
                 entity.originaltitle = strong_titles[0].text.strip()
-                entity.title = f'{entity.title} {entity.originaltitle}'
+                entity.title = f'{entity.title} {entity.originaltitle}' if is_ktv else entity.originaltitle
 
             show_title = root.xpath('//*[@id="tvpColl"]//div[@class="inner_header"]//a/text()')
             if show_title:
                 entity.showtitle = show_title[0].strip()
 
+            if not summary_duplicate_remove:
+                entity.plot = entity.title
             plot_text = root.xpath('//p[@class="desc_story"]/text()')
-            entity.plot += f'{entity.title}\n'
             if plot_text:
-                entity.plot += plot_text[0].strip()
+                if summary_duplicate_remove:
+                    entity.plot = plot_text[0].strip()
+                else:
+                    entity.plot += plot_text[0].strip()
 
             epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
             if epi_thumbs:
@@ -428,7 +437,8 @@ class SiteDaumTv(SiteDaum):
                         entity.title = tmp
                 '''
 
-            entity.extras
+            if include_kakao:
+                entity.extras
 
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
@@ -543,3 +553,34 @@ class SiteDaumTv(SiteDaum):
         except Exception as e: 
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
+
+    @classmethod
+    def parse_episode_list(cls, episode_elements: list, episodes: dict, show_title: str) -> tuple[int, str]:
+        last_ep_no = -1
+        last_ep_url = ''
+        for element in episode_elements:
+            try:
+                ep_no = last_ep_no = int(element.attrib['value'].strip().replace('회', ''))
+            except Exception as e:
+                logger.warning(repr(e))
+                continue
+
+            if ep_no in episodes:
+                continue
+
+            try:
+                ep_id = int(element.attrib['data-sp-id'].strip())
+            except Exception as e:
+                logger.warning(repr(e))
+                continue
+
+            query = f'{show_title} {ep_no}회'
+            url  = last_ep_url = f'{cls.site_base_url}/search?w=tv&q={query}&spId={ep_id}&coll=tv-episode&spt=tv-episode&DA=TVP&rtmaxcoll=TVP'
+            episodes[ep_no] = {
+                'daum': {
+                    'code': cls.module_char + cls.site_char + url,
+                    'premiered': 'unknown',
+                }
+            }
+            logger.debug(f'{ep_no}: {episodes[ep_no]}')
+        return last_ep_no, last_ep_url
