@@ -422,7 +422,7 @@ class SiteDaumTv(SiteDaum):
                 if summary_duplicate_remove:
                     entity.plot = plot_text[0].strip()
                 else:
-                    entity.plot += plot_text[0].strip()
+                    entity.plot += f'\n\n{plot_text[0].strip()}'
 
             epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
             if epi_thumbs:
