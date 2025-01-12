@@ -156,32 +156,9 @@ class SiteDaumTv(SiteDaum):
             '''
             show.thumb.append(EntityThumb(aspect='poster', value=home_data['image_url'], site='daum', score=-10))
 
-            recent_video_elements = root.xpath('//strong[contains(text(), "최신영상")]/../following-sibling::div//ul/li')
+            recent_video_elements = root.xpath('//strong[contains(text(), "최신영상")]/../following-sibling::div[1]//ul/li')
             if recent_video_elements:
-                for e in recent_video_elements:
-                    try:
-                        data_id = e.xpath('.//div[@data-id]')[0].attrib['data-id'].strip()
-                        # metadata 플러그인에서 video_url을 따로 처리중
-                        #video_url = cls.get_kakao_play_url2(data_id)
-                        #if not video_url:
-                        #    continue
-                        thumb_element = e.xpath('.//img')[0]
-                        thumb = cls.process_image_url(thumb_element)
-                        title_alt = thumb_element.attrib['alt'].strip() if 'alt' in thumb_element else ''
-                        title_text = e.xpath('.//div[@class="item-title"]//a/text()')[0].strip()
-                        title = title_text or title_alt
-                        title = SupportString.remove_emoji(title).strip()
-                        date_text = e.xpath('.//div[@class="item-contents"]//span/text()')[0].strip()
-                        date = cls.change_date(date_text)
-                        content_type = 'Featurette'
-                        if title.find(u'예고') != -1:
-                            content_type = 'Trailer'
-                        # metadata 플러그인에서 video_url을 id만 받음
-                        extra = EntityExtra(content_type, title, 'kakao', data_id, premiered=date, thumb=thumb)
-                        show.extras.append(extra)
-                        #logger.warning(extra.as_dict())
-                    except Exception as e:
-                        logger.warning(repr(e))
+                show.extras.extend(cls.get_kakao_video_list(recent_video_elements))
 
             '''
             # 보류
@@ -354,6 +331,7 @@ class SiteDaumTv(SiteDaum):
                     break
 
                 if max_loop_counter > 100:
+                    logger.error('This loop goes too many times...')
                     break
                 max_loop_counter += 1
 
@@ -469,34 +447,9 @@ class SiteDaumTv(SiteDaum):
                         entity.title = tmp
                 '''
 
-            related_video_elements = root.xpath('//div[@id="episode-play"]/following-sibling::div//ul/li')
-            #logger.warning(f'{related_video_elements=}')
-            #logger.warning(f'{include_kakao=}')
+            related_video_elements = root.xpath('//div[@id="episode-play"]/following-sibling::div[1]//ul/li')
             if include_kakao and related_video_elements:
-                for e in related_video_elements:
-                    try:
-                        data_id = e.xpath('.//div[@data-id]')[0].attrib['data-id'].strip()
-                        # metadata 플러그인에서 video_url을 따로 처리중
-                        #video_url = cls.get_kakao_play_url2(data_id)
-                        #if not video_url:
-                        #    continue
-                        thumb_element = e.xpath('.//img')[0]
-                        thumb = cls.process_image_url(thumb_element)
-                        title_alt = thumb_element.attrib['alt'].strip() if 'alt' in thumb_element else ''
-                        title_text = e.xpath('.//div[@class="item-title"]//a/text()')[0].strip()
-                        title = title_text or title_alt
-                        title = SupportString.remove_emoji(title).strip()
-                        date_text = e.xpath('.//div[@class="item-contents"]//span/text()')[0].strip()
-                        date = cls.change_date(date_text)
-                        content_type = 'Featurette'
-                        if title.find(u'예고') != -1:
-                            content_type = 'Trailer'
-                        # metadata 플러그인에서 video_url을 id만 받음
-                        extra = EntityExtra(content_type, title, 'kakao', data_id, premiered=date, thumb=thumb)
-                        entity.extras.append(extra)
-                        #logger.warning(extra.as_dict())
-                    except Exception as e:
-                        logger.warning(repr(e))
+                entity.extras.extend(cls.get_kakao_video_list(related_video_elements))
 
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
@@ -647,7 +600,7 @@ class SiteDaumTv(SiteDaum):
             }
             #logger.debug(f'{ep_no}: {episodes[ep_no]}')
             episode_nums.append(ep_no)
-        logger.debug(f'episodes: {episode_nums}')
+        logger.debug(f'The episode numbers of "{show_title}" : {episode_nums}')
         return last_ep_no, last_ep_url
 
     @classmethod
@@ -664,3 +617,33 @@ class SiteDaumTv(SiteDaum):
     @classmethod
     def get_request_url(cls, scheme: str = 'https', netloc: str = 'search.daum.net', path: str = 'search', params: dict = None, query: dict = None, fragment: str = None) -> str:
         return urllib.parse.urlunparse([scheme, netloc, path, urllib.parse.urlencode(params) if params else None, urllib.parse.urlencode(query) if query else None, fragment])
+
+    @classmethod
+    def get_kakao_video_list(cls, video_element_list: list) -> list:
+        bucket = []
+        for e in video_element_list:
+            try:
+                data_id = e.xpath('.//div[@data-id]')[0].attrib['data-id'].strip()
+                # metadata 플러그인에서 video_url을 따로 처리중
+                #video_url = cls.get_kakao_play_url2(data_id)
+                #if not video_url:
+                #    continue
+                thumb_element = e.xpath('.//img')[0]
+                thumb = cls.process_image_url(thumb_element)
+                title_alt = thumb_element.attrib['alt'].strip() if 'alt' in thumb_element else ''
+                title_text = e.xpath('.//div[@class="item-title"]//a/text()')[0].strip()
+                title = title_text or title_alt
+                title = SupportString.remove_emoji(title).strip()
+                date_text = e.xpath('.//div[@class="item-contents"]//span/text()')[0].strip()
+                date = cls.change_date(date_text)
+                content_type = 'Featurette'
+                if title.find(u'예고') != -1:
+                    content_type = 'Trailer'
+                # metadata 플러그인에서 video_url을 id만 받음
+                extra = EntityExtra(content_type, title, 'kakao', data_id, premiered=date, thumb=thumb)
+                bucket.append(extra)
+                #logger.warning(extra.as_dict())
+            except Exception as e:
+                #logger.warning(repr(e))
+                continue
+        return bucket
