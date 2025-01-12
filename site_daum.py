@@ -317,6 +317,12 @@ class SiteDaum(object):
                     entity.series = sorted(entity.series, key=lambda k: (k['sort_value'], int(k['code'][2:])))
             '''
 
+            entity.equal_name = []
+            similar_elements = root.xpath('//strong[@class="screen_out" and contains(text(), "동명프로그램")]/following-sibling::div')
+            if similar_elements:
+                pass
+                # 동명프로그램 여러개인 예시?
+
             #동명
             entity.equal_name = []
             tags = root.xpath(u'//div[@id="tv_program"]//dt[contains(text(),"동명 콘텐츠")]//following-sibling::dd')
@@ -362,6 +368,16 @@ class SiteDaum(object):
         except Exception as exception:
             logger.debug('Exception : %s', exception)
             logger.debug(traceback.format_exc())
+
+    @classmethod
+    def get_kakao_play_url2(cls, data_id: str) -> str | None:
+        url = 'https://kakaotv.daum.net/katz/v3/ft/cliplink/{data_id}/videoLocation?service=daum_searchview&section=TVP&player=monet_html5&profile=HIGH4&dteType=PC&contentType=MP4'.format(data_id=data_id)
+        try:
+            json_ = SiteUtil.get_response(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie).json()
+            return json_['videoLocation']['url']
+        except Exception as e:
+            logger.warning(repr(e))
+            logger.warning(f'{url=}')
 
     @classmethod 
     def change_date(cls, text):
