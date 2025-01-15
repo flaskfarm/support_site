@@ -31,7 +31,7 @@ class SiteDaum(object):
             cls._proxy_url = proxy_url
         else:
             cls._proxy_url = None
-    
+
     @classmethod
     def get_tree(cls, url):
         return SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
@@ -101,20 +101,6 @@ class SiteDaum(object):
             except:
                 logger.error(traceback.format_exc())
                 entity.image_url = None
-
-            # extra_info?
-            '''
-            https://github.com/soju6jan/SjvaAgent.bundle/blob/55eeacd759a14d8651a41b5e8cdabc5dd1cd3219/Contents/Code/module_ktv.py#L137
-            tmp = data['extra_info'] + ' '
-            if data['status'] == 0:
-                tmp = tmp + u'방송예정'
-            elif data['status'] == 1:
-                tmp = tmp + u'방송중'
-            elif data['status'] == 2:
-                tmp = tmp + u'방송종료'
-            tmp = tmp + self.search_result_line() + data['desc']
-            '''
-            entity.extra_info = ''
 
             studio_element = root.xpath('//div[@id="tvpColl"]//dd[@class="program"]//span[@class="inner"]')[0]
             studio_element_a = studio_element.xpath('a')
@@ -210,7 +196,7 @@ class SiteDaum(object):
             extra_infos = [tag.text_content() for tag in tags]
             #logger.debug(extra_infos)
             #tmps = extra_infos[1].strip().split(' ')
-            # 2021-11-03 
+            # 2021-11-03
             # 홍루몽.  중국 방송사는 a 태그가 없기 떄문에 방송사가 장르가 되어버린다.
             entity.genre = extra_infos[0]
             if extra_infos[1] in ['미국드라마', '중국드라마', '영국드라마', '일본드라마', '대만드라마', '기타국가드라마']:
@@ -233,7 +219,7 @@ class SiteDaum(object):
             #logger.debug('get_show_info_on_home 1: %s', entity['status'])
             #시리즈
             entity.series = []
-            
+
             try:
                 tmp = entity.broadcast_term.split('.')
                 if len(tmp) == 2:
@@ -250,7 +236,7 @@ class SiteDaum(object):
 
             serise_tab_tag = root.xpath('//li[@data-tab="tv_series"]')
             if serise_tab_tag:
-                
+
                 # 2019-03-05 시리즈 더보기 존재시
                 try:
                     #more = root.xpath('//*[@id="tv_series"]/div/div/a')
@@ -338,6 +324,20 @@ class SiteDaum(object):
                         elif tag.text == u'(동명회차)':
                             continue
             #logger.debug(entity)
+
+            '''
+            https://github.com/soju6jan/SjvaAgent.bundle/blob/55eeacd759a14d8651a41b5e8cdabc5dd1cd3219/Contents/Code/module_ktv.py#L137
+            tmp = data['extra_info'] + ' '
+            if data['status'] == 0:
+                tmp = tmp + u'방송예정'
+            elif data['status'] == 1:
+                tmp = tmp + u'방송중'
+            elif data['status'] == 2:
+                tmp = tmp + u'방송종료'
+            tmp = tmp + self.search_result_line() + data['desc']
+            '''
+            entity.extra_info = f'Daum {entity.studio}'
+
             return entity.as_dict()
         except Exception as exception:
             logger.debug('Exception get_show_info_by_html : %s', exception)
@@ -353,7 +353,7 @@ class SiteDaum(object):
         else:
             return 'https' + url
 
-    @classmethod 
+    @classmethod
     def get_kakao_play_url(cls, url):
         try:
             content_id = url.split('/')[-1]
@@ -374,7 +374,7 @@ class SiteDaum(object):
             logger.warning(repr(e))
             logger.warning(f'{url=}')
 
-    @classmethod 
+    @classmethod
     def change_date(cls, text):
         try:
             match = re.compile(r'(?P<year>\d{4})\.(?P<month>\d{1,2})\.(?P<day>\d{1,2})').search(text)
@@ -393,12 +393,12 @@ class SiteDaum(object):
         try:
             url = 'https://tv.kakao.com/api/v1/ft/channels/{kakao_id}/videolinks?sort={sort}&fulllevels=clipLinkList%2CliveLinkList&fields=ccuCount%2CisShowCcuCount%2CthumbnailUrl%2C-user%2C-clipChapterThumbnailList%2C-tagList&size=20&page=1&_={timestamp}'.format(kakao_id=kakao_id, sort=sort, timestamp=int(time.time()))
             data = requests.get(url).json()
-           
+
             for item in data['clipLinkList']:
                 ret.append(EntityExtra('Featurette', item['clip']['title'], 'kakao', item['id'], premiered=item['createTime'].split(' ')[0], thumb=item['clip']['thumbnailUrl']).as_dict())
             return ret
         except Exception as exception:
             logger.debug('Exception : %s', exception)
             logger.debug(traceback.format_exc())
-        return ret   
+        return ret
 
