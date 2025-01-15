@@ -8,28 +8,28 @@ from .setup import *
 
 
 class SiteUtil(object):
-    
+
     session = requests.Session()
 
     default_headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36',
         'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language' : 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-    } 
+    }
 
-    @classmethod 
+    @classmethod
     def get_tree(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
         text = cls.get_text(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify)
         if text is None:
             return
         return html.fromstring(text)
-    
-    @classmethod 
+
+    @classmethod
     def get_text(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
         res = cls.get_response(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify)
         return res.text
 
-    @classmethod 
+    @classmethod
     def get_response(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
         proxies = None
         if proxy_url is not None and proxy_url != '':
@@ -62,12 +62,12 @@ class SiteUtil(object):
         elif image_mode == '2':
             tmp = '{ddns}/metadata/api/discord_proxy?url=' + urllib.parse.quote_plus(image_url)
             ret = ToolUtil.make_apikey_url(tmp)
-        elif image_mode == '3': # 고정 디스코드 URL. 
+        elif image_mode == '3': # 고정 디스코드 URL.
             ret = cls.discord_proxy_image(image_url)
         elif image_mode == '4': #landscape to poster
             ret = '{ddns}/metadata/normal/image_process.jpg?mode=landscape_to_poster&url=' + urllib.parse.quote_plus(image_url)
             ret = ret.format(ddns=F.SystemModelSetting.get('ddns'))
-        elif image_mode == '5':  #로컬에 포스터를 만들고 
+        elif image_mode == '5':  #로컬에 포스터를 만들고
             from PIL import Image
             im = Image.open(requests.get(image_url, stream=True).raw)
             width, height = im.size
@@ -98,7 +98,7 @@ class SiteUtil(object):
     def discord_proxy_get_target_poster(cls, image_url):
         from tool_expand import ToolExpandDiscord
         return ToolExpandDiscord.discord_proxy_get_target(image_url + 'av_poster')
-    
+
 
     @classmethod
     def discord_proxy_set_target(cls, source, target):
@@ -132,7 +132,7 @@ class SiteUtil(object):
             if with_poster:
                 logger.debug(ret['image_url'])
                 ret['poster_image_url'] = cls.process_image_mode('5', ret['image_url']) #포스터이미지 url 본인 sjva
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return ret
@@ -147,13 +147,13 @@ class SiteUtil(object):
     @classmethod
     def remove_special_char(cls, text):
         return re.sub('[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》：]', '', text)
-    
+
 
     @classmethod
     def compare(cls, a, b):
         return (cls.remove_special_char(a).replace(' ', '').lower() == cls.remove_special_char(b).replace(' ', '').lower())
 
-    
+
     @classmethod
     def get_show_compare_text(cls, title):
         title = title.replace(u'일일연속극', '').strip()
@@ -250,11 +250,11 @@ class SiteUtil(object):
     def is_include_hangul(cls, text):
         hanCount = len(re.findall(u'[\u3130-\u318F\uAC00-\uD7A3]+', text))
         return hanCount > 0
-     
+
 
     # 의미상으로 여기 있으면 안되나 예전 코드에서 많이 사용하기 때문에 잠깐만 나둔다.
     """
-    @classmethod 
+    @classmethod
     def get_tree_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
         cookies = SystemLogicSite.get_daum_cookies()
@@ -266,8 +266,8 @@ class SiteUtil(object):
         if text is None:
             return
         return html.fromstring(text)
-    
-    @classmethod 
+
+    @classmethod
     def get_text_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
         cookies = SystemLogicSite.get_daum_cookies()
@@ -279,7 +279,7 @@ class SiteUtil(object):
         return res.text
 
 
-    @classmethod 
+    @classmethod
     def get_response_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
         cookies = SystemLogicSite.get_daum_cookies()
@@ -326,7 +326,7 @@ class SiteUtil(object):
         tags_json = os.path.join(os.path.dirname(__file__), 'tags.json')
         with open(tags_json, 'r', encoding='utf8') as f:
             tags = json.load(f)
-        
+
         if type in tags:
             if tag in tags[type]:
                 res = tags[type][tag]
@@ -588,5 +588,5 @@ class SiteUtil(object):
         'History' : u'역사',
         'Science Fiction' : u'SF',
         'War & Politics' : u'전쟁 & 정치',
-        'Reality' : '리얼리티', 
+        'Reality' : '리얼리티',
     }

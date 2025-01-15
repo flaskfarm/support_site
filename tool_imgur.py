@@ -15,7 +15,7 @@ class ToolImgur(object):
             try:
                 os.system("pip install imgurpython")
                 from imgurpython import ImgurClient
-            except Exception as e: 
+            except Exception as e:
                 logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
         try:
@@ -38,7 +38,7 @@ class ToolImgur(object):
                     ret = cls.__client.create_album({'title':CDN_ALBUM_TITLE})
                     cls.__cdn_id = ret['id']
                     #logger.error(ret)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return cls.__client
@@ -50,7 +50,7 @@ class ToolImgur(object):
         if client:
             image = client.upload_from_path(localpath, config={'album':cls.__cdn_id}, anon=False)
             return image['link']
-    
+
     @classmethod
     def upload_from_url(cls, url):
         client = cls.__get_client()

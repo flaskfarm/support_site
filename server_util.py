@@ -25,7 +25,7 @@ class MetadataServerUtil(object):
                 return data['data']
         except Exception as exception:
             logger.error('metaserver connection fail.. get_metadata')
-    
+
 
     @classmethod
     def set_metadata(cls, code, data, keyword):
@@ -36,7 +36,7 @@ class MetadataServerUtil(object):
             data = requests.post(url, data=param).json()
             if data['ret'] == 'success':
                 logger.info('%s Data save success. Thanks!!!!', code)
-        except Exception as exception: 
+        except Exception as exception:
             logger.error('metaserver connection fail.. set_metadata')
 
 
@@ -52,8 +52,8 @@ class MetadataServerUtil(object):
                     return
             if SiteUtil.is_include_hangul(data['plot']) == False:
                 return
-            cls.set_metadata(code, data, keyword)   
-        except Exception as e: 
+            cls.set_metadata(code, data, keyword)
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -74,11 +74,11 @@ class MetadataServerUtil(object):
                 return
             cls.set_metadata(code, data, keyword)
             logger.debug(f'set metadata uncensored complete, {code}')
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
-    
+
     @classmethod
     def get_meta_extra(cls, code):
         try:
@@ -87,5 +87,5 @@ class MetadataServerUtil(object):
             data = requests.get(url).json()
             if data['ret'] == 'success':
                 return data['data']
-        except Exception as exception: 
+        except Exception as exception:
             logger.error('metaserver connection fail.. get_meta_extra')

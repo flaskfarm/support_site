@@ -38,7 +38,7 @@ class UtilNfo(object):
                 if type(value) == int or type(value) == float:
                     value = str(value)
                 parent.append(E(key, cls.change_html(value), kwargs))
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -49,7 +49,7 @@ class UtilNfo(object):
             if key in dictionary and dictionary[key] is not None and len(dictionary[key]) > 1:
                 for value in dictionary[key]:
                     parent.append(E(key, cls.change_html(value)))
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -58,9 +58,9 @@ class UtilNfo(object):
         try:
             #logger.debug('make nfo movie')
             #logger.debug(json.dumps(info, indent=4))
-            
+
             movie = builder.ElementMaker().movie()
-            
+
             #EE = builder.ElementMaker(namespace="http://www.itunes.com/dtds/podcast-1.0.dtd", nsmap={'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'})
 
             #logger.debug('TITLE : %s', info['title'])
@@ -72,7 +72,7 @@ class UtilNfo(object):
                 E.id(info['originaltitle']),
                 E.uniqueid(info['code'], type=info['site'], default='true'),
             )
-           
+
             cls.append_tag(movie, info, 'credits')
             cls.append_tag(movie, info, 'mpaa')
             cls.append_tag(movie, info, 'studio')
@@ -85,7 +85,7 @@ class UtilNfo(object):
             cls.append_tag_list(movie, info, 'genre')
             cls.append_tag_list(movie, info, 'country')
             cls.append_tag_list(movie, info, 'tag')
-            
+
 
             if info['thumb'] is not None and len(info['thumb']) > 0:
                 for item in info['thumb']:
@@ -126,8 +126,8 @@ class UtilNfo(object):
             return tmp
             #return app.response_class(tmp, mimetype='application/xml')
 
-           
-        except Exception as e: 
+
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -142,8 +142,8 @@ class UtilNfo(object):
             from io import StringIO
             output_stream = StringIO(u'%s' % text)
             response = Response(
-                output_stream.getvalue().encode('utf-8'), 
-                mimetype='application/xml', 
+                output_stream.getvalue().encode('utf-8'),
+                mimetype='application/xml',
                 content_type='application/octet-stream',
             )
             response.headers["Content-Disposition"] = "attachment; filename=%s" % filename

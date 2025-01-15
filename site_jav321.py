@@ -24,7 +24,7 @@ class SiteJav321(object):
     module_char = 'D'
     site_char = 'T'
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, do_trans=True, proxy_url=None, image_mode='0', manual=False):
         logger.debug('serarch : %s', keyword)
         try:
@@ -44,7 +44,7 @@ class SiteJav321(object):
                 ret['ret'] = 'success'
             else:
                 ret['ret'] = 'no_match'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -53,25 +53,25 @@ class SiteJav321(object):
 
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code, do_trans=True, proxy_url=None, image_mode='0'):
         try:
             ret = {}
             url = '%s/video/%s' % (cls.site_base_url, code[2:])
             tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
-            
+
             entity = EntityMovie(cls.site_name, code)
             entity.country = [u'일본']
             entity.mpaa = u'청소년 관람불가'
             entity.tag = []
-            
+
             nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[2]/b')
             for node in nodes:
                 key = node.text_content().strip()
                 value = node.xpath('.//following-sibling::text()')[0].replace(':', '').strip()
                 if key == u'女优':
                     logger.debug(value)
-                    a_tags = node.xpath('.//following-sibling::a') 
+                    a_tags = node.xpath('.//following-sibling::a')
                     if a_tags:
                         entity.actor = []
                         for a_tag in a_tags:
@@ -172,14 +172,14 @@ class SiteJav321(object):
                         first_art_append_to_landscape = False
                     else:
                         entity.fanart.append(value)
-               
-            entity.tagline = entity.plot   
+
+            entity.tagline = entity.plot
             #/html/body/div[2]/div[2]/div[1]/p/a/img
-            
+
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'

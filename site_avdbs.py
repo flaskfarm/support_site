@@ -31,7 +31,7 @@ class SiteAvdbs(object):
                 url = 'https://www.avdbs.com/w2017/page/search/search_actor.php?kwd=%s&seq=%s' % (entity_actor['originalname'], seq_val)
                 logger.debug(url)
                 res = requests.get(url, headers=SiteUtil.default_headers, proxies=proxies, timeout=5)
-            except Exception as e: 
+            except Exception as e:
                 logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
             #logger.debug('avdbs status code : %s', res.status_code)
@@ -62,7 +62,7 @@ class SiteAvdbs(object):
                 logger.debug(u'단시간 많은 요청으로 재요청')
                 time.sleep(2)
                 return SiteAvdbs.get_actor_info(entity_actor, proxy_url=proxy_url, retry=False)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return entity_actor

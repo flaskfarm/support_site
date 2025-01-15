@@ -6,7 +6,7 @@ from .setup import *
 
 class SiteVibe(object):
     site_name = 'vibe'
-    
+
     default_headers = {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
         'Accept' : 'application/json',
@@ -25,7 +25,7 @@ class SiteVibe(object):
             elif mode == 'album':
                 data = data['response']['result']['albumResult']['albums']
             return data
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -46,7 +46,7 @@ class SiteVibe(object):
                     'score': 100 - (idx*5),
                 })
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -61,7 +61,7 @@ class SiteVibe(object):
             if return_format == 'api':
                 return data
             return data
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 

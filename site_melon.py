@@ -17,7 +17,7 @@ except:
 
 class SiteMelon(object):
     site_name = 'melon'
-    
+
     default_headers = {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
         'Accept' : 'application/json',
@@ -41,7 +41,7 @@ class SiteMelon(object):
         return []
 
 
-    @classmethod       
+    @classmethod
     def search_artist(cls, keyword, return_format):
         data = cls.base_search('artist', keyword)
         if return_format == 'api':
@@ -72,11 +72,11 @@ class SiteMelon(object):
                 ret['ret'] = 'empty'
             else:
                 ret['data'] = list(reversed(sorted(ret['data'], key=lambda k:k['score'])))
-            return ret        
+            return ret
 
 
     @classmethod
-    def info_artist(cls, code): 
+    def info_artist(cls, code):
         entity = {'code':code, 'artist_id':code[2:], 'genres':[], 'desc':'', 'info_desc':''}
         url = f"https://www.melon.com/artist/detail.htm?artistId={code[2:]}"
         text = requests.get(url, headers=default_headers).text
@@ -86,9 +86,9 @@ class SiteMelon(object):
         try:
             tag = root.xpath('//span[@id="artistImgArea"]/img')[0]
             entity['image'] = tag.attrib['src'].split('?')[0]
-        except Exception as e: 
+        except Exception as e:
             logger.error(f'Exception:{e}')
-            logger.error(traceback.format_exc())   
+            logger.error(traceback.format_exc())
         tags = root.xpath('//div[@id="d_artist_intro"]/text()')
         for tag in tags:
             tmp = tag.strip()
@@ -104,7 +104,7 @@ class SiteMelon(object):
                 entity['info'][key] = value
                 if key == '장르':
                     entity['genres'] = [x.strip() for x in value.split(',')]
-                if key == '국적': 
+                if key == '국적':
                     entity['countries'] = [value]
                 entity['info_desc'] += f"{key} : {value}\n"
         entity['info_desc'] = entity['info_desc'].strip()
@@ -123,12 +123,12 @@ class SiteMelon(object):
 
 
     @classmethod
-    def info_artist_albums(cls, code): 
+    def info_artist_albums(cls, code):
         url = f"https://www.melon.com/artist/albumPaging.htm?startIndex=1&pageSize=1000&listType=0&orderBy=ISSUE_DATE&artistId={code[2:]}"
         return cls.get_album_list(url)
 
 
-    @classmethod 
+    @classmethod
     def get_album_list(cls, url):
         ret = []
         try:
@@ -172,14 +172,14 @@ class SiteMelon(object):
                 elif album in item['title']:
                     item['score'] = 85
                 else:
-                    from difflib import SequenceMatcher 
+                    from difflib import SequenceMatcher
                     ratio = SequenceMatcher(None, album, item['title']).ratio()
                     if ratio > 0.80:
                         item['score'] = int(ratio*100)
                 if 'score' in item:
                     item['desc'] = f"아티스트 : {artist} / 발매일 : {item['date']}"
                     ret.append(item)
-            logger.debug(f"html score count : {len(ret)}")    
+            logger.debug(f"html score count : {len(ret)}")
             return ret
         else: #if len(pub_date) == 8:
             ret = []
@@ -198,7 +198,7 @@ class SiteMelon(object):
                     elif album in item['title']:
                         item['score'] = 80
                     else:
-                        from difflib import SequenceMatcher 
+                        from difflib import SequenceMatcher
                         ratio = SequenceMatcher(None, album, item['title']).ratio()
                         if ratio > 0.80:
                             item['score'] = int(ratio*100)
@@ -219,7 +219,7 @@ class SiteMelon(object):
             logger.debug(f"html2 score count : {len(ret)}")
             return ret
 
-    
+
     @classmethod
     def search_album(cls, keyword, return_format):
         tmps = keyword.split('|')
@@ -246,8 +246,8 @@ class SiteMelon(object):
                 ret['ret'] = 'empty'
             else:
                 ret['data'] = list(reversed(sorted(ret['data'], key=lambda k:k['score'])))
-            return ret   
-         
+            return ret
+
     @classmethod
     def search_album_from_api(cls, data, album, artist, artist_code):
         ret = []
@@ -282,7 +282,7 @@ class SiteMelon(object):
 
 
     @classmethod
-    def info_album(cls, code): 
+    def info_album(cls, code):
         entity = {'code':code, 'album_id':code[2:], 'info_desc':''}
         url = f"https://www.melon.com/album/detail.htm?albumId={entity['album_id']}"
         text = requests.get(url, headers=default_headers).text
@@ -334,7 +334,7 @@ class SiteMelon(object):
             entity['desc'] += '\n' if tmp == '' else tmp + '\n'
         entity['desc'] = entity['desc'].strip()
 
-        # https://www.melon.com/album/detail.htm?albumId=6690 
+        # https://www.melon.com/album/detail.htm?albumId=6690
         # 9번 트랙 없음
         def song_append(data, cd_index, song_data):
             tmp = int(cd_index.replace('cd', ''))
@@ -471,7 +471,7 @@ class SiteMelon(object):
     def compare(cls, a, b):
         return (cls.remove_special_char(a).replace(' ', '').lower() == cls.remove_special_char(b).replace(' ', '').lower())
 
-    
+
     @classmethod
     def remove_special_char(cls, text):
         return re.sub('[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》]', '', text)

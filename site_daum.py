@@ -16,25 +16,16 @@ class SiteDaum(object):
 
     site_name = 'daum'
     default_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language' : 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
     }
 
     @classmethod
     def initialize(cls, daum_cookie, use_proxy=False, proxy_url=None):
-        def func(daum_cookie):
-            ret = {}
-            tmps = daum_cookie.split(';')
-            for t in tmps:
-                t2 = t.split('=')
-                if len(t2) == 2:
-                    ret[t2[0]] = t2[1]
-            return ret
-        #cls._daum_cookie = func(daum_cookie)
         cookies = SimpleCookie()
         cookies.load(daum_cookie)
-        cls._daum_cookie = {key:morsel.value for key, morsel  in cookies.items()}
+        cls._daum_cookie = {key:morsel.value for key, morsel in cookies.items()}
         cls._use_proxy = use_proxy
         if cls._use_proxy:
             cls._proxy_url = proxy_url

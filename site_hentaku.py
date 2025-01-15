@@ -48,7 +48,7 @@ class SiteHentaku(object):
                 logger.debug(u'단시간 많은 요청으로 재요청')
                 time.sleep(2)
                 return SiteHentaku.get_actor_info(entity_actor, proxy_url=proxy_url, retry=False)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return entity_actor

@@ -27,7 +27,7 @@ class EntityRatings(object):
 class EntityThumb(object):
     def __init__(self, aspect='', value='', thumb='', site='', score=0):
         # banner, clearart, clearlogo, discart, landscape, poster
-        self.aspect = aspect 
+        self.aspect = aspect
         self.value = value  #원본 url
         self.thumb = thumb  #썸네일 url
         self.site = site
@@ -46,7 +46,7 @@ class EntityThumb(object):
 class EntityArt(object):
     def __init__(self, aspect='', url='', thumb_url='', site='', score=0):
         # banner, clearart, clearlogo, discart, landscape, poster
-        self.aspect = aspect 
+        self.aspect = aspect
         self.url = url  #원본 url
         self.thumb_url = thumb_url  #썸네일 url
         self.site = site
@@ -87,7 +87,7 @@ class EntityActor(object):
             'type' : self.type,
             'name_original' : self.name_original,
         }
-    
+
 
 class EntityExtra(object):
     def __init__(self, content_type, title, mode, content_url, premiered=None, thumb=None):
@@ -97,7 +97,7 @@ class EntityExtra(object):
         self.mode = mode #mp4
         self.premiered = premiered
         self.thumb = thumb
-        
+
 
     def as_dict(self):
         return {
@@ -118,7 +118,7 @@ class EntityExtra2(object):
         self.mode = ''
         self.premiered = '1900-01-01'
         self.thumb = ''
-        
+
 
     def as_dict(self):
         return {
@@ -162,7 +162,7 @@ class EntityMovie(object):
         """
         self.top250 = None
         self.outline = None
-        
+
         """
 
     def __repr__(self):
@@ -210,8 +210,8 @@ class EntitySearchItemTvDaum(object):
         self.site = site
         self.code = ''
         self.title = ''
-        self.year = ''        
-        self.image_url = ''        
+        self.year = ''
+        self.image_url = ''
         self.desc = ''
         self.score = 0
         self.status = 1 #0:방송예정 1:방송중, 2:방송종료
@@ -228,8 +228,8 @@ class EntitySearchItemTvDaum(object):
     def __repr__(self):
         tmp = 'site : %s\n' % self.site
         tmp += 'code : %s\n' % self.code
-        tmp += 'title : %s\n' % self.title        
-        tmp += 'year : %s\n' % self.year        
+        tmp += 'title : %s\n' % self.title
+        tmp += 'year : %s\n' % self.year
         tmp += 'image_url : %s\n' % self.image_url
         tmp += 'desc : %s\n' % self.desc
         tmp += 'score : %s\n' % self.score
@@ -250,10 +250,10 @@ class EntitySearchItemTvDaum(object):
         return {
             'site' : self.site,
             'code' : self.code,
-            'title' : self.title,            
-            'year' : self.year,            
+            'title' : self.title,
+            'year' : self.year,
             'image_url' : self.image_url,
-            'desc' : self.desc,            
+            'desc' : self.desc,
             'score' : self.score,
             'status' : self.status,
             'extra_info' : self.extra_info,
@@ -277,7 +277,7 @@ class EntitySearchItemTv(object):
         self.studio = ''
         self.genre = ''
 
-        self.year = ''        
+        self.year = ''
         self.desc = ''
         self.score = 0
         self.status = 1 #1:방송중, 0:방송종료, 2:방송예정
@@ -291,7 +291,7 @@ class EntitySearchItemTv(object):
     def __repr__(self):
         tmp = 'site : %s\n' % self.site
         tmp += 'code : %s\n' % self.code
-        tmp += 'title : %s\n' % self.title        
+        tmp += 'title : %s\n' % self.title
         return tmp
 
 
@@ -299,16 +299,16 @@ class EntitySearchItemTv(object):
         return {
             'site' : self.site,
             'code' : self.code,
-            'title' : self.title,            
+            'title' : self.title,
             'image_url' : self.image_url,
             'studio' : self.studio,
             'genre' : self.genre,
             'score' : self.score,
         }
         """
-            'year' : self.year,            
-            'desc' : self.desc,            
-            
+            'year' : self.year,
+            'desc' : self.desc,
+
             'status' : self.status,
             'extra_info' : self.extra_info,
             'broadcast_info' : self.broadcast_info,
@@ -339,7 +339,7 @@ class EntityShow(object):
         self.thumb = []
         self.fanart = []
         self.mpaa = ''
-        
+
         self.genre = []
         self.tag = [] #colletion
         self.premiered = ''
@@ -465,7 +465,7 @@ class EntitySearchItemMovie(object):
         self.code = ''
         self.title = ''
         self.title_en = ''
-        
+
         self.image_url = ''
         self.year = 1900
         self.desc = ''
@@ -477,15 +477,15 @@ class EntitySearchItemMovie(object):
     def __repr__(self):
         tmp = 'site : %s\n' % self.site
         tmp += 'code : %s\n' % self.code
-        tmp += 'title : %s\n' % self.title        
+        tmp += 'title : %s\n' % self.title
         return tmp
 
     def as_dict(self):
         return {
             'site' : self.site,
             'code' : self.code,
-            'title' : self.title,   
-            'title_en' : self.title_en,         
+            'title' : self.title,
+            'title_en' : self.title_en,
             'image_url' : self.image_url,
             'year' : self.year,
             'desc' : self.desc,
@@ -494,7 +494,7 @@ class EntitySearchItemMovie(object):
             'originaltitle': self.originaltitle,
             'link' : self.link
         }
-        
+
 
 class EntityMovie2(object):
     def __init__(self, site, code):
@@ -530,8 +530,8 @@ class EntityMovie2(object):
         self.extras = []
         self.review = []
         self.code_list = []
-        
-        
+
+
 
     def __repr__(self):
         tmp = 'site : %s\n' % self.site
@@ -565,10 +565,10 @@ class EntityMovie2(object):
             'producers' : self.producers,
             'studio' : self.studio,
             'art' : [x.as_dict() for x in self.art] if self.art is not None else None,
-            
+
             #'fanart' : self.fanart,
             #'trailer' : self.trailer,
-            
+
             'tag' : self.tag,
             'userrating' : self.userrating,
             'extras' :  [x.as_dict() for x in self.extras] if self.extras is not None else None,
@@ -603,7 +603,7 @@ class EntityReview(object):
 class EntitySearchItemFtv(object):
     # FU => tvdb
     # W => 왓챠
-    # D => 
+    # D =>
     # FU
     def __init__(self, site):
         self.site = site
@@ -624,27 +624,27 @@ class EntitySearchItemFtv(object):
         self.title_en = ''
         self.country = []
         self.genre = []
-        self.year = ''        
+        self.year = ''
         self.link = ''
-        
+
 
     def as_dict(self):
         return {
             'site' : self.site,
             'code' : self.code,
             'title' : self.title,
-            #'title_ko' : self.title_ko,  
-            'title_en' : self.title_en,  
-            'title_original' : self.title_original,  
-            'country' : self.country,  
+            #'title_ko' : self.title_ko,
+            'title_en' : self.title_en,
+            'title_original' : self.title_original,
+            'country' : self.country,
             'image_url' : self.image_url,
             'studio' : self.studio,
             'genre' : self.genre,
             'extra_info' : self.extra_info,
-            'premiered' : self.premiered,  
-            'seasons' : self.seasons,  
-            'year' : self.year,   
-            'desc' : self.desc,                   
+            'premiered' : self.premiered,
+            'seasons' : self.seasons,
+            'year' : self.year,
+            'desc' : self.desc,
             'score' : self.score,
             'status' : self.status,
             'link' : self.link,
@@ -675,14 +675,14 @@ class EntityFtv(object):
         self.year = 1900
         self.mpaa = ''
         self.actor = []
-        self.writer = [] 
-        self.director = [] 
+        self.writer = []
+        self.director = []
         self.extras = []
         self.episode_run_time = 0
         self.is_plot_kor = False
 
 
-       
+
 
     def as_dict(self):
         #tmp = dict(self.seasons)
@@ -715,13 +715,13 @@ class EntityFtv(object):
             'is_plot_kor' : self.is_plot_kor,
         }
         """
-       
-        
+
+
         'extras' :  [x.as_dict() for x in self.extras] if self.extras is not None else None,
         """
-            
-        
-        
+
+
+
 
 class EntitySeason(object):
     def __init__(self, site, series_title='', parent_code='', season_code='', season_no=1, season_name='', plot='', poster='', epi_count=0, premiered='', series_season_count=1, series_year=1900):
@@ -736,10 +736,10 @@ class EntitySeason(object):
         self.episodes = {}
         self.art = []
         # Daum 검색을 위해..
-        #self.series_title = series_title  
+        #self.series_title = series_title
         #self.series_season_count = series_season_count
         #self.series_year = series_year
-        
+
 
     def as_dict(self):
         #tmp = dict(self.episodes)
@@ -788,7 +788,7 @@ class EntityActor2(object):
             'image' : self.image,
             'tmdb_id' : self.tmdb_id,
             'order' : self.order,
-            
+
         }
 
 

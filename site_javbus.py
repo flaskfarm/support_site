@@ -22,13 +22,13 @@ class SiteJavbus(object):
     module_char = 'C'
     site_char = 'B'
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, do_trans=True, proxy_url=None, image_mode='0', manual=False):
         try:
             ret = {'data':[]}
             keyword = keyword.strip().lower()
             # 2020-06-24
-            
+
             if keyword[-3:-1] == 'cd':
                 keyword = keyword[:-3]
             keyword = keyword.replace(' ', '-')
@@ -36,7 +36,7 @@ class SiteJavbus(object):
             tree = SiteUtil.get_tree(url, proxy_url=proxy_url, verify=False)
             #lists = tree.xpath('//*[@id="waterfall"]/div')
             lists = tree.xpath('//a[@class="movie-box"]')
-            
+
             for node in lists:
                 try:
                     item = EntityAVSearch(cls.site_name)
@@ -66,13 +66,13 @@ class SiteJavbus(object):
                         item.socre = 0
                     #logger.debug(item)
                     ret['data'].append(item.as_dict())
-                except Exception as e: 
+                except Exception as e:
                     logger.error(f"Exception:{str(e)}")
-                    logger.error(traceback.format_exc()) 
-            ret['data'] = sorted(ret['data'], key=lambda k: k['score'], reverse=True) 
+                    logger.error(traceback.format_exc())
+            ret['data'] = sorted(ret['data'], key=lambda k: k['score'], reverse=True)
             ret['ret'] = 'success'
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -80,7 +80,7 @@ class SiteJavbus(object):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code, do_trans=True, proxy_url=None, image_mode='0'):
         try:
             ret = {}
@@ -92,7 +92,7 @@ class SiteJavbus(object):
             entity.mpaa = u'청소년 관람불가'
             entity.thumb = []
             tag = tree.xpath('/html/body/div[5]/div[1]/div[1]/a/img')[0]
-            
+
             # 2021-10-14
             img_url = tag.attrib['src']
             if tag.attrib['src'].startswith('http') == False:
@@ -103,7 +103,7 @@ class SiteJavbus(object):
 
             entity.thumb.append(EntityThumb(aspect='landscape', value=data['image_url']))
             entity.thumb.append(EntityThumb(aspect='poster', value=data['poster_image_url']))
-            
+
             tags = tree.xpath('/html/body/div[5]/div[1]/div[2]/p')
             for tag in tags:
                 tmps = tag.text_content().strip().split(':')
@@ -112,10 +112,10 @@ class SiteJavbus(object):
                     value = tmps[1].strip()
                 elif len(tmps) == 1:
                     value = tmps[0].strip().replace(' ', '').replace('\t', '').replace('\r\n', ' ')
-                
+
                 if value == '':
                     continue
-                
+
                 logger.debug('key:%s value:%s', key, value)
                 #if key == u'識別碼:'
                 if key == u'識別碼':
@@ -128,7 +128,7 @@ class SiteJavbus(object):
                         entity.premiered = '1999-12-31'
                         entity.year = 1999
                 elif key == u'長度':
-                    entity.runtime = int(value.replace(u'分鐘', '')) 
+                    entity.runtime = int(value.replace(u'分鐘', ''))
                 elif key == u'導演':
                     entity.director = value
                 elif key == u'製作商':
@@ -174,7 +174,7 @@ class SiteJavbus(object):
             ret['ret'] = 'success'
             logger.warning(ret)
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'

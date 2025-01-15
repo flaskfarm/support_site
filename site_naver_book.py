@@ -17,7 +17,7 @@ class SiteNaverBook(SiteNaver):
         for tmp in trans_papago_key.split('\n'):
             client_id, client_secret = tmp.strip().split(',')
             try:
-                if client_id == '' or client_id is None or client_secret == '' or client_secret is None: 
+                if client_id == '' or client_id is None or client_secret == '' or client_secret is None:
                     return title
                 url = f"https://openapi.naver.com/v1/search/book_adv.xml?display=100"
                 if title != '':
@@ -52,7 +52,7 @@ class SiteNaverBook(SiteNaver):
         result_list = []
         ret = {}
         if data['rss']['channel']['total'] != '0':
-            tmp = data['rss']['channel']['item'] 
+            tmp = data['rss']['channel']['item']
             if type(tmp) == type({}):
                 tmp = [tmp]
             for idx, item in enumerate(tmp):
@@ -93,7 +93,7 @@ class SiteNaverBook(SiteNaver):
             ret['ret'] = 'empty'
         return ret
 
-    
+
     @classmethod
     def change_for_plex(cls, text):
         return text.replace('<p>', '').replace('</p>', '').replace('<br/>', '\n').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&').replace('&apos;', '‘').replace('&quot;', '"').replace('&#13;', '').replace('<b>', '').replace('</b>', '')

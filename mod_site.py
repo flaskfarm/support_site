@@ -107,7 +107,7 @@ class ModuleSite(PluginModuleBase):
                 P.ModelSetting.set('site_imgur_account_username', req.args.get('account_username'))
                 P.ModelSetting.set('site_imgur_account_id', req.args.get('account_id'))
                 return "토큰을 저장하였습니다.\n설정을 새로고침하세요"
-        except Exception as e: 
+        except Exception as e:
             P.logger.error(f"Exception:{str(e)}")
             P.logger.error(traceback.format_exc())
             return f"{str(e)}"

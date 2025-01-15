@@ -31,7 +31,7 @@ class SiteWavve(object):
 # 2024-06-08
 #https://image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster/201904/C3701_C37000000068_2.jpg
 #https://img.pooq.co.kr/BMS/program_poster/201904/C3701_C37000000068_2.jpg
-                    
+
 
 
 class SiteWavveTv(SiteWavve):

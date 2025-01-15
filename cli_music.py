@@ -28,7 +28,7 @@ class MusicProcess:
         for artist in os.listdir(self.config['source']):
             artist_path =  os.path.join(self.config['source'], artist)
             album_listdir = os.listdir(artist_path)
-            
+
             # 비어있는 폴더면 지움
             if len(album_listdir) == 0:
                 shutil.rmtree(artist_path)
@@ -59,7 +59,7 @@ class MusicProcess:
                 else:
                     select_artist = data[0]
             #logger.debug(d(data))
-          
+
             # 아티스트 앨범
             album_data = SiteMelon.info_artist_albums(select_artist['code'])
 
@@ -73,20 +73,20 @@ class MusicProcess:
                 album_path = os.path.join(artist_path, album)
                 if os.path.isfile(album_path):
                     continue
-                
+
                 if len(os.listdir(album_path)) == 0:
                     shutil.rmtree(album_path)
                     continue
 
                 has_dirs = False
-                for base, dirs, files in os.walk(album_path): 
+                for base, dirs, files in os.walk(album_path):
                     logger.info(f"앨범 - dirs:{len(dirs)} files:{len(files)}")
                     if len(dirs)>0:
                         for tmp in dirs:
                             if tmp.startswith('CD') == False:
                                 has_dirs = True
                                 break
-                
+
                 if has_dirs:
                     logger.critical(f"[!] {album} 하위 폴더 있어서 패스")
                     continue
@@ -99,11 +99,11 @@ class MusicProcess:
                         move_flag = True
 
                     if move_flag == False:
-                        album_tmp = re.sub("\[.*?\]", '', album).strip() 
+                        album_tmp = re.sub("\[.*?\]", '', album).strip()
                         if item['title'] == album_tmp:
                             move_flag = True
                             logger.warning(f"[!] [] 제외 일치 : [{album}] [{album_tmp}] [{item['title']}]")
-                    
+
                     if move_flag:
                         self.move(select_artist['artist'], album, album_path, item['foldername'])
                         break
@@ -138,7 +138,7 @@ class MusicProcess:
                             print('=====================================================')
                             return album_data
 
-                            
+
                     current_album_data = print_album('r')
                     while True:
                         ans = input("앨범 선택 (번호:선택 D:시간순출력 R:유사도출력 L:파일목록, 번호L:트랙목록): ")
@@ -164,7 +164,7 @@ class MusicProcess:
                             else:
                                 ret = self.move(select_artist['artist'], album, album_path, current_album_data[ans]['foldername'])
                                 break
-                        except Exception as e: 
+                        except Exception as e:
                             #logger.error(f"Exception:{str(e)}")
                             #logger.error(traceback.format_exc())
                             #logger.error("변환하지 않음")
@@ -194,19 +194,19 @@ class MusicProcess:
                 shutil.move(album_path, new_album_path)
                 return True
             return False
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
 
     def remove_trash_file(self):
-        for base, dirs, files in os.walk(self.config['remove_target']): 
+        for base, dirs, files in os.walk(self.config['remove_target']):
             def print_current():
                 logger.info(f"[{base}] dirs:{len(dirs)} files:{len(files)}")
             if len(dirs) == 0 and len(files) == 0:
                 print_current()
                 logger.error("파일 없음")
-                
+
             for f in files:
                 if f in self.config['remove_except_filename']:
                     continue
@@ -234,7 +234,7 @@ class MusicProcess:
                     logger.warning(f"확장자 소문자로 변경 : {f}")
                     shutil.move(os.path.join(base, f), os.path.join(base, f"{filename}.{ext.lower()}"))
                     continue
-                
+
                 print_current()
                 logger.debug(f"삭제 : {f}")
                 os.remove(os.path.join(base, f))

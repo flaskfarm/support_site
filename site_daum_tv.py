@@ -10,13 +10,13 @@ from .setup import *
 
 
 class SiteDaumTv(SiteDaum):
-    
+
     site_base_url = 'https://search.daum.net'
     module_char = 'K'
     site_char = 'D'
 
     weekdays = {0: '월', 1: '화', 2: '수', 3: '목', 4: '금', 5: '토', 6: '일'}
-    
+
     @classmethod
     def get_search_name_from_original(cls, search_name):
         search_name = search_name.replace('일일연속극', '').strip()
@@ -33,7 +33,7 @@ class SiteDaumTv(SiteDaum):
         search_name = re.sub(r'^.{1,3}특집', '', search_name).strip()
         return search_name
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, daum_id=None, year=None, image_mode='0'):
         try:
             keyword = keyword.replace(' | 시리즈', '').strip()
@@ -65,7 +65,7 @@ class SiteDaumTv(SiteDaum):
             else:
                 ret['ret'] = 'success'
                 ret['data'] = data
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -74,7 +74,7 @@ class SiteDaumTv(SiteDaum):
 
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code, title):
         try:
             logger.debug(f"{code} - {title}")
@@ -120,7 +120,7 @@ class SiteDaumTv(SiteDaum):
             # 이 정보가 없다면 종영
             if tags:
                 show.studio = tags[0].text_content().strip()
-                summary = ''    
+                summary = ''
                 for tag in tags:
                     entity.plot += tag.text.strip()
                     entity.plot += ' '
@@ -139,8 +139,8 @@ class SiteDaumTv(SiteDaum):
                     show.year = home_data['year']
             except:
                 pass
-                
-            
+
+
             show.status = home_data['status']
             show.genre = [home_data['genre']]
             show.episode = home_data['episode']
@@ -270,7 +270,7 @@ class SiteDaumTv(SiteDaum):
                         # 2024-05-29 src => data-original-src
                         actor.thumb = cls.process_image_url(cast_img[0])
                         #logger.debug(actor.thumb)
-                    
+
                     span_tag = item.xpath('span')
                     for span in span_tag:
                         span_text = span.text_content().strip()
@@ -341,7 +341,7 @@ class SiteDaumTv(SiteDaum):
             #show.extra_info['episodes'] = {}
             for item in items:
                 epi = {}
-                a_tag = item.xpath('a') 
+                a_tag = item.xpath('a')
                 if len(a_tag) != 1:
                     continue
                 epi['url'] = 'https://search.daum.net/search%s' % a_tag[0].attrib['href']
@@ -367,7 +367,7 @@ class SiteDaumTv(SiteDaum):
             ret['ret'] = 'success'
             ret['data'] = show.as_dict()
 
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -486,12 +486,12 @@ class SiteDaumTv(SiteDaum):
                 if len(tmp) == 1:
                     has_strong_tag = True
                     strong_title = tmp[0].text_content().strip()
-                    if strong_title != 'None': 
+                    if strong_title != 'None':
                         if is_ktv:
                             entity.title = '%s %s' % (entity.title, strong_title)
                         else:
                             entity.title = strong_title
-                        
+
                 else:
                     if is_ktv == False:
                         entity.title = ''
@@ -501,7 +501,7 @@ class SiteDaumTv(SiteDaum):
                 entity.plot = '%s\r\n%s' % (entity.title, summary2)
             else:
                 entity.plot = summary2.replace(strong_title, '').strip()
-            
+
             items = root.xpath('//*[@id="tv_episode"]/div[2]/div[1]/div/a/img')
             if len(items) == 1:
                 # 2024-05-29 src => data-original-src
@@ -521,12 +521,12 @@ class SiteDaumTv(SiteDaum):
                         #logger.debug(video_url)
                         date = cls.change_date(tag.xpath('.//span')[0].text_content().strip())
                         entity.extras.append(EntityExtra('Featurette', title, 'kakao', video_url, premiered=date, thumb=thumb))
-            
+
 
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             '''
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -561,7 +561,7 @@ class SiteDaumTv(SiteDaum):
                             ret2.append('%s %s' % (tmp[1], tmp[0]))
 
                     return ret2
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 

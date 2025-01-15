@@ -31,9 +31,9 @@ class SiteDmm(object):
         'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language' : 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
         'Cookie' : 'age_check_done=1',
-    } 
+    }
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, do_trans=True, proxy_url=None, image_mode='0', manual=False):
         try:
             ret = {}
@@ -77,12 +77,12 @@ class SiteDmm(object):
                             break
                     if already_exist:
                         continue
-                    
+
                     tag = node.xpath('.//span[1]/img')[0]
                     item.title = item.title_ko = tag.attrib['alt']
                     item.image_url = tag.attrib['src']
 
-                    
+
                     # tmp = SiteUtil.discord_proxy_get_target(item.image_url)
                     # 2021-03-22 서치에는 discord 고정 url을 사용하지 않는다. 3번
                     # manual == False  때는 아예 이미치 처리를 할 필요가 없다.
@@ -94,7 +94,7 @@ class SiteDmm(object):
 
                     if do_trans:
                         item.title_ko = SiteUtil.trans(item.title, source='ja', target='ko')
-                    
+
                     match = re.compile(r'^(h_)?\d*(?P<real>[a-zA-Z]+)(?P<no>\d+)([a-zA-Z]+)?$').search(item.code[2:])
                     if match:
                         item.ui_code = '%s%s' % (match.group('real'), match.group('no'))
@@ -125,7 +125,7 @@ class SiteDmm(object):
                             score += -5
                         else:
                             item.score = 20
-                    
+
                     if match:
                         item.ui_code = '%s-%s' % (match.group('real').upper(), str(int(match.group('no'))).zfill(3))
                     else:
@@ -138,15 +138,15 @@ class SiteDmm(object):
 
                     logger.debug('score :%s %s ', item.score, item.ui_code)
                     ret['data'].append(item.as_dict())
-                except Exception as e: 
+                except Exception as e:
                     logger.error(f"Exception:{str(e)}")
-                    logger.error(traceback.format_exc()) 
-            ret['data'] = sorted(ret['data'], key=lambda k: k['score'], reverse=True)  
+                    logger.error(traceback.format_exc())
+            ret['data'] = sorted(ret['data'], key=lambda k: k['score'], reverse=True)
             ret['ret'] = 'success'
             if len(ret['data']) == 0 and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
                 new_title = '%s%s' % (keyword_tmps[0], keyword_tmps[1].zfill(6))
                 return cls.search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -155,13 +155,13 @@ class SiteDmm(object):
 
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code, do_trans=True, proxy_url=None, image_mode='0', small_image_to_poster_list=[]):
         try:
             ret = {}
             url = '%s/digital/videoa/-/detail/=/cid=%s/' % (cls.site_base_url, code[2:])
             tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
-            
+
             entity = EntityMovie(cls.site_name, code)
             entity.country = [u'일본']
             entity.mpaa = u'청소년 관람불가'
@@ -172,13 +172,13 @@ class SiteDmm(object):
                 ret['ret'] = 'fail_tag_not_exist'
                 logger.debug('CRITICAL!!!')
                 return ret
-            
+
             # 2021-12-01 : div[2]/img  인 것들이 있음
             # 예) thtp00052
             tmp_nodes = tree.xpath('{basetag}/div[1]/div'.format(basetag=basetag))
             if len(tmp_nodes) == 2:
                 nodes = [tmp_nodes[1]]
-            
+
             #logger.debug('crs-full :%s ', len(a_nodes))
             # 2020-05-31 A태그가 없는 경우가 있음. 확대이미지가 없는 경우  tsds-42464
             #if a_nodes:
@@ -186,11 +186,11 @@ class SiteDmm(object):
             # stcead - 확대이지미가 랜드스케이프. 축소 이미지를 포스터로 사용
 
             small_img_to_poster = False
-            for tmp in small_image_to_poster_list: 
+            for tmp in small_image_to_poster_list:
                 if code.find(tmp) != -1:
                     small_img_to_poster = True
                     break
-            
+
             try:
                 a_nodes = nodes[0].xpath('.//a')
                 anodes = a_nodes
@@ -205,12 +205,12 @@ class SiteDmm(object):
                     entity.thumb.append(EntityThumb(aspect='poster', value=data['poster_image_url']))
             except:
                 small_img_to_poster = True
-            
+
             if small_img_to_poster:
                 img_tag = nodes[0].xpath('.//img')[0]
                 entity.thumb.append(EntityThumb(aspect='poster', value=SiteUtil.process_image_mode(image_mode, img_tag.attrib['src'], proxy_url=proxy_url)))
 
-  
+
             entity.tagline = SiteUtil.trans(img_tag.attrib['alt'], do_trans=do_trans).replace(u'[배달 전용]', '').replace(u'[특가]', '').strip()
             tags = tree.xpath('{basetag}/table//tr'.format(basetag=basetag))
             tmp_premiered = None
@@ -240,7 +240,7 @@ class SiteDmm(object):
                     #for v in value.split(' '):
                     #    entity.actor.append(EntityActor(v.strip()))
                 elif key == u'監督：':
-                    entity.director =  value                  
+                    entity.director =  value
                 elif key == u'シリーズ：':
                     if entity.tag is None:
                         entity.tag = []
@@ -274,7 +274,7 @@ class SiteDmm(object):
                     if match:
                         id_before = match.group(0)
                         value = value.lower().replace(id_before, 'zzid')
-                    
+
                     match = re.compile(r'^(h_)?\d*(?P<real>[a-zA-Z]+)(?P<no>\d+)([a-zA-Z]+)?$').match(value)
                     if match:
                         label = match.group('real').upper()
@@ -297,7 +297,7 @@ class SiteDmm(object):
                     if match:
                         tmp = match.group('rating')
                         entity.ratings = [EntityRatings(float(tmp.replace('_', '.')), max=5, name='dmm', image_url=tag[0].attrib['src'])]
-            except Exception as e: 
+            except Exception as e:
                 #logger.error(f"Exception:{str(e)}")
                 #logger.error(traceback.format_exc())
                 logger.error('point exception')
@@ -316,14 +316,14 @@ class SiteDmm(object):
                 image_url = tag[0].attrib['src'].replace(entity.code[2:]+'-', entity.code[2:]+'jp-')
                 #discord_url = SiteUtil.process_image_mode(image_mode, image_url, proxy_url=proxy_url)
                 entity.fanart.append(image_url)
-                
+
             try:
                 if tree.xpath('//div[@class="d-review__points"]/p[1]/strong'):
                     point = float(tree.xpath('//div[@class="d-review__points"]/p[1]/strong')[0].text_content().replace(u'点', '').strip())
                     votes = int(tree.xpath('//div[@class="d-review__points"]/p[2]/strong')[0].text_content().strip())
                     entity.ratings[0].value = point
                     entity.ratings[0].votes = votes
-            except Exception as e: 
+            except Exception as e:
                 logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
 
@@ -339,13 +339,13 @@ class SiteDmm(object):
                     #logger.debug(json.dumps(data, indent=4))
                     data['bitrates'] = sorted(data['bitrates'], key=lambda k: k['bitrate'], reverse=True)
                     entity.extras = [EntityExtra('trailer', SiteUtil.trans(data['title'], do_trans=do_trans), 'mp4', 'https:%s' % data['bitrates'][0]['src'])]
-            except Exception as e: 
+            except Exception as e:
                 logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'

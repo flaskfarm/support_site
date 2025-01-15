@@ -45,16 +45,16 @@ class SiteTvdb(object):
 
 class SiteTvdbTv(SiteTvdb):
     module_char = 'F'
-    
-    @classmethod 
+
+    @classmethod
     def search_api(cls, keyword):
         try:
-            tvdb = tvdb_api.Tvdb(apikey=APIKEY)#, language='ko') 
+            tvdb = tvdb_api.Tvdb(apikey=APIKEY)#, language='ko')
             return tvdb.search(keyword)
         except:
             return
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, year=None):
         try:
             logger.debug('TVDB TV [%s] [%s]', keyword, year)
@@ -90,13 +90,13 @@ class SiteTvdbTv(SiteTvdb):
                     else:
                         entity.score = 80 - (idx*5)
                     result_list.append(entity.as_dict())
-                result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)  
+                result_list = sorted(result_list, key=lambda k: k['score'], reverse=True)
             if result_list:
                 ret['ret'] = 'success'
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -104,18 +104,18 @@ class SiteTvdbTv(SiteTvdb):
         return ret
 
 
-    @classmethod 
+    @classmethod
     def info(cls, code):
         try:
             #logger.debug('TVDB TV [%s]', code)
             #ret = {}
             try:
-                tvdb = tvdb_api.Tvdb(apikey=APIKEY, select_first=True, banners=True, actors=True, language='en') 
+                tvdb = tvdb_api.Tvdb(apikey=APIKEY, select_first=True, banners=True, actors=True, language='en')
                 series = tvdb[code[2:]]
-            except Exception as e: 
+            except Exception as e:
                 logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
-                tvdb = tvdb_api.Tvdb(apikey=APIKEY, select_first=True, banners=True, language='en') 
+                tvdb = tvdb_api.Tvdb(apikey=APIKEY, select_first=True, banners=True, language='en')
                 series = tvdb[code[2:]]
             entity = EntityFtv(cls.site_name, code)
             entity.title = entity.originaltitle = series['seriesName']
@@ -149,7 +149,7 @@ class SiteTvdbTv(SiteTvdb):
                     entity.actor.append(EntityActor2(name=item['name'], role=item['role'], image=item['image']))
             except:
                 logger.debug('actor...not load')
-            if 'fanart' in series['_banners']:        
+            if 'fanart' in series['_banners']:
                 for item in series['_banners']['fanart']['raw'][:10]:
                     entity.art.append(EntityThumb(aspect='landscape', value='http://thetvdb.com/banners/' + item['fileName'], site=cls.site_name, score=70))
             if 'poster' in series['_banners']:
@@ -183,6 +183,6 @@ class SiteTvdbTv(SiteTvdb):
                     episode.art.append(episode_info['filename'])
                     entity.seasons[season_no].episodes[epi_no] = episode.as_dict()
             return {'ret': 'success', 'data':entity.as_dict()}
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())

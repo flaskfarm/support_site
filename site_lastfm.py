@@ -9,7 +9,7 @@ from .setup import *
 
 
 class SiteLastfm(object):
-    
+
     default_headers = {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
         'Accept' : 'application/json',
@@ -37,7 +37,7 @@ class SiteLastfm(object):
         if youtube:
             try: import yt_dlp
             except:
-                try: 
+                try:
                     os.system("{} install yt-dlp".format(app.config['config']['pip']))
                     import yt_dlp
                 except:
@@ -64,7 +64,7 @@ class SiteLastfm(object):
                     logger.debug(target_url)
         return entity
 
-    
+
     @classmethod
     def search_album(cls, keyword, return_format):
         tmps = keyword.split('|')
@@ -112,11 +112,11 @@ class SiteLastfm(object):
                 ret['ret'] = 'empty'
             else:
                 ret['data'] = list(reversed(sorted(ret['data'], key=lambda k:k['score'])))
-            return ret   
+            return ret
 
 
     @classmethod
-    def info_album(cls, code): 
+    def info_album(cls, code):
         entity = {'code':code, 'album_id':code[2:], 'info_desc':''}
         url = f"https://www.melon.com/album/detail.htm?albumId={entity['album_id']}"
         text = requests.get(url, headers=default_headers).text
@@ -226,7 +226,7 @@ class SiteLastfm(object):
                         if find:
                             break
         return entity
-    
+
 
     @classmethod
     def info_song(cls, song_id):

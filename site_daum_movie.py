@@ -13,7 +13,7 @@ class SiteDaumMovie(SiteDaum):
     module_char = 'M'
     site_char = 'D'
 
-    @classmethod 
+    @classmethod
     def search(cls, keyword, year=1900):
         try:
             ret = {}
@@ -43,7 +43,7 @@ class SiteDaumMovie(SiteDaum):
                 ret['ret'] = 'success'
                 ret['data'] = result_list
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
@@ -63,9 +63,9 @@ class SiteDaumMovie(SiteDaum):
             if exist_data is not None:
                 movie_list.remove(exist_data)
             movie_list.append(data)
-        except Exception as e: 
+        except Exception as e:
             logger.error(f'Exception:{str(e)}')
-            logger.error(traceback.format_exc())  
+            logger.error(traceback.format_exc())
 
     @classmethod
     def get_movie_info_from_home(cls, url):
@@ -74,26 +74,26 @@ class SiteDaumMovie(SiteDaum):
             movie = None
             try:
                 movie = html.get_element_by_id('movieEColl')
-            except Exception as exception: 
+            except Exception as exception:
                 pass
             if movie is None:
                 return None
-            
+
             title_tag = movie.get_element_by_id('movieTitle')
             a_tag = title_tag.find('a')
             href = a_tag.attrib['href']
             title = a_tag.find('b').text_content()
-            
+
             # 2019-08-09
             tmp = title_tag.text_content()
             tmp_year = ''
             match = re.compile(r'(?P<year>\d{4})\s%s' % u'제작').search(tmp)
-            
+
             more = {}
             if match:
                 tmp_year = match.group('year')
                 more['eng_title'] = tmp.replace(title, '').replace(tmp_year, '').replace(u'제작', '').replace(u',', '').strip()
-            
+
             country_tag = movie.xpath('//div[3]/div/div[1]/div[2]/dl[1]/dd[2]')
             country = ''
             if country_tag:
@@ -128,9 +128,9 @@ class SiteDaumMovie(SiteDaum):
                 tmp_year = int(tmp_year)
             return {'movie':movie, 'title':title, 'daum_id':daum_id, 'year':tmp_year, 'country':country, 'more':more}
 
-        except Exception as e: 
+        except Exception as e:
             logger.error(f'Exception:{str(e)}')
-            logger.error(traceback.format_exc())  
+            logger.error(traceback.format_exc())
 
 
     @classmethod
@@ -157,7 +157,7 @@ class SiteDaumMovie(SiteDaum):
                     score = 90
                     need_another_search = True
                 cls.movie_append(movie_list, {'id':ret['daum_id'], 'title':ret['title'], 'year':ret['year'], 'score':score, 'country':ret['country'], 'more':ret['more']})
-               
+
                 movie = ret['movie']
                 if need_another_search:
                     tmp = movie.find('div[@class="coll_etc"]')
@@ -193,13 +193,13 @@ class SiteDaumMovie(SiteDaum):
                                 first_url = 'https://search.daum.net/search?%s' % a_tag.attrib['href']
                             elif year == movie_year and first_url is not None:
                                 first_url = 'https://search.daum.net/search?%s' % tag.attrib['href']
-                            cls.movie_append(movie_list, {'id':daum_id, 'title':daum_name, 'year':year, 'score':score}) 
+                            cls.movie_append(movie_list, {'id':daum_id, 'title':daum_name, 'year':year, 'score':score})
                         if need_another_search and first_url is not None:
                             new_ret = cls.get_movie_info_from_home(first_url)
                             cls.movie_append(movie_list, {'id':new_ret['daum_id'], 'title':new_ret['title'], 'year':new_ret['year'], 'score':100, 'country':new_ret['country'], 'more':new_ret['more']})
-        except Exception as e: 
+        except Exception as e:
             logger.error(f'Exception:{str(e)}')
-            logger.error(traceback.format_exc())  
+            logger.error(traceback.format_exc())
         movie_list = list(reversed(sorted(movie_list, key=lambda k:k['score'])))
         return movie_list
 
@@ -223,7 +223,7 @@ class SiteDaumMovie(SiteDaum):
                 entity.extra_info['title_en'] = item['titleEnglishHanl']
                 entity.desc = f"{item['admission']} / {item['genres']}"
                 entity.link = 'https://movie.daum.net/moviedb/main?movieId=' + item['movieId']
-                
+
                 if SiteUtil.compare(keyword, entity.title) or (item['titleEnglishHanl'] != '' and SiteUtil.compare(keyword, item['titleEnglishHanl'])) or (item['titleAdminHanl'] != '' and SiteUtil.compare(keyword, item['titleAdminHanl'])):
                     if year != 1900:
                         if abs(entity.year-year) == 0:
@@ -246,30 +246,30 @@ class SiteDaumMovie(SiteDaum):
                         continue
                 ret.append(entity.as_dict())
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
-    
 
 
 
-    @classmethod 
+
+    @classmethod
     def info_api(cls, code):
         try:
             ret = {'ret':'success', 'data':{}}
             url = "https://movie.daum.net/api/movie/%s/main" % code[2:]
             ret['data']['basic'] = requests.get(url).json()
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
 
-   
 
-    @classmethod 
+
+    @classmethod
     def info(cls, code):
         try:
             ret = {}
@@ -282,15 +282,15 @@ class SiteDaumMovie(SiteDaum):
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
             return ret
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
-    
-        
-    # 2021-04-15 
+
+
+    # 2021-04-15
     @classmethod
     def info_basic(cls, code, entity):
         try:
@@ -345,7 +345,7 @@ class SiteDaumMovie(SiteDaum):
                 for cast in data['staff']:
                     if cast['movieJob']['role'] == u'각본':
                         entity.credits.append(cast['nameKorean'])
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -382,7 +382,7 @@ class SiteDaumMovie(SiteDaum):
                     art_count += 1
                 if poster_count == max_poster_count and art_count == max_art_count:
                     break
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
@@ -405,7 +405,7 @@ class SiteDaumMovie(SiteDaum):
                     entity.extras.append(extra)
                 if data['page']['last']:
                     break
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
