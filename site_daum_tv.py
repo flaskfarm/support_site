@@ -53,7 +53,7 @@ class SiteDaumTv(SiteDaum):
                 url = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(keyword)), daum_id)
             '''
 
-            root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+            root = SiteDaum.get_tree(url)
             data = cls.get_show_info_on_home(root)
             #data['link'] = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(keyword)), daum_id)
             #logger.debug(data)
@@ -88,7 +88,7 @@ class SiteDaumTv(SiteDaum):
             query['spId'] = code[2:]
             url = cls.get_request_url(query=query)
             show.home = url
-            root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+            root = SiteDaum.get_tree(url)
 
             '''
             home_url = 'https://search.daum.net/search?q=%s&irk=%s&irt=tv-program&DA=TVP' % (urllib.parse.quote(str(title)), code[2:])
@@ -189,7 +189,7 @@ class SiteDaumTv(SiteDaum):
                     break
             if actor_tab_element is not None:
                 actor_tab_url = urllib.parse.urljoin(cls.get_request_url(), actor_tab_element.attrib['href'])
-                actor_root = SiteUtil.get_tree(actor_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+                actor_root = SiteDaum.get_tree(actor_tab_url)
 
                 last_actor_order = 0
                 actor_elements = actor_root.xpath('//div[@data-tab="출연"]//ul/li/div')
@@ -305,7 +305,7 @@ class SiteDaumTv(SiteDaum):
 
             while last_ep_no > 1:
                 if last_ep_url:
-                    more_episode_root = SiteUtil.get_tree(last_ep_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+                    more_episode_root = SiteDaum.get_tree(last_ep_url)
                     tv_info_tab_elements = more_episode_root.xpath('//ul[@class="grid_xscroll"]/li/a')
                 else:
                     tv_info_tab_elements = root.xpath('//ul[@class="grid_xscroll"]/li/a')
@@ -318,7 +318,7 @@ class SiteDaumTv(SiteDaum):
 
                 if epno_tab_element is not None:
                     epno_tab_url = urllib.parse.urljoin(cls.get_request_url(), epno_tab_element.attrib['href'])
-                    epno_root = SiteUtil.get_tree(epno_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+                    epno_root = SiteDaum.get_tree(epno_tab_url)
                     episode_elements = epno_root.xpath('//q-select/option')
                     ep_no, ep_url = cls.parse_episode_list(episode_elements, show.extra_info['episodes'], show.title)
                     if last_ep_no == ep_no:
@@ -380,7 +380,7 @@ class SiteDaumTv(SiteDaum):
         try:
             ret = {}
             episode_code = episode_code[2:]
-            root = SiteUtil.get_tree(episode_code, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+            root = SiteDaum.get_tree(episode_code)
 
             entity = EntityEpisode(cls.site_name, episode_code)
 
@@ -540,7 +540,7 @@ class SiteDaumTv(SiteDaum):
         try:
             ret = {}
             url = 'https://search.daum.net/search?w=tot&q=%s' % (name)
-            root = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+            root = SiteDaum.get_tree(url)
 
             for xpath in ['//*[@id="prfColl"]/div/div/div/div[2]/div[2]/div[1]/span[2]', '//*[@id="prfColl"]/div/div/div/div[2]/div/div/span[2]']:
                 tags = root.xpath(xpath)

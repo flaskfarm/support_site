@@ -1,5 +1,6 @@
 import urllib.parse
 from datetime import datetime
+from http.cookies import SimpleCookie
 
 import requests
 
@@ -30,7 +31,10 @@ class SiteDaum(object):
                 if len(t2) == 2:
                     ret[t2[0]] = t2[1]
             return ret
-        cls._daum_cookie = func(daum_cookie)
+        #cls._daum_cookie = func(daum_cookie)
+        cookies = SimpleCookie()
+        cookies.load(daum_cookie)
+        cls._daum_cookie = {key:morsel.value for key, morsel  in cookies.items()}
         cls._use_proxy = use_proxy
         if cls._use_proxy:
             cls._proxy_url = proxy_url
@@ -371,7 +375,7 @@ class SiteDaum(object):
 
     @classmethod
     def get_kakao_play_url2(cls, data_id: str) -> str | None:
-        url = 'https://kakaotv.daum.net/katz/v3/ft/cliplink/{data_id}/videoLocation?service=daum_searchview&section=TVP&player=monet_html5&profile=HIGH4&dteType=PC&contentType=MP4'.format(data_id=data_id)
+        url = f'https://kakaotv.daum.net/katz/v3/ft/cliplink/{data_id}/videoLocation?service=daum_searchview&section=TVP&player=monet_html5&profile=HIGH4&dteType=PC&contentType=MP4'
         try:
             json_ = SiteUtil.get_response(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie).json()
             return json_['videoLocation']['url']
