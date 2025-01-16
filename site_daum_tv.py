@@ -65,10 +65,10 @@ class SiteDaumTv(SiteDaum):
 
     @classmethod
     def info(cls, code, title):
+        ret = {}
         try:
             logger.debug(f"{code} - {title}")
             if title == '모델': title = '드라마 모델'
-            ret = {}
             show = EntityShow(cls.site_name, code)
             query = cls.get_default_tv_query()
             query['q'] = title
@@ -160,7 +160,7 @@ class SiteDaumTv(SiteDaum):
                 for element in staff_elements:
                     staff = EntityActor(None)
                     staff.type = 'staff'
-                    actor.order = last_actor_order
+                    staff.order = last_actor_order
                     last_actor_order += 1
                     '''
                     황동혁          .item-title
@@ -185,23 +185,19 @@ class SiteDaumTv(SiteDaum):
             last_ep_no = -2
             last_ep_url = None
             for _ in range(100):
-                if last_ep_url:
-                    more_episode_root = SiteDaum.get_tree(last_ep_url)
-                    tv_info_tab_elements = more_episode_root.xpath('//ul[@class="grid_xscroll"]/li/a')
-                else:
+                episode_elements = None
+                if not last_ep_url:
                     tv_info_tab_elements = root.xpath('//ul[@class="grid_xscroll"]/li/a')
-
-                epno_tab_element = None
-                for element in tv_info_tab_elements:
-                    if element.text and element.text.strip() == '회차':
-                        epno_tab_element = element
+                    epno_tab_element = None
+                    for element in tv_info_tab_elements:
+                        if element.text and element.text.strip() == '회차':
+                            epno_tab_element = element
+                            break
+                    if epno_tab_element is None:
                         break
+                    last_ep_url = urllib.parse.urljoin(cls.get_request_url(), epno_tab_element.attrib['href'])
 
-                if epno_tab_element is None:
-                    break
-
-                epno_tab_url = urllib.parse.urljoin(cls.get_request_url(), epno_tab_element.attrib['href'])
-                epno_root = SiteDaum.get_tree(epno_tab_url)
+                epno_root = SiteDaum.get_tree(last_ep_url)
                 episode_elements = epno_root.xpath('//q-select/option')
                 current_ep_no, current_ep_url = cls.parse_episode_list(episode_elements, show.extra_info['episodes'], code[2:], show.title)
                 if last_ep_no == current_ep_no or last_ep_url == current_ep_url:
@@ -413,10 +409,12 @@ class SiteDaumTv(SiteDaum):
             query['coll'] = 'tv-episode'
             query['spt'] = 'tv-episode'
             url = last_ep_url = cls.get_request_url(query=query)
+            code = cls.module_char + cls.site_char + url
+            premiered = hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{ep_id}', 'premiered') or 'unknown'
             episodes[ep_no] = {
                 'daum': {
-                    'code': cls.module_char + cls.site_char + url,
-                    'premiered': hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{ep_id}', 'premiered') or 'unknown',
+                    'code': code,
+                    'premiered': premiered,
                 }
             }
             #logger.debug(f'{ep_no}: {episodes[ep_no]}')

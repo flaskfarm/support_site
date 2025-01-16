@@ -7,6 +7,7 @@ from .entity_base import (EntityActor, EntityExtra2, EntityMovie2,
                           EntityRatings, EntitySearchItemMovie, EntityThumb)
 from .setup import *
 
+endofservice = {'ret': 'exception', 'data': '다음 영화 검색 API 종료 : https://magazine.daum.net/daummovie_notice/6572a022c4ce232353605038'}
 
 class SiteDaumMovie(SiteDaum):
     site_base_url = 'https://search.daum.net'
@@ -271,6 +272,7 @@ class SiteDaumMovie(SiteDaum):
 
     @classmethod
     def info(cls, code):
+        return endofservice
         try:
             ret = {}
             entity = EntityMovie2(cls.site_name, code)

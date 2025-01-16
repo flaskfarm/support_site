@@ -141,7 +141,7 @@ class SiteDaum(object):
                 series_tab_url = urllib.parse.urljoin('https://search.daum.net/search', series_tab_element.attrib['href'])
                 series_root = SiteUtil.get_tree(series_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
                 series_elements = series_root.xpath('//div[@id="tvpColl"]//strong[contains(text(), "시리즈")]/following-sibling::div/ul/li')
-                compact_title_show = cls.parse_compact_title(entity.title)
+                #compact_title_show = cls.parse_compact_title(entity.title)
                 for series_element in series_elements:
                     series = {}
                     series_info_element = series_element.xpath('div/div[2]')[0]
@@ -235,9 +235,8 @@ class SiteDaum(object):
             entity.broadcast_info = ''
 
             return entity.as_dict()
-        except Exception as exception:
-            logger.debug('Exception get_show_info_by_html : %s', exception)
-            logger.debug(traceback.format_exc())
+        except Exception:
+            logger.error(traceback.format_exc())
 
     # 2024.06.05 둘중 하나로..
     @classmethod
