@@ -21,6 +21,8 @@ class SiteDaum(object):
         'Accept-Language' : 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
     }
 
+    REDIS_KEY_DAUM = f'{REDIS_KEY_PLUGIN}:daum'
+
     @classmethod
     def initialize(cls, daum_cookie, use_proxy=False, proxy_url=None):
         cookies = SimpleCookie()
@@ -45,8 +47,8 @@ class SiteDaum(object):
             title_elements = root.xpath('//div[@id="tvpColl"]//div[@class="inner_header"]/strong/a')
             if title_elements:
                 entity.title = title_elements[0].text.strip()
-                query = urllib.parse.parse_qs(title_elements[0].attrib['href'])
-                entity.code = f'{cls.module_char}{cls.site_char}{query["spId"][0].strip()}'
+                query = dict(urllib.parse.parse_qsl(title_elements[0].attrib['href']))
+                entity.code = f'{cls.module_char}{cls.site_char}{query.get("spId", "").strip()}'
             else:
                 html_titles = root.xpath('//title/text()')
                 if html_titles:
@@ -120,6 +122,7 @@ class SiteDaum(object):
 
             # 시리즈
             entity.series = []
+            '''
             entity.series.append({
                 'title': entity.title,
                 'code': entity.code,
@@ -127,7 +130,7 @@ class SiteDaum(object):
                 'status': entity.status,
                 'date': premired.strftime('%Y-%m-%d') if premired else entity.year
             })
-
+            '''
             tab_elements = root.xpath('//ul[@class="grid_xscroll"]/li/a')
             series_tab_element = None
             for element in tab_elements:
@@ -138,13 +141,51 @@ class SiteDaum(object):
                 series_tab_url = urllib.parse.urljoin('https://search.daum.net/search', series_tab_element.attrib['href'])
                 series_root = SiteUtil.get_tree(series_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
                 series_elements = series_root.xpath('//div[@id="tvpColl"]//strong[contains(text(), "시리즈")]/following-sibling::div/ul/li')
+                compact_title_show = cls.parse_compact_title(entity.title)
                 for series_element in series_elements:
                     series = {}
                     series_info_element = series_element.xpath('div/div[2]')[0]
                     a_element = series_info_element.xpath('div[1]//a')[0]
                     series['title'] = a_element.text.strip()
-                    query = urllib.parse.parse_qs(a_element.attrib['href'])
-                    series['code'] = f'{cls.module_char}{cls.site_char}{query["spId"][0].strip()}'
+                    """
+                    compact_title_series = cls.parse_compact_title(series['title'])
+                    if compact_title_show not in compact_title_series:
+                        '''
+                        미스트롯
+                        미스터트롯
+
+                        KBS 드라마 스페셜 2024
+                        KBS 드라마 스페셜 2023
+                        KBS 드라마 스페셜 2018
+                        2017 KBS 드라마 스페셜
+                        2016 KBS 드라마 스페셜
+                        KBS 드라마 스페셜 단막 2015
+                        KBS 드라마 스페셜 시즌5
+                        KBS 드라마 스페셜 시즌1
+
+                        골든일레븐: 라리가 원정대
+                        골든일레븐: 언리미티드
+                        골든일레븐3
+                        골든일레븐2
+                        골든일레븐
+
+                        로드 투 킹덤 : ACE OF ACE
+                        퀸덤 퍼즐
+
+                        텐트 밖은 유럽 남프랑스 편
+                        텐트 밖은 유럽 스페인 편
+                        텐트 밖은 유럽 - 로맨틱 이탈리아
+
+                        좀비버스: 뉴 블러드
+                        좀비버스
+
+                        title로 구분 시도 하려 했으나 변칙이 많음
+                        '''
+                        logger.debug(f'"{entity.title}" does not seem to match "{series["title"]}"')
+                        continue
+                    """
+                    query = dict(urllib.parse.parse_qsl(a_element.attrib['href']))
+                    series['code'] = f'{cls.module_char}{cls.site_char}{query.get("spId", "").strip()}'
                     series['year'] = 1900
                     date_element = series_info_element.xpath('div[2]/span')[0]
                     if date_element.text:
@@ -162,10 +203,10 @@ class SiteDaum(object):
                 equal_program = {}
                 e_div = similar_elements[0]
                 e_a = e_div.xpath('.//div[@class="item-title"]//a')
-                query = urllib.parse.parse_qs(e_a[0].attrib['href'])
+                query = dict(urllib.parse.parse_qsl(e_a[0].attrib['href']))
                 if e_a:
                     equal_program['title'] = e_a[0].text.strip()
-                    equal_program['code'] = f'{cls.module_char}{cls.site_char}{query["spId"][0].strip()}'
+                    equal_program['code'] = f'{cls.module_char}{cls.site_char}{query.get("spId", "").strip()}'
                 e_dd = e_div.xpath('.//dd[@class="program"]')
                 if e_dd:
                     studio_and_year = e_dd[0].xpath('string()')
@@ -281,3 +322,19 @@ class SiteDaum(object):
                 return datetime.strptime(test_str, f)
             except:
                 pass
+
+    @classmethod
+    def parse_compact_title(cls, title: str) -> str:
+        compact = title.replace('시즌', '').strip()
+        for d in ['-', ':']:
+            compact = compact.split(d)[0]
+        compact = ''.join([t for t in compact if not t.isdigit()])
+        # remove trailing season number
+        #match = re.compile('^(.+\D)\d$').search(compact)
+        #if match:
+        #    compact = match.group(1).strip()
+        return compact.strip()
+
+    @classmethod
+    def get_request_url(cls, scheme: str = 'https', netloc: str = 'search.daum.net', path: str = 'search', params: dict = None, query: dict = None, fragment: str = None) -> str:
+        return urllib.parse.urlunparse([scheme, netloc, path, urllib.parse.urlencode(params) if params else None, urllib.parse.urlencode(query) if query else None, fragment])

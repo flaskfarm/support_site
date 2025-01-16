@@ -181,7 +181,7 @@ class SiteDaumTv(SiteDaum):
                     #logger.debug(f'{staff.role=} {staff.name=} {staff.thumb=}')
                     show.actor.append(staff)
 
-            # 에피소드
+            # 회차
             last_ep_no = -2
             last_ep_url = None
             for _ in range(100):
@@ -203,27 +203,58 @@ class SiteDaumTv(SiteDaum):
                 epno_tab_url = urllib.parse.urljoin(cls.get_request_url(), epno_tab_element.attrib['href'])
                 epno_root = SiteDaum.get_tree(epno_tab_url)
                 episode_elements = epno_root.xpath('//q-select/option')
-                current_ep_no, current_ep_url = cls.parse_episode_list(episode_elements, show.extra_info['episodes'], show.title)
+                current_ep_no, current_ep_url = cls.parse_episode_list(episode_elements, show.extra_info['episodes'], code[2:], show.title)
                 if last_ep_no == current_ep_no or last_ep_url == current_ep_url:
                     logger.debug(f'No more episode information after: {current_ep_no}')
                     break
                 last_ep_no = current_ep_no
                 last_ep_url = current_ep_url
 
-            tags = root.xpath('//*[@id="tv_program"]//div[@class="clipList"]//div[@class="mg_expander"]/a')
-            show.extra_info['kakao_id'] = None
-            if tags:
-                tmp = tags[0].attrib['href']
-                show.extra_info['kakao_id'] = re.compile('/(?P<id>\d+)/').search(tmp).group('id')
+            # 감상하기
+            ott_tab_element = None
+            for e in root.xpath('//ul[@class="grid_xscroll"]/li/a'):
+                if e.text and e.text.strip() == '감상하기':
+                    ott_tab_element = e
+                    break
+            if ott_tab_element is not None:
+                ott_tab_url = urllib.parse.urljoin(cls.get_request_url(), ott_tab_element.attrib['href'])
+                ott_root = SiteDaum.get_tree(ott_tab_url)
+                ott_elements = ott_root.xpath('.//*[@id="tvpColl"]//ul[@class="list_watch"]/li/a')
+                for e in ott_elements:
+                    '''
+                    "https://www.wavve.com/player/vod?history=season&programid=S01_V0000330171 "
+                    "http://www.tving.com/vod/player/E001412821 "
+                    "https://www.netflix.com/kr/title/81979683 "
+                    "https://www.coupangplay.com/content/35999344-3bc0-40f2-809f-da76a2e5008f "
+                    "https://watcha.com/contents/tEZA4O9 "
+                    '''
+                    url = urllib.parse.urlparse(e.attrib['href'])
+                    content_id = e.attrib['href'].strip().split('/')[-1]
+                    if 'tving' in url.netloc:
+                        show.extra_info['tving_id'] = content_id
+                    elif 'netflix' in url.netloc:
+                        show.extra_info['netflix_id'] = content_id
+                    elif 'coupang' in url.netloc:
+                        show.extra_info['coupang_id'] = content_id
+                    elif 'watcha' in url.netloc:
+                        show.extra_info['watcha_id'] = content_id
+                    elif 'wavve' in url.netloc:
+                        query = dict(urllib.parse.parse_qsl(url.query))
+                        wavve_id = query.get('programid')
+                        if wavve_id:
+                            show.extra_info['wavve_id'] = wavve_id
 
-            tags = root.xpath("//a[starts-with(@href, 'http://www.tving.com/vod/player')]")
-            #tags = root.xpath('//a[@contains(@href, "tving.com")')
-            if tags:
-                show.extra_info['tving_episode_id'] = tags[0].attrib['href'].split('/')[-1]
+            '''
+            metadata/mod_ktv.py:
+                show['extras'] = SiteDaumTv.get_kakao_video(show['extra_info']['kakao_id'])
+                show['extra_info']['tving_episode_id']
+            '''
+            # show.extras 에 최신 영상 넣었음
+            show.extra_info['kakao_id'] = None
+            #show['extra_info']['tving_episode_id']
 
             ret['ret'] = 'success'
             ret['data'] = show.as_dict()
-
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -235,47 +266,65 @@ class SiteDaumTv(SiteDaum):
     def episode_info(cls, episode_code, include_kakao=False, is_ktv=True, summary_duplicate_remove=False):
         try:
             ret = {}
-            episode_code = episode_code[2:]
-            root = SiteDaum.get_tree(episode_code)
+            episode_url = episode_code[2:]
+            root = SiteDaum.get_tree(episode_url)
 
-            entity = EntityEpisode(cls.site_name, episode_code)
+            entity = EntityEpisode(cls.site_name, episode_url)
 
+            query = dict(urllib.parse.parse_qsl(episode_url))
+            episode_id = query.get('spId')
+
+            # 프로그램 제목
+            show_title_elements = root.xpath('//*[@id="tvpColl"]//div[@class="inner_header"]//a')
+            if show_title_elements:
+                entity.showtitle = show_title_elements[0].text.strip()
+                query = dict(urllib.parse.parse_qsl(show_title_elements[0].attrib['href']))
+                show_id = query.get('spId')
+
+            # 방영일
             date_text = root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
             if date_text:
                 date: datetime = cls.parse_date_text(' '.join(date_text).strip())
                 entity.premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
+                hset(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{episode_id}', 'premiered', entity.premiered)
                 entity.year = date.year if date else 1900
                 weekday = cls.weekdays[date.weekday()]
                 title_date = date.strftime("%Y.%m.%d")
                 entity.title = f'{title_date}({weekday})' if weekday else title_date
 
-            epno_text = root.xpath('//span[contains(text(), "회차")]/following-sibling::text()')
-            if epno_text:
-                text = ' '.join(epno_text).strip()
-                epno = text.replace('회', '').strip()
-                if epno.isdigit():
-                    entity.episode = int(epno)
+            # 회차
+            entity.episode = -1
+            episode_text = None
+            episode_elements = root.xpath('//q-select/option')
+            for e in episode_elements:
+                if 'selected' in e.attrib:
+                    episode_text = e.attrib['value'].strip()
+                    break
+            episode_info_text = root.xpath('//span[contains(text(), "회차")]/following-sibling::text()')
+            if episode_info_text:
+                text = ' '.join(episode_info_text).strip()
+                if '마지막' in text:
+                    entity.title += ' [마지막회]'
+                elif not episode_text:
+                    episode_text = text
+            if episode_text:
+                num_text = episode_text.replace('회', '').strip()
+                if num_text.isdigit():
+                    entity.episode = int(num_text)
                 else:
-                    # 마지막회
-                    entity.title += f' {text}'
-            else:
-                epno_elements = root.xpath('//q-select/option')
-                for element in epno_elements:
-                    if 'selected' in element.attrib:
-                        try:
-                            entity.episode = int(element.attrib['value'].strip().replace('회', ''))
-                        except:
-                            logger.error(traceback.format_exc())
+                    try:
+                        date: datetime = cls.parse_date_text(num_text)
+                        entity.episode = int(date.strftime('%Y%m%d')) * -1
+                    except Exception as e:
+                        logger.warning(repr(e))
 
+            # 제목
             strong_titles = root.xpath('//div[@id="tvpColl"]//strong[@class="tit_story"]')
             if strong_titles and strong_titles[0].text:
                 entity.originaltitle = strong_titles[0].text.strip()
                 entity.title = f'{entity.title} {entity.originaltitle}' if is_ktv else entity.originaltitle
 
-            show_title = root.xpath('//*[@id="tvpColl"]//div[@class="inner_header"]//a/text()')
-            if show_title:
-                entity.showtitle = show_title[0].strip()
-
+            # 줄거리
             if not summary_duplicate_remove:
                 entity.plot = entity.title
             plot_text = root.xpath('//p[@class="desc_story"]/text()')
@@ -285,6 +334,7 @@ class SiteDaumTv(SiteDaum):
                 else:
                     entity.plot += f'\n\n{plot_text[0].strip()}'
 
+            # 썸네일
             epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
             if epi_thumbs:
                 thumb_url = cls.process_image_url(epi_thumbs[0])
@@ -298,6 +348,7 @@ class SiteDaumTv(SiteDaum):
                         entity.title = tmp
                 '''
 
+            # 관련 영상
             related_video_elements = root.xpath('//div[@id="episode-play"]/following-sibling::div[1]//ul/li')
             if include_kakao and related_video_elements:
                 entity.extras.extend(cls.get_kakao_video_list(related_video_elements))
@@ -315,35 +366,24 @@ class SiteDaumTv(SiteDaum):
     @classmethod
     def get_actor_eng_name(cls, name):
         try:
-            ret = {}
-            url = 'https://search.daum.net/search?w=tot&q=%s' % (name)
+            query = {
+                'w': 'tot',
+                'q': name
+            }
+            url = cls.get_request_url(query=query)
             root = SiteDaum.get_tree(url)
-
-            for xpath in ['//*[@id="prfColl"]/div/div/div/div[2]/div[2]/div[1]/span[2]', '//*[@id="prfColl"]/div/div/div/div[2]/div/div/span[2]']:
-                tags = root.xpath(xpath)
-                if tags:
-                    tmp = tags[0].text_content()
-                    #logger.debug(tmp)
-                    tmps = tmp.split(',')
-                    if len(tmps) == 1:
-                        ret = [tmps[0].strip()]
-                    else:
-                        ret = [x.strip() for x in tmps]
-                    #일본배우땜에
-                    ret2 = []
-                    for x in ret:
-                        ret2.append(x)
-                        tmp = x.split(' ')
-                        if len(tmp) == 2:
-                            ret2.append('%s %s' % (tmp[1], tmp[0]))
-
-                    return ret2
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
+            name_elements = root.xpath('//*[@id="prfColl"]//c-combo[@data-type="info"]//c-frag[@data-divider]')
+            if name_elements:
+                name_texts = name_elements[0].strip().split()
+                if name_texts[0].isalpha():
+                    found_name = ' '.join(name_texts)
+                    logger.debug(f'{name}: {found_name}')
+                    return found_name
+        except:
             logger.error(traceback.format_exc())
 
     @classmethod
-    def parse_episode_list(cls, episode_elements: list, episodes: dict, show_title: str) -> tuple[int, str]:
+    def parse_episode_list(cls, episode_elements: list, episodes: dict, show_id: str, show_title: str) -> tuple[int, str]:
         last_ep_no = -1
         last_ep_url = ''
         episode_nums = []
@@ -376,12 +416,13 @@ class SiteDaumTv(SiteDaum):
             episodes[ep_no] = {
                 'daum': {
                     'code': cls.module_char + cls.site_char + url,
-                    'premiered': 'unknown',
+                    'premiered': hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{ep_id}', 'premiered') or 'unknown',
                 }
             }
             #logger.debug(f'{ep_no}: {episodes[ep_no]}')
             episode_nums.append(ep_no)
-        logger.debug(f'The episode numbers of "{show_title}" : {episode_nums}')
+        if episode_nums:
+            logger.debug(f'The episode numbers of "{show_title}" : {episode_nums}')
         return last_ep_no, last_ep_url
 
     @classmethod
@@ -394,10 +435,6 @@ class SiteDaumTv(SiteDaum):
         'DA': 'TVP',
         'rtmaxcoll': 'TVP'
     }
-
-    @classmethod
-    def get_request_url(cls, scheme: str = 'https', netloc: str = 'search.daum.net', path: str = 'search', params: dict = None, query: dict = None, fragment: str = None) -> str:
-        return urllib.parse.urlunparse([scheme, netloc, path, urllib.parse.urlencode(params) if params else None, urllib.parse.urlencode(query) if query else None, fragment])
 
     @classmethod
     def get_kakao_video_list(cls, video_element_list: list) -> list:
