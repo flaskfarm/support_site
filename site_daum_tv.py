@@ -208,7 +208,7 @@ class SiteDaumTv(SiteDaum):
                 query = cls.get_default_tv_query()
                 query['coll'] = 'tv-episode'
                 query['spt'] = 'tv-episode'
-                for idx in range(1, recent_nums[-1] + 1):
+                for idx in range(recent_nums[-1], 0, -1):
                     q = query.copy()
                     q['q'] = f'{show.title} {idx}회'
                     url = cls.get_request_url(query=q)

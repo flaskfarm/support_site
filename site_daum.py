@@ -3,6 +3,7 @@ from datetime import datetime
 from http.cookies import SimpleCookie
 
 import requests
+from lxml import etree
 
 from .entity_base import EntityExtra, EntitySearchItemTvDaum
 from .setup import *
@@ -36,7 +37,11 @@ class SiteDaum(object):
 
     @classmethod
     def get_tree(cls, url):
-        return SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+        doc = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+        captcha_scripts = doc.xpath('//script[contains(text(), "captcha")]')
+        if captcha_scripts:
+            logger.warning(f'url="{url}"\nbody="{etree.tostring(doc, encoding=str)}"')
+        return doc
 
     @classmethod
     def get_show_info_on_home(cls, root):
@@ -55,7 +60,7 @@ class SiteDaum(object):
                     html_titles_text = ' '.join(html_titles).strip()
                     logger.warning(f'검색 실패: {html_titles_text}')
                 else:
-                    logger.warning(f'검색 실패')
+                    logger.warning(f'검색 실패: {etree.tostring(root, encoding=str)}')
                 return
 
             # 에피소드 번호 초기화
