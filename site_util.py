@@ -46,6 +46,8 @@ class SiteUtil(object):
                 res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies)
             else:
                 res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies, verify=verify)
+        if not 300 > res.status_code > 199:
+            logger.warning(f'HTTP_CODE={res.status_code} BODY="{res.text}"')
         return res
 
 
