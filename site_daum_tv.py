@@ -198,6 +198,16 @@ class SiteDaumTv(SiteDaum):
             if epno_tab_element is not None:
                 ep_url = urllib.parse.urljoin(cls.get_request_url(), epno_tab_element.attrib['href'])
                 epno_root = SiteDaum.get_tree(ep_url)
+
+                # 회차정보 페이지에서 최신 회차의 방영일 저장
+                date_text = epno_root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
+                ep_info_text = epno_root.xpath('//div[@id="tvpColl"]//q-select[@data-value]/@data-value')
+                if date_text and ep_info_text:
+                    date: datetime = cls.parse_date_text(' '.join(date_text).strip())
+                    current_ep_premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
+                    current_ep_index = ' '.join(ep_info_text).strip().replace('회', '')
+                    hset(f'{cls.REDIS_KEY_DAUM}:tv:show:{code[2:]}:episodes:{current_ep_index}', 'premiered', current_ep_premiered)
+
                 episode_elements = epno_root.xpath('//q-select/option')
                 recent_nums = []
                 for e in episode_elements:
