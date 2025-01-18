@@ -3,7 +3,7 @@ from datetime import datetime
 from http.cookies import SimpleCookie
 
 import requests
-from lxml import etree
+from lxml import etree, html
 
 from .entity_base import EntityExtra, EntitySearchItemTvDaum
 from .setup import *
@@ -74,8 +74,9 @@ class SiteDaum(object):
             '''
             sub_headers = root.xpath('//div[@id="tvpColl"]//div[@class="sub_header"]/span/span')
             # 장르
-            entity.genre = sub_headers[0].xpath('string()').strip()
-            del sub_headers[0]
+            if sub_headers:
+                entity.genre = sub_headers[0].xpath('string()').strip()
+                del sub_headers[0]
 
             # 방송 상태 및 방영일
             '''
@@ -114,16 +115,16 @@ class SiteDaum(object):
                 entity.image_url = None
 
             # 스튜디오
-            studio_element = root.xpath('//div[@id="tvpColl"]//dd[@class="program"]//span[@class="inner"]')[0]
-            studio_element_a = studio_element.xpath('a')
-            if studio_element_a:
-                entity.studio = studio_element_a[0].text
-            else:
-                entity.studio = studio_element.xpath('string()')
-            entity.studio = entity.studio.strip()
+            studio_elements = root.xpath('//div[@id="tvpColl"]//dd[@class="program"]//span[@class="inner"]')
+            if studio_elements:
+                studio_element_a = studio_elements[0].xpath('a')
+                if studio_element_a:
+                    entity.studio = studio_element_a[0].text.strip()
 
             # 설명
-            entity.desc = root.xpath('//div[@id="tvpColl"]//dt[contains(text(),"소개")]/following-sibling::dd//p/text()')[0].strip()
+            desc_elements = root.xpath('//div[@id="tvpColl"]//*[contains(@class, "desc_story")]')
+            if desc_elements:
+                entity.desc = desc_elements[0].text.strip()
 
             # 시리즈
             entity.series = []
@@ -136,15 +137,8 @@ class SiteDaum(object):
                 'date': premired.strftime('%Y-%m-%d') if premired else entity.year
             })
             '''
-            tab_elements = root.xpath('//ul[@class="grid_xscroll"]/li/a')
-            series_tab_element = None
-            for element in tab_elements:
-                if element.text and element.text.strip() == '시리즈':
-                    series_tab_element = element
-                    break
-            if series_tab_element is not None:
-                series_tab_url = urllib.parse.urljoin('https://search.daum.net/search', series_tab_element.attrib['href'])
-                series_root = SiteUtil.get_tree(series_tab_url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
+            series_root = cls.get_info_tab('시리즈', root)
+            if series_root is not None:
                 series_elements = series_root.xpath('//div[@id="tvpColl"]//strong[contains(text(), "시리즈")]/following-sibling::div/ul/li')
                 #compact_title_show = cls.parse_compact_title(entity.title)
                 for series_element in series_elements:
@@ -342,3 +336,15 @@ class SiteDaum(object):
     @classmethod
     def get_request_url(cls, scheme: str = 'https', netloc: str = 'search.daum.net', path: str = 'search', params: dict = None, query: dict = None, fragment: str = None) -> str:
         return urllib.parse.urlunparse([scheme, netloc, path, urllib.parse.urlencode(params) if params else None, urllib.parse.urlencode(query) if query else None, fragment])
+
+    @classmethod
+    def get_info_tab(cls, tab_name: str, document: html.HtmlElement) -> html.HtmlElement | None:
+        tab_elements: list = document.xpath('//ul[@class="grid_xscroll"]/li/a')
+        target = None
+        for e in tab_elements:
+            if e.text and e.text.strip() == tab_name:
+                target = e
+                break
+        if target is not None:
+            tab_url = urllib.parse.urljoin(cls.get_request_url(), target.attrib['href'])
+            return SiteDaum.get_tree(tab_url)

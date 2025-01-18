@@ -105,15 +105,8 @@ class SiteDaumTv(SiteDaum):
                 show.extras.extend(cls.get_kakao_video_list(recent_video_elements))
 
             # 출연진/제작진
-            actor_tab_element = None
-            for element in root.xpath('//ul[@class="grid_xscroll"]/li/a'):
-                if element.text and element.text.strip() == '출연':
-                    actor_tab_element = element
-                    break
-            if actor_tab_element is not None:
-                actor_tab_url = urllib.parse.urljoin(cls.get_request_url(), actor_tab_element.attrib['href'])
-                actor_root = SiteDaum.get_tree(actor_tab_url)
-
+            actor_root = cls.get_info_tab('출연', root)
+            if actor_root is not None:
                 last_actor_order = 0
                 actor_elements = actor_root.xpath('//div[@data-tab="출연"]//ul/li/div')
                 for element in actor_elements:
@@ -189,31 +182,22 @@ class SiteDaumTv(SiteDaum):
             최신 회차 번호를 기준으로 나머지 회차를 유추하는 방식으로 진행
             가끔 회차 번호가 날짜로 되어 있는 경우가 있는데 이런 케이스는 포기
             '''
-            tv_info_tab_elements = root.xpath('//ul[@class="grid_xscroll"]/li/a')
-            epno_tab_element = None
-            for element in tv_info_tab_elements:
-                if element.text and element.text.strip() == '회차':
-                    epno_tab_element = element
-                    break
-            if epno_tab_element is not None:
-                ep_url = urllib.parse.urljoin(cls.get_request_url(), epno_tab_element.attrib['href'])
-                epno_root = SiteDaum.get_tree(ep_url)
-
-                # 회차정보 페이지에서 최신 회차의 방영일 저장
-                date_text = epno_root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
-                ep_info_text = epno_root.xpath('//div[@id="tvpColl"]//q-select[@data-value]/@data-value')
-                if date_text and ep_info_text:
-                    date: datetime = cls.parse_date_text(' '.join(date_text).strip())
-                    current_ep_premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
-                    current_ep_index = ' '.join(ep_info_text).strip().replace('회', '')
-                    hset(f'{cls.REDIS_KEY_DAUM}:tv:show:{code[2:]}:episodes:{current_ep_index}', 'premiered', current_ep_premiered)
-
+            epno_root = cls.get_info_tab('회차', root)
+            if epno_root is not None:
                 episode_elements = epno_root.xpath('//q-select/option')
+                selected_idx = -1
                 recent_nums = []
                 for e in episode_elements:
                     e_txt = e.attrib['value'].strip().replace('회', '')
                     if e_txt.isdigit():
                         recent_nums.append(int(e_txt))
+                        if 'selected' in e.attrib:
+                            selected_idx = int(e_txt)
+                # 회차정보 페이지에서 최신 회차의 방영일 저장
+                date_text = epno_root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
+                if date_text:
+                    date: datetime = cls.parse_date_text(' '.join(date_text).strip())
+                    current_ep_premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
                 recent_nums = sorted(recent_nums)
                 query = cls.get_default_tv_query()
                 query['coll'] = 'tv-episode'
@@ -227,21 +211,34 @@ class SiteDaumTv(SiteDaum):
                     show.extra_info['episodes'][idx] = {
                         'daum': {
                             'code': episode_code,
-                            'premiered': premiered,
+                            'premiered': current_ep_premiered if current_ep_premiered and idx == selected_idx else premiered,
                         }
                     }
             else:
                 logger.warning(f'No episodes infomation: {show.title}')
 
+            # 시청률
+            rating_root = cls.get_info_tab('시청률', root)
+            if rating_root is not None:
+                # 시청률 정보에서 방송일 수집
+                tr_elements = rating_root.xpath('//*[@id="tvpRatings"]//tbody/tr')
+                for tr in tr_elements:
+                    premiered = tr.xpath('./td[1]')[0].text.strip()
+                    index = tr.xpath('string(./td[2])').replace('회', '').strip()
+                    match = re.compile('(\d{2,4}\.\d{1,2}\.\d{1,2})(.+)?').search(premiered)
+                    if match:
+                        premiered = match.group(1)
+                    if index and premiered:
+                        try:
+                            index = int(index)
+                            premiered = cls.parse_date_text(premiered)
+                            show.extra_info['episodes'][index]['daum']['premiered'] = premiered.strftime('%Y-%m-%d')
+                        except:
+                            pass
+
             # 감상하기
-            ott_tab_element = None
-            for e in root.xpath('//ul[@class="grid_xscroll"]/li/a'):
-                if e.text and e.text.strip() == '감상하기':
-                    ott_tab_element = e
-                    break
-            if ott_tab_element is not None:
-                ott_tab_url = urllib.parse.urljoin(cls.get_request_url(), ott_tab_element.attrib['href'])
-                ott_root = SiteDaum.get_tree(ott_tab_url)
+            ott_root = cls.get_info_tab('감상하기', root)
+            if ott_root is not None:
                 ott_elements = ott_root.xpath('.//*[@id="tvpColl"]//ul[@class="list_watch"]/li/a')
                 for e in ott_elements:
                     '''
@@ -343,7 +340,7 @@ class SiteDaumTv(SiteDaum):
                 hset(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{entity.episode}', 'premiered', entity.premiered)
                 entity.year = date.year if date else 1900
                 weekday = cls.weekdays[date.weekday()]
-                title_date = date.strftime("%Y.%m.%d")
+                title_date = date.strftime("%Y.%m.%d.")
                 date_in_title = f'{title_date}({weekday})' if weekday else title_date
 
             # 제목
