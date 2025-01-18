@@ -347,11 +347,11 @@ class SiteDaumTv(SiteDaum):
                 date_in_title = f'{title_date}({weekday})' if weekday else title_date
 
             # 제목
-            title = f'{date_in_title} {episode_in_title}'.strip()
+            entity.title = f'{date_in_title} {episode_in_title}'.strip()
             strong_titles = root.xpath('//div[@id="tvpColl"]//strong[@class="tit_story"]')
             if strong_titles and strong_titles[0].text:
                 entity.originaltitle = strong_titles[0].text.strip()
-                entity.title = f'{title} {entity.originaltitle}' if is_ktv else entity.originaltitle
+                entity.title = f'{entity.title} {entity.originaltitle}' if is_ktv else entity.originaltitle
 
             # 줄거리
             if not summary_duplicate_remove:
