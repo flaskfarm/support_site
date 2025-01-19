@@ -1,6 +1,8 @@
 import urllib.parse
 from datetime import datetime
 
+from lxml import html
+
 from support.base.string import SupportString
 
 from . import SiteDaum
@@ -18,7 +20,7 @@ class SiteDaumTv(SiteDaum):
     weekdays = {0: '월', 1: '화', 2: '수', 3: '목', 4: '금', 5: '토', 6: '일'}
 
     @classmethod
-    def get_search_name_from_original(cls, search_name):
+    def get_search_name_from_original(cls, search_name: str) -> str:
         search_name = search_name.replace('일일연속극', '').strip()
         search_name = search_name.replace('특별기획드라마', '').strip()
         search_name = re.sub(r'\[.*?\]', '', search_name).strip()
@@ -34,7 +36,7 @@ class SiteDaumTv(SiteDaum):
         return search_name
 
     @classmethod
-    def search(cls, keyword, daum_id=None, year=None, image_mode='0'):
+    def search(cls, keyword: str, daum_id: str | int = None, year: str | int = None, image_mode: str = '0') -> dict[str, str | dict]:
         try:
             keyword = keyword.replace(' | 시리즈', '').strip()
             keyword = cls.get_search_name_from_original(keyword)
@@ -64,7 +66,7 @@ class SiteDaumTv(SiteDaum):
         return ret
 
     @classmethod
-    def info(cls, code, title):
+    def info(cls, code: str, title: str) -> dict[str, str | dict]:
         ret = {}
         try:
             logger.debug(f"{code} - {title}")
@@ -283,7 +285,7 @@ class SiteDaumTv(SiteDaum):
         return ret
 
     @classmethod
-    def episode_info(cls, episode_code, include_kakao=False, is_ktv=True, summary_duplicate_remove=False):
+    def episode_info(cls, episode_code: str, include_kakao: bool = False, is_ktv: bool = True, summary_duplicate_remove: bool = False) -> dict[str, str | dict]:
         try:
             ret = {}
             episode_url = episode_code[2:]
@@ -390,7 +392,7 @@ class SiteDaumTv(SiteDaum):
         return ret
 
     @classmethod
-    def get_actor_eng_name(cls, name):
+    def get_actor_eng_name(cls, name: str) -> str | None:
         try:
             query = {
                 'w': 'tot',
@@ -409,7 +411,7 @@ class SiteDaumTv(SiteDaum):
             logger.error(f'{name=}')
 
     @classmethod
-    def get_default_tv_query(cls):
+    def get_default_tv_query(cls) -> dict[str, str | None]:
         return {
         'w': 'tv',
         'q': None,
@@ -420,7 +422,7 @@ class SiteDaumTv(SiteDaum):
     }
 
     @classmethod
-    def get_kakao_video_list(cls, video_element_list: list) -> list:
+    def get_kakao_video_list(cls, video_element_list: list[html.HtmlElement]) -> list[EntityExtra]:
         bucket = []
         for e in video_element_list:
             try:

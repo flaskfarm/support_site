@@ -25,7 +25,7 @@ class SiteDaum(object):
     REDIS_KEY_DAUM = f'{REDIS_KEY_PLUGIN}:daum'
 
     @classmethod
-    def initialize(cls, daum_cookie, use_proxy=False, proxy_url=None):
+    def initialize(cls, daum_cookie: str, use_proxy: bool = False, proxy_url: str = None) -> None:
         cookies = SimpleCookie()
         cookies.load(daum_cookie)
         cls._daum_cookie = {key:morsel.value for key, morsel in cookies.items()}
@@ -36,7 +36,7 @@ class SiteDaum(object):
             cls._proxy_url = None
 
     @classmethod
-    def get_tree(cls, url):
+    def get_tree(cls, url: str) -> html.HtmlElement:
         doc = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
         captcha_scripts = doc.xpath('//script[contains(text(), "captcha")]')
         if captcha_scripts:
@@ -44,15 +44,22 @@ class SiteDaum(object):
         return doc
 
     @classmethod
-    def get_show_info_on_home(cls, root):
+    def get_show_info_on_home(cls, root: html.HtmlElement) -> dict | None:
         try:
             entity = EntitySearchItemTvDaum(cls.site_name)
 
             # 제목 및 코드
             title_elements = root.xpath('//div[@id="tvpColl"]//div[@class="inner_header"]/strong/a')
             if title_elements:
-                entity.title = title_elements[0].text.strip()
-                query = dict(urllib.parse.parse_qsl(title_elements[0].attrib['href']))
+                '''
+                <strong><a>일밤</a> - <a>미스터리 음악쇼 복면가왕</a></strong>
+                '''
+                if len(title_elements) > 1:
+                    title_e = title_elements[-1]
+                else:
+                    title_e = title_elements[0]
+                entity.title = title_e.text.strip()
+                query = dict(urllib.parse.parse_qsl(title_e.attrib['href']))
                 entity.code = f'{cls.module_char}{cls.site_char}{query.get("spId", "").strip()}'
             else:
                 html_titles = root.xpath('//title/text()')
@@ -239,7 +246,7 @@ class SiteDaum(object):
 
     # 2024.06.05 둘중 하나로..
     @classmethod
-    def process_image_url(cls, img_tag):
+    def process_image_url(cls, img_tag: html.HtmlElement) -> str:
         url = img_tag.attrib.get('data-original-src') or img_tag.attrib.get('src')
         tmps = url.split('fname=')
         if len(tmps) == 2:
@@ -248,7 +255,7 @@ class SiteDaum(object):
             return 'https' + url
 
     @classmethod
-    def get_kakao_play_url(cls, url):
+    def get_kakao_play_url(cls, url: str) -> str | None:
         try:
             content_id = url.split('/')[-1]
             url = 'https://tv.kakao.com/katz/v2/ft/cliplink/{}/readyNplay?player=monet_html5&profile=HIGH&service=kakao_tv&section=channel&fields=seekUrl,abrVideoLocationList&startPosition=0&tid=&dteType=PC&continuousPlay=false&contentType=&{}'.format(content_id, int(time.time()))
@@ -269,7 +276,7 @@ class SiteDaum(object):
             logger.warning(f'{url=}')
 
     @classmethod
-    def change_date(cls, text):
+    def change_date(cls, text: str) -> str:
         try:
             match = re.compile(r'(?P<year>\d{4})\.(?P<month>\d{1,2})\.(?P<day>\d{1,2})').search(text)
             if match:
@@ -281,7 +288,7 @@ class SiteDaum(object):
         return datetime.now().strftime('%Y-%m-%d')
 
     @classmethod
-    def get_kakao_video(cls, kakao_id, sort='CreateTime', size=20):
+    def get_kakao_video(cls, kakao_id: str, sort: str ='CreateTime', size: int = 20) -> list[dict]:
         #sort : CreateTime PlayCount
         ret = []
         try:
