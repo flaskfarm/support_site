@@ -1,5 +1,6 @@
 import urllib.parse
 from datetime import datetime
+import statistics
 
 from lxml import html
 
@@ -67,51 +68,54 @@ class SiteDaumTv(SiteDaum):
 
     @classmethod
     def info(cls, code: str, title: str) -> dict[str, str | dict]:
-        ret = {}
+        ret = {'ret': 'success'}
+        logger.debug(f"{code} - {title}")
+        if title == '모델': title = '드라마 모델'
+        show = EntityShow(cls.site_name, code)
+        query = cls.get_default_tv_query()
+        query['q'] = title
+        query['spId'] = code[2:]
+        url = cls.get_request_url(query=query)
+        show.home = url
+
         try:
-            logger.debug(f"{code} - {title}")
-            if title == '모델': title = '드라마 모델'
-            show = EntityShow(cls.site_name, code)
-            query = cls.get_default_tv_query()
-            query['q'] = title
-            query['spId'] = code[2:]
-            url = cls.get_request_url(query=query)
-            show.home = url
             root = SiteDaum.get_tree(url)
+        except:
+            logger.error(traceback.format_exc())
+            return {'ret':'fail'}
 
-            home_data = cls.get_show_info_on_home(root)
-            if not home_data:
-                return {'ret':'fail'}
+        home_data = cls.get_show_info_on_home(root)
+        if not home_data:
+            return {'ret':'fail'}
 
-            show.title = home_data['title']
-            show.originaltitle = show.sorttitle = show.title
+        show.title = home_data['title']
+        show.originaltitle = show.sorttitle = show.title
+        show.studio = home_data.get('studio', '')
+        show.plot = home_data['desc']
+        show.status = home_data['status']
+        show.genre = [home_data['genre']]
+        show.episode = home_data['episode']
 
-            show.studio = home_data.get('studio', '')
-            show.plot = home_data['desc']
+        term: datetime = cls.parse_date_text(home_data['broadcast_term'])
+        if term:
+            show.premiered = term.strftime('%Y-%m-%d') if term else home_data['broadcast_term']
+            show.year = term.year if term else 1900
 
-            term: datetime = cls.parse_date_text(home_data['broadcast_term'])
-            if term:
-                show.premiered = term.strftime('%Y-%m-%d') if term else home_data['broadcast_term']
-                show.year = term.year if term else 1900
+        # 포스터
+        show.thumb.append(EntityThumb(aspect='poster', value=home_data['image_url'], site='daum', score=-10))
 
-            show.status = home_data['status']
-            show.genre = [home_data['genre']]
-            show.episode = home_data['episode']
+        # 최신영상
+        recent_video_elements = root.xpath('//strong[contains(text(), "최신영상")]/../following-sibling::div[1]//ul/li')
+        if recent_video_elements:
+            show.extras.extend(cls.get_kakao_video_list(recent_video_elements))
 
-            # 포스터
-            show.thumb.append(EntityThumb(aspect='poster', value=home_data['image_url'], site='daum', score=-10))
-
-            # 최신영상
-            recent_video_elements = root.xpath('//strong[contains(text(), "최신영상")]/../following-sibling::div[1]//ul/li')
-            if recent_video_elements:
-                show.extras.extend(cls.get_kakao_video_list(recent_video_elements))
-
-            # 출연진/제작진
-            actor_root = cls.get_info_tab('출연', root)
-            if actor_root is not None:
-                last_actor_order = 0
-                actor_elements = actor_root.xpath('//div[@data-tab="출연"]//ul/li/div')
-                for element in actor_elements:
+        # 출연진/제작진
+        actor_root = cls.get_info_tab('출연', root)
+        if actor_root is not None:
+            last_actor_order = 0
+            actor_elements = actor_root.xpath('//div[@data-tab="출연"]//ul/li/div')
+            for element in actor_elements:
+                try:
                     actor = EntityActor(None)
                     actor.type = 'actor'
                     actor.order = last_actor_order
@@ -150,9 +154,12 @@ class SiteDaumTv(SiteDaum):
 
                     #logger.debug(f'{actor.role=} {actor.name=} {actor.thumb=}')
                     show.actor.append(actor)
+                except:
+                    logger.error(traceback.format_exc())
 
-                staff_elements = actor_root.xpath('//div[@data-tab="제작"]//ul/li/div')
-                for element in staff_elements:
+            staff_elements = actor_root.xpath('//div[@data-tab="제작"]//ul/li/div')
+            for element in staff_elements:
+                try:
                     staff = EntityActor(None)
                     staff.type = 'staff'
                     staff.order = last_actor_order
@@ -175,36 +182,35 @@ class SiteDaumTv(SiteDaum):
                             staff.thumb = thumb_url
                     #logger.debug(f'{staff.role=} {staff.name=} {staff.thumb=}')
                     show.actor.append(staff)
+                except:
+                    logger.error(traceback.format_exc())
 
-            # 회차
-            '''
-            회차 페이지의 회차 목록은 49개씩 최대 98(이전+다음)개를 보여줌
-            최신 회차가 2000일 경우 모든 회차 목록을 확인하려면 41번 요청해야함
-            회차 목록에서 회차별 방송일을 알 수 없고 회차 spId 없이도 각 회차 페이지 접속 가능하므로
-            최신 회차 번호를 기준으로 나머지 회차를 유추하는 방식으로 진행
-            가끔 회차 번호가 날짜로 되어 있는 경우가 있는데 이런 케이스는 포기
-            '''
-            epno_root = cls.get_info_tab('회차', root)
-            if epno_root is not None:
-                episode_elements = epno_root.xpath('//q-select/option')
-                selected_idx = -1
-                recent_nums = []
-                for e in episode_elements:
-                    e_txt = e.attrib['value'].strip().replace('회', '')
-                    if e_txt.isdigit():
-                        recent_nums.append(int(e_txt))
-                        if 'selected' in e.attrib:
-                            selected_idx = int(e_txt)
-                # 회차정보 페이지에서 최신 회차의 방영일 저장
-                date_text = epno_root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
-                if date_text:
-                    date: datetime = cls.parse_date_text(' '.join(date_text).strip())
-                    current_ep_premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
-                recent_nums = sorted(recent_nums)
+        '''
+        회차
+        회차 페이지의 회차 목록은 49개씩 최대 98(이전+다음)개를 보여줌
+        최신 회차가 2000일 경우 모든 회차 목록을 확인하려면 41번 요청해야함
+            - 번호형 회차: 최신 회차 번호를 기준으로 나머지 회차를 유추
+                - 가끔 회차 번호가 날짜로 되어 있는 경우가 있는데 이런 케이스는 포기
+            - 날짜형 회차: 가능한 회차 목록을 모두 수집
+                - 날짜 회차 형식은 spId 필요
+        '''
+        epno_root = cls.get_info_tab('회차', root)
+        if epno_root is not None:
+            # 첫번째 페이지의 회차 목록
+            last_ep_no, last_ep_url = cls.parse_episode_list(epno_root, show.extra_info['episodes'], code[2:], show.title)
+            first_page_episodes = sorted(show.extra_info['episodes'].keys())
+            is_number = statistics.fmean(first_page_episodes) < 19000101 if first_page_episodes else True
+            if is_number:
+                # 번호형 회차
                 query = cls.get_default_tv_query()
                 query['coll'] = 'tv-episode'
                 query['spt'] = 'tv-episode'
-                for idx in range(recent_nums[-1], 0, -1):
+                if last_ep_no > 19000101:
+                    for num in first_page_episodes:
+                        if num < 19000101:
+                            last_ep_no = num
+                            last_ep_url = show.extra_info['episodes'][num]['daum']['code'][2:]
+                for idx in range(last_ep_no - 1, 0, -1):
                     q = query.copy()
                     q['q'] = f'{show.title} {idx}회'
                     url = cls.get_request_url(query=q)
@@ -213,18 +219,40 @@ class SiteDaumTv(SiteDaum):
                     show.extra_info['episodes'][idx] = {
                         'daum': {
                             'code': episode_code,
-                            'premiered': current_ep_premiered if current_ep_premiered and idx == selected_idx else premiered,
+                            'premiered': premiered,
                         }
                     }
             else:
-                logger.warning(f'No episodes infomation: {show.title}')
+                '''
+                날짜형 회차
 
-            # 시청률
-            rating_root = cls.get_info_tab('시청률', root)
-            if rating_root is not None:
-                # 시청률 정보에서 방송일 수집
-                tr_elements = rating_root.xpath('//*[@id="tvpRatings"]//tbody/tr')
-                for tr in tr_elements:
+                무엇이든 물어보세요
+                2025.01.20.
+                2025.01.21.
+
+                모든 회차, 회차 목록 페이지 접속 횟수 100회 제한
+                '''
+                for _ in range(100):
+                    try:
+                        next_epno_page = SiteDaum.get_tree(last_ep_url)
+                        page_last_episode_no, page_last_episode_url = cls.parse_episode_list(next_epno_page, show.extra_info['episodes'], code[2:], show.title)
+                        if last_ep_no == page_last_episode_no or last_ep_url == page_last_episode_url:
+                            logger.debug(f'No more episode information after: {page_last_episode_no}')
+                            break
+                        last_ep_no = page_last_episode_no
+                        last_ep_url = page_last_episode_url
+                    except:
+                        logger.error(traceback.format_exc())
+        else:
+            logger.warning(f'No episodes infomation: {show.title}')
+
+        # 시청률
+        rating_root = cls.get_info_tab('시청률', root)
+        if rating_root is not None:
+            # 시청률 정보에서 방송일 수집
+            tr_elements = rating_root.xpath('//*[@id="tvpRatings"]//tbody/tr')
+            for tr in tr_elements:
+                try:
                     premiered = tr.xpath('./td[1]')[0].text.strip()
                     index = tr.xpath('string(./td[2])').replace('회', '').strip()
                     match = re.compile('(\d{2,4}\.\d{1,2}\.\d{1,2})(.+)?').search(premiered)
@@ -237,19 +265,22 @@ class SiteDaumTv(SiteDaum):
                             show.extra_info['episodes'][index]['daum']['premiered'] = premiered.strftime('%Y-%m-%d')
                         except:
                             pass
+                except:
+                    logger.error(traceback.format_exc())
 
-            # 감상하기
-            ott_root = cls.get_info_tab('감상하기', root)
-            if ott_root is not None:
-                ott_elements = ott_root.xpath('.//*[@id="tvpColl"]//ul[@class="list_watch"]/li/a')
-                for e in ott_elements:
-                    '''
-                    "https://www.wavve.com/player/vod?history=season&programid=S01_V0000330171 "
-                    "http://www.tving.com/vod/player/E001412821 "
-                    "https://www.netflix.com/kr/title/81979683 "
-                    "https://www.coupangplay.com/content/35999344-3bc0-40f2-809f-da76a2e5008f "
-                    "https://watcha.com/contents/tEZA4O9 "
-                    '''
+        # 감상하기
+        ott_root = cls.get_info_tab('감상하기', root)
+        if ott_root is not None:
+            ott_elements = ott_root.xpath('.//*[@id="tvpColl"]//ul[@class="list_watch"]/li/a')
+            for e in ott_elements:
+                '''
+                "https://www.wavve.com/player/vod?history=season&programid=S01_V0000330171 "
+                "http://www.tving.com/vod/player/E001412821 "
+                "https://www.netflix.com/kr/title/81979683 "
+                "https://www.coupangplay.com/content/35999344-3bc0-40f2-809f-da76a2e5008f "
+                "https://watcha.com/contents/tEZA4O9 "
+                '''
+                try:
                     url = urllib.parse.urlparse(e.attrib['href'])
                     content_id = e.attrib['href'].strip().split('/')[-1]
                     if 'tving' in url.netloc:
@@ -265,78 +296,84 @@ class SiteDaumTv(SiteDaum):
                         wavve_id = query.get('programid')
                         if wavve_id:
                             show.extra_info['wavve_id'] = wavve_id
+                except:
+                    logger.error(traceback.format_exc())
 
-            '''
-            metadata/mod_ktv.py:
-                show['extras'] = SiteDaumTv.get_kakao_video(show['extra_info']['kakao_id'])
-                show['extra_info']['tving_episode_id']
-            '''
-            # show.extras 에 최신 영상 넣었음
-            show.extra_info['kakao_id'] = None
-            #show['extra_info']['tving_episode_id']
+        '''
+        metadata/mod_ktv.py:
+            show['extras'] = SiteDaumTv.get_kakao_video(show['extra_info']['kakao_id'])
+            show['extra_info']['tving_episode_id']
+        '''
+        # show.extras 에 최신 영상 넣었음
+        show.extra_info['kakao_id'] = None
+        #show['extra_info']['tving_episode_id']
 
-            ret['ret'] = 'success'
-            ret['data'] = show.as_dict()
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
-            ret['ret'] = 'exception'
-            ret['data'] = str(e)
+        ret['data'] = show.as_dict()
         return ret
 
     @classmethod
     def episode_info(cls, episode_code: str, include_kakao: bool = False, is_ktv: bool = True, summary_duplicate_remove: bool = False) -> dict[str, str | dict]:
+        ret = {'ret': 'success'}
         try:
-            ret = {}
             episode_url = episode_code[2:]
             root = SiteDaum.get_tree(episode_url)
             entity = EntityEpisode(cls.site_name, episode_url)
             query = dict(urllib.parse.parse_qsl(episode_url))
+        except Exception as e:
+            logger.error(traceback.format_exc())
+            ret['ret'] = 'exception'
+            ret['data'] = repr(e)
+            return ret
 
-            no_result_elements = root.xpath('//*[@id="noResult"]')
-            if no_result_elements:
-                message = no_result_elements[0].xpath('string(.//p[@class="desc_info"])').strip()
-                tmp = [w.strip() for w in message.split()]
-                raise Exception(' '.join(tmp))
+        no_result_elements = root.xpath('//*[@id="noResult"]')
+        if no_result_elements:
+            message = no_result_elements[0].xpath('string(.//p[@class="desc_info"])').strip()
+            tmp = [w.strip() for w in message.split()]
+            raise Exception(' '.join(tmp))
 
-            # 프로그램 제목
-            show_title_elements = root.xpath('//*[@id="tvpColl"]//div[@class="inner_header"]//a')
-            if show_title_elements:
+        # 프로그램 제목
+        show_id = -1
+        show_title_elements = root.xpath('//*[@id="tvpColl"]//div[@class="inner_header"]//a')
+        if show_title_elements:
+            try:
                 entity.showtitle = show_title_elements[0].text.strip()
                 query = dict(urllib.parse.parse_qsl(show_title_elements[0].attrib['href']))
                 show_id = query.get('spId')
+            except:
+                logger.error(traceback.format_exc())
 
-            # 회차
-            entity.episode = -1
-            episode_text = None
-            episode_in_title = ''
-            episode_elements = root.xpath('//q-select/option')
-            for e in episode_elements:
-                if 'selected' in e.attrib:
-                    episode_text = e.attrib['value'].strip()
-                    break
-            episode_info_text = root.xpath('//span[contains(text(), "회차")]/following-sibling::text()')
-            if episode_info_text:
-                text = ' '.join(episode_info_text).strip()
-                if '마지막' in text:
-                    episode_in_title = '[마지막회]'
-                elif not episode_text:
-                    episode_text = text
-            if episode_text:
-                num_text = episode_text.replace('회', '').strip()
-                if num_text.isdigit():
-                    entity.episode = int(num_text)
-                else:
-                    try:
-                        date: datetime = cls.parse_date_text(num_text)
-                        entity.episode = int(date.strftime('%Y%m%d')) * -1
-                    except Exception as e:
-                        logger.warning(repr(e))
+        # 회차
+        entity.episode = -1
+        episode_text = None
+        episode_in_title = ''
+        episode_elements = root.xpath('//q-select/option')
+        for e in episode_elements:
+            if 'selected' in e.attrib:
+                episode_text = e.attrib['value'].strip()
+                break
+        episode_info_text = root.xpath('//span[contains(text(), "회차")]/following-sibling::text()')
+        if episode_info_text:
+            text = ' '.join(episode_info_text).strip()
+            if '마지막' in text:
+                episode_in_title = '[마지막회]'
+            elif not episode_text:
+                episode_text = text
+        if episode_text:
+            num_text = episode_text.replace('회', '').strip()
+            if num_text.isdigit():
+                entity.episode = int(num_text)
+            else:
+                try:
+                    date: datetime = cls.parse_date_text(num_text)
+                    entity.episode = int(date.strftime('%Y%m%d')) * -1
+                except Exception as e:
+                    logger.warning(repr(e))
 
-            # 방영일
-            date_in_title = ''
-            date_text = root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
-            if date_text:
+        # 방영일
+        date_in_title = ''
+        date_text = root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
+        if date_text:
+            try:
                 date: datetime = cls.parse_date_text(' '.join(date_text).strip())
                 entity.premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
                 hset(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{entity.episode}', 'premiered', entity.premiered)
@@ -344,51 +381,48 @@ class SiteDaumTv(SiteDaum):
                 weekday = cls.weekdays[date.weekday()]
                 title_date = date.strftime("%Y.%m.%d.")
                 date_in_title = f'{title_date}({weekday})' if weekday else title_date
+            except:
+                logger.error(traceback.format_exc())
 
-            # 제목
-            entity.title = f'{date_in_title} {episode_in_title}'.strip()
-            strong_titles = root.xpath('//div[@id="tvpColl"]//strong[@class="tit_story"]')
-            if strong_titles and strong_titles[0].text:
-                entity.originaltitle = strong_titles[0].text.strip()
-                entity.title = f'{entity.title} {entity.originaltitle}' if is_ktv else entity.originaltitle
 
-            # 줄거리
-            if not summary_duplicate_remove:
-                entity.plot = entity.title
-            plot_text = root.xpath('//p[@class="desc_story"]/text()')
-            if plot_text:
-                if summary_duplicate_remove:
-                    entity.plot = plot_text[0].strip()
-                else:
-                    entity.plot += f'\n\n{plot_text[0].strip()}'
+        # 제목
+        entity.title = f'{date_in_title} {episode_in_title}'.strip()
+        strong_titles = root.xpath('//div[@id="tvpColl"]//strong[@class="tit_story"]')
+        if strong_titles and strong_titles[0].text:
+            entity.originaltitle = strong_titles[0].text.strip()
+            entity.title = f'{entity.title} {entity.originaltitle}' if is_ktv else entity.originaltitle
 
-            # 썸네일
-            epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
-            if epi_thumbs:
-                thumb_url = cls.process_image_url(epi_thumbs[0])
-                entity.thumb.append(EntityThumb(aspect='landscape', value=thumb_url, site=cls.site_name, score=-10))
-                '''
-                if 'alt' in epi_thumbs[0].attrib and epi_thumbs[0].attrib['alt']:
-                    sub = re.compile('\[.+\]')
-                    tmp = epi_thumbs[0].attrib['alt'].split('|')
-                    tmp = sub.sub('', tmp[0]).strip()
-                    if tmp:
-                        entity.title = tmp
-                '''
+        # 줄거리
+        if not summary_duplicate_remove:
+            entity.plot = entity.title
+        plot_text = root.xpath('//p[@class="desc_story"]/text()')
+        if plot_text:
+            if summary_duplicate_remove:
+                entity.plot = plot_text[0].strip()
+            else:
+                entity.plot += f'\n\n{plot_text[0].strip()}'
 
-            # 관련 영상
-            related_video_elements = root.xpath('//div[@id="episode-play"]/following-sibling::div[1]//ul/li')
-            if include_kakao and related_video_elements:
-                entity.extras.extend(cls.get_kakao_video_list(related_video_elements))
+        # 썸네일
+        epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
+        if epi_thumbs:
+            thumb_url = cls.process_image_url(epi_thumbs[0])
+            entity.thumb.append(EntityThumb(aspect='landscape', value=thumb_url, site=cls.site_name, score=-10))
+            '''
+            if 'alt' in epi_thumbs[0].attrib and epi_thumbs[0].attrib['alt']:
+                sub = re.compile('\[.+\]')
+                tmp = epi_thumbs[0].attrib['alt'].split('|')
+                tmp = sub.sub('', tmp[0]).strip()
+                if tmp:
+                    entity.title = tmp
+            '''
 
-            ret['ret'] = 'success'
-            ret['data'] = entity.as_dict()
-            #logger.debug(ret['data'])
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
-            ret['ret'] = 'exception'
-            ret['data'] = str(e)
+        # 관련 영상
+        related_video_elements = root.xpath('//div[@id="episode-play"]/following-sibling::div[1]//ul/li')
+        if include_kakao and related_video_elements:
+            entity.extras.extend(cls.get_kakao_video_list(related_video_elements))
+
+        ret['data'] = entity.as_dict()
+        #logger.debug(ret['data'])
         return ret
 
     @classmethod
@@ -453,3 +487,53 @@ class SiteDaumTv(SiteDaum):
                 #logger.warning(repr(e))
                 continue
         return bucket
+
+    @classmethod
+    def parse_episode_list(cls, episode_root: html.HtmlElement, bucket: dict, show_id: str, show_title: str) -> tuple[int, str]:
+        # 회차정보 페이지에서 최신 회차의 방영일 저장
+        current_ep_premiered = None
+        date_text = episode_root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')
+        if date_text:
+            date: datetime = cls.parse_date_text(' '.join(date_text).strip())
+            current_ep_premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
+
+        episode_elements = episode_root.xpath('//q-select/option')
+        last_ep_no = -1
+        last_ep_url = ''
+        selected_idx = -1
+        current_episodes = []
+        for element in episode_elements:
+            try:
+                ep_text = element.attrib['value'].strip().replace('회', '')
+                ep_id = element.attrib['data-sp-id'].strip()
+                if ep_text.isdigit():
+                    ep_no = last_ep_no = int(ep_text)
+                else:
+                    date = cls.parse_date_text(ep_text)
+                    ep_no = last_ep_no = int(date.strftime('%Y%m%d'))
+                if ep_no in bucket:
+                    continue
+                if 'selected' in element.attrib:
+                    selected_idx = ep_no
+
+                query = cls.get_default_tv_query()
+                query['q'] = f'{show_title} {ep_no}회'
+                query['coll'] = 'tv-episode'
+                query['spt'] = 'tv-episode'
+                query['spId'] = ep_id
+                url = last_ep_url = cls.get_request_url(query=query)
+                code = cls.module_char + cls.site_char + url
+                premiered = hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{ep_id}', 'premiered') or 'unknown'
+                bucket[ep_no] = {
+                    'daum': {
+                        'code': code,
+                        'premiered': current_ep_premiered if current_ep_premiered and ep_no == selected_idx else premiered,
+                    }
+                }
+                #logger.debug(f'{ep_no}: {bucket[ep_no]}')
+                current_episodes.append(ep_no)
+            except Exception as e:
+                logger.warning(repr(e))
+        if current_episodes:
+            logger.debug(f'The episode numbers of "{show_title}" : {current_episodes}')
+        return last_ep_no, last_ep_url
