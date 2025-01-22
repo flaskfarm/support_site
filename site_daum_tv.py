@@ -1,6 +1,5 @@
 import urllib.parse
 from datetime import datetime
-import statistics
 
 from lxml import html
 
@@ -43,10 +42,7 @@ class SiteDaumTv(SiteDaum):
             keyword = cls.get_search_name_from_original(keyword)
             ret = {}
 
-            query = cls.get_default_tv_query()
-            query['q'] = keyword
-            if daum_id:
-                query['spId'] = daum_id
+            query = cls.get_default_tv_query(q=keyword, spId=daum_id)
             url = cls.get_request_url(query=query)
 
             root = SiteDaum.get_tree(url)
@@ -72,9 +68,7 @@ class SiteDaumTv(SiteDaum):
         logger.debug(f"{code} - {title}")
         if title == '모델': title = '드라마 모델'
         show = EntityShow(cls.site_name, code)
-        query = cls.get_default_tv_query()
-        query['q'] = title
-        query['spId'] = code[2:]
+        query = cls.get_default_tv_query(q=title, spId=code[2:])
         url = cls.get_request_url(query=query)
         show.home = url
 
@@ -199,21 +193,17 @@ class SiteDaumTv(SiteDaum):
             # 첫번째 페이지의 회차 목록
             last_ep_no, last_ep_url = cls.parse_episode_list(epno_root, show.extra_info['episodes'], code[2:], show.title)
             first_page_episodes = sorted(show.extra_info['episodes'].keys())
-            is_number = statistics.fmean(first_page_episodes) < 19000101 if first_page_episodes else True
+            is_number = (sum(x < 19000101 for x in first_page_episodes)) >= len(first_page_episodes) / 2
             if is_number:
                 # 번호형 회차
-                query = cls.get_default_tv_query()
-                query['coll'] = 'tv-episode'
-                query['spt'] = 'tv-episode'
                 if last_ep_no > 19000101:
-                    for num in first_page_episodes:
+                    for num in first_page_episodes[::-1]:
                         if num < 19000101:
                             last_ep_no = num
                             last_ep_url = show.extra_info['episodes'][num]['daum']['code'][2:]
                 for idx in range(last_ep_no - 1, 0, -1):
-                    q = query.copy()
-                    q['q'] = f'{show.title} {idx}회'
-                    url = cls.get_request_url(query=q)
+                    query = cls.get_default_tv_query(coll='tv-episode', spt='tv-episode', q=f'{show.title} {idx}회')
+                    url = cls.get_request_url(query=query)
                     episode_code = cls.module_char + cls.site_char + url
                     premiered = hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{code[2:]}:episodes:{idx}', 'premiered') or 'unknown'
                     show.extra_info['episodes'][idx] = {
@@ -445,15 +435,19 @@ class SiteDaumTv(SiteDaum):
             logger.error(f'{name=}')
 
     @classmethod
-    def get_default_tv_query(cls) -> dict[str, str | None]:
-        return {
-        'w': 'tv',
-        'q': None,
-        'coll': 'tv-main',
-        'spt': 'tv-info',
-        'DA': 'TVP',
-        'rtmaxcoll': 'TVP'
-    }
+    def get_default_tv_query(cls, **kwds: dict) -> dict[str, str | None]:
+        q_ = {
+            'w': 'tv',
+            'q': None,
+            'coll': 'tv-main',
+            'spt': 'tv-info',
+            'DA': 'TVP',
+            'rtmaxcoll': 'TVP'
+        }
+        for k in kwds:
+            if kwds[k]:
+                q_[k] = kwds[k]
+        return q_
 
     @classmethod
     def get_kakao_video_list(cls, video_element_list: list[html.HtmlElement]) -> list[EntityExtra]:
@@ -506,21 +500,21 @@ class SiteDaumTv(SiteDaum):
             try:
                 ep_text = element.attrib['value'].strip().replace('회', '')
                 ep_id = element.attrib['data-sp-id'].strip()
+                ep_no_date = None
                 if ep_text.isdigit():
                     ep_no = last_ep_no = int(ep_text)
                 else:
-                    date = cls.parse_date_text(ep_text)
-                    ep_no = last_ep_no = int(date.strftime('%Y%m%d'))
+                    ep_no_date = cls.parse_date_text(ep_text)
+                    ep_no = last_ep_no = int(ep_no_date.strftime('%Y%m%d'))
                 if ep_no in bucket:
                     continue
                 if 'selected' in element.attrib:
                     selected_idx = ep_no
-
-                query = cls.get_default_tv_query()
-                query['q'] = f'{show_title} {ep_no}회'
-                query['coll'] = 'tv-episode'
-                query['spt'] = 'tv-episode'
-                query['spId'] = ep_id
+                if ep_no_date:
+                    q_ = f'{show_title} {ep_no_date.strftime("%Y.%m.%d.")}'
+                else:
+                    q_ = f'{show_title} {ep_no}회'
+                query = cls.get_default_tv_query(q=q_, coll='tv-episode', spt='tv-episode', spId=ep_id)
                 url = last_ep_url = cls.get_request_url(query=query)
                 code = cls.module_char + cls.site_char + url
                 premiered = hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{ep_id}', 'premiered') or 'unknown'
