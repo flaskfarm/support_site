@@ -512,16 +512,20 @@ class SiteDaumTv(SiteDaum):
                     selected_idx = ep_no
                 if ep_no_date:
                     q_ = f'{show_title} {ep_no_date.strftime("%Y.%m.%d.")}'
+                    premiered = ep_no_date.strftime("%Y-%m-%d")
                 else:
                     q_ = f'{show_title} {ep_no}회'
+                    if current_ep_premiered and ep_no == selected_idx:
+                        premiered = current_ep_premiered
+                    else:
+                        premiered = hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{ep_id}', 'premiered') or 'unknown'
                 query = cls.get_default_tv_query(q=q_, coll='tv-episode', spt='tv-episode', spId=ep_id)
                 url = last_ep_url = cls.get_request_url(query=query)
                 code = cls.module_char + cls.site_char + url
-                premiered = hget(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{ep_id}', 'premiered') or 'unknown'
                 bucket[ep_no] = {
                     'daum': {
                         'code': code,
-                        'premiered': current_ep_premiered if current_ep_premiered and ep_no == selected_idx else premiered,
+                        'premiered': premiered,
                     }
                 }
                 #logger.debug(f'{ep_no}: {bucket[ep_no]}')
