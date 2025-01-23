@@ -27,11 +27,10 @@ class SiteWatcha(object):
     }
     """
     default_headers = {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 Edg/115.0.1901.203',
-        'X-Watcha-Client': 'watcha-WebApp',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 Edg/132.0.0.0',
         'X-Watcha-Client-Language': 'ko',
         'X-Watcha-Client-Region': 'KR',
-        'X-Watcha-Client-Version': '2.1.0',
+        'X-Frograms-Client-Version': '2.1.0',
         'X-Frograms-Client': 'Galaxy-Web-App',
         'X-Frograms-App-Code': 'Galaxy',
         'X-Frograms-Galaxy-Language': 'ko',
@@ -42,7 +41,7 @@ class SiteWatcha(object):
     @classmethod
     def _search_api(cls, keyword, content_type='movies'):
         try:
-            url = 'https://api-pedia.watcha.com/api/searches?query=%s' % keyword
+            url = 'https://pedia.watcha.com/api/searches?query=%s' % keyword
             data = SiteUtil.get_response(url, headers=cls.default_headers).json()
             if content_type == 'movies':
                 return data['result']['movies']
@@ -108,7 +107,7 @@ class SiteWatcha(object):
     @classmethod
     def info_review(cls, code, entity, api_return=False):
         try:
-            url = 'https://api-pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
+            url = 'https://pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
             data = SiteUtil.get_response(url, headers=cls.default_headers).json()
             if api_return:
                 return data
@@ -134,7 +133,7 @@ class SiteWatcha(object):
     @classmethod
     def info_collection(cls, code, entity, api_return=False, like_count=100):
         try:
-            url = 'https://api-pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
+            url = 'https://pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
             data = SiteUtil.get_response(url, headers=cls.default_headers).json()
             if api_return:
                 return data
