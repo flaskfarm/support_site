@@ -1,7 +1,7 @@
 import urllib.parse
 from datetime import datetime
 
-from lxml import html
+import lxml.html
 
 from support.base.string import SupportString
 
@@ -40,6 +40,14 @@ class SiteDaumTv(SiteDaum):
         try:
             keyword = keyword.replace(' | 시리즈', '').strip()
             keyword = cls.get_search_name_from_original(keyword)
+            '''
+            # 애플 오리지널 타이틀
+            match = re.compile("(.+)?('.+')(.+)?").search(keyword)
+            if match:
+                unquoted = match.group(2).replace("'", '')
+                paragraph = [phrase.strip() for phrase in [match.group(1), unquoted, match.group(3)] if phrase]
+                keyword = ' '.join(paragraph)
+            '''
             ret = {}
 
             query = cls.get_default_tv_query(q=keyword, spId=daum_id)
@@ -450,7 +458,7 @@ class SiteDaumTv(SiteDaum):
         return q_
 
     @classmethod
-    def get_kakao_video_list(cls, video_element_list: list[html.HtmlElement]) -> list[EntityExtra]:
+    def get_kakao_video_list(cls, video_element_list: list[lxml.html.HtmlElement]) -> list[EntityExtra]:
         bucket = []
         for e in video_element_list:
             try:
@@ -483,7 +491,7 @@ class SiteDaumTv(SiteDaum):
         return bucket
 
     @classmethod
-    def parse_episode_list(cls, episode_root: html.HtmlElement, bucket: dict, show_id: str, show_title: str) -> tuple[int, str]:
+    def parse_episode_list(cls, episode_root: lxml.html.HtmlElement, bucket: dict, show_id: str, show_title: str) -> tuple[int, str]:
         # 회차정보 페이지에서 최신 회차의 방영일 저장
         current_ep_premiered = None
         date_text = episode_root.xpath('//span[contains(text(), "방영일")]/following-sibling::text()')

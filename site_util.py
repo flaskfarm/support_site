@@ -1,4 +1,5 @@
 import urllib.parse
+import html
 
 import requests
 from lxml import html
@@ -47,7 +48,7 @@ class SiteUtil(object):
             else:
                 res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies, verify=verify)
         if not 300 > res.status_code > 199:
-            logger.warning(f'http_code={res.status_code} url="{res.url} "body="{res.text}"')
+            logger.warning(f'http_code={res.status_code} url="{res.url} "body="{html.escape(res.text)}"')
         return res
 
 

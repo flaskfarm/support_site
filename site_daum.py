@@ -1,9 +1,11 @@
 import urllib.parse
 from datetime import datetime
 from http.cookies import SimpleCookie
+import html as html
 
 import requests
-from lxml import etree, html
+import lxml.etree
+import lxml.html
 
 from .entity_base import EntityExtra, EntitySearchItemTvDaum
 from .setup import *
@@ -36,15 +38,15 @@ class SiteDaum(object):
             cls._proxy_url = None
 
     @classmethod
-    def get_tree(cls, url: str) -> html.HtmlElement:
+    def get_tree(cls, url: str) -> lxml.html.HtmlElement:
         doc = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
         captcha_scripts = doc.xpath('//script[contains(text(), "captcha")]')
         if captcha_scripts:
-            logger.warning(f'url="{url}"\nbody="{etree.tostring(doc, encoding=str)}"')
+            logger.warning(f'url="{url}"\nbody="{lxml.etree.tostring(doc, encoding=str)}"')
         return doc
 
     @classmethod
-    def get_show_info_on_home(cls, root: html.HtmlElement) -> dict | None:
+    def get_show_info_on_home(cls, root: lxml.html.HtmlElement) -> dict | None:
         try:
             entity = EntitySearchItemTvDaum(cls.site_name)
 
@@ -67,7 +69,7 @@ class SiteDaum(object):
                     html_titles_text = ' '.join(html_titles).strip()
                     logger.warning(f'검색 실패: {html_titles_text}')
                 else:
-                    logger.warning(f'검색 실패: {etree.tostring(root, encoding=str)}')
+                    logger.warning(f'검색 실패: {html.escape(lxml.etree.tostring(root, encoding=str))}')
                 return
 
             # 에피소드 번호 초기화
@@ -246,7 +248,7 @@ class SiteDaum(object):
 
     # 2024.06.05 둘중 하나로..
     @classmethod
-    def process_image_url(cls, img_tag: html.HtmlElement) -> str:
+    def process_image_url(cls, img_tag: lxml.html.HtmlElement) -> str:
         url = img_tag.attrib.get('data-original-src') or img_tag.attrib.get('src')
         tmps = url.split('fname=')
         if len(tmps) == 2:
@@ -345,7 +347,7 @@ class SiteDaum(object):
         return urllib.parse.urlunparse([scheme, netloc, path, urllib.parse.urlencode(params) if params else None, urllib.parse.urlencode(query) if query else None, fragment])
 
     @classmethod
-    def get_info_tab(cls, tab_name: str, document: html.HtmlElement) -> html.HtmlElement | None:
+    def get_info_tab(cls, tab_name: str, document: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
         tab_elements: list = document.xpath('//ul[@class="grid_xscroll"]/li/a')
         target = None
         for e in tab_elements:
