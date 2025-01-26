@@ -3,6 +3,7 @@ import html
 
 import requests
 from tool import ToolUtil
+import lxml.html
 
 from .setup import *
 
@@ -22,7 +23,7 @@ class SiteUtil(object):
         text = cls.get_text(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify)
         if text is None:
             return
-        return html.fromstring(text)
+        return lxml.html.fromstring(text)
 
     @classmethod
     def get_text(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
@@ -320,7 +321,7 @@ class SiteUtil(object):
         text = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies).content
         if text is None:
             return
-        return html.fromstring(text)
+        return lxml.html.fromstring(text)
 
 
     @classmethod
