@@ -2,7 +2,6 @@ import urllib.parse
 import html
 
 import requests
-from lxml import html
 from tool import ToolUtil
 
 from .setup import *

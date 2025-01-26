@@ -1,7 +1,7 @@
 import urllib.parse
 from datetime import datetime
 from http.cookies import SimpleCookie
-import html as html
+import html
 
 import requests
 import lxml.etree
