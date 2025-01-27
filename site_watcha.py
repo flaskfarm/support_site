@@ -199,7 +199,12 @@ class SiteWatchaMovie(SiteWatcha):
                 for idx, item in enumerate(data):
                     entity = EntitySearchItemMovie(cls.site_name)
                     entity.code = cls.module_char + cls.site_char + item['code']
-                    entity.title = item['title']
+                    '''
+                    https://pedia.watcha.com/ko-KR/contents/mWz3mPV
+                    잭 화이트\x1d: 닐링 앳 더 앤썸 D.C.
+                    '''
+                    pritable_chars = [char for char in item['title'] if char.isprintable()]
+                    entity.title = ''.join(pritable_chars)
                     if 'poster' in item and item['poster'] is not None and 'hd' in item['poster']:
                         entity.image_url = item['poster']['hd']
                     entity.year = item['year']
