@@ -1,3 +1,4 @@
+from http.cookies import SimpleCookie
 
 from . import SiteUtil
 from .entity_base import (EntityActor, EntityExtra, EntityExtra2, EntityMovie,
@@ -39,10 +40,18 @@ class SiteWatcha(object):
     }
 
     @classmethod
+    def initialize(cls, watcha_cookie: str, use_proxy: bool = False, proxy_url: str = None) -> None:
+        cookies = SimpleCookie()
+        cookies.load(watcha_cookie)
+        cls._watcha_cookie = {key:morsel.value for key, morsel in cookies.items()}
+        cls._use_proxy = use_proxy
+        cls._proxy_url = proxy_url if cls._use_proxy else None
+
+    @classmethod
     def _search_api(cls, keyword, content_type='movies'):
         try:
             url = 'https://pedia.watcha.com/api/searches?query=%s' % keyword
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
+            data = cls.get_json(url)
             if content_type == 'movies':
                 return data['result']['movies']
             elif content_type == 'tv_seasons':
@@ -55,50 +64,48 @@ class SiteWatcha(object):
     @classmethod
     def info_basic(cls, code, entity, api_return=False):
         try:
-            url = 'https://api-mars.watcha.com/api/contents/%s.json' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
+            url = 'https://pedia.watcha.com/api/contents/%s' % code
+            data = cls.get_json(url).get('result')
             if api_return:
                 return data
             entity.title = data['title']
             entity.year = data['year']
-            for item in data['actors']:
+            for item in data['credits']['result']:
                 try:
                     actor = EntityActor('', site=cls.site_name)
-                    actor.name = item['name']
-                    if item['photo'] is not None:
-                        actor.thumb = item['photo']['medium']
-                    entity.actor.append(actor)
+                    actor.name = item['person']['name']
+                    if item['person']['photo']:
+                        actor.thumb = item['person']['photo']['medium']
+                    credit_types = item.get('type', '').split('::')
+                    credit_type = credit_types[-1]
+                    if credit_type == 'Director' and type(entity) != EntityShow:
+                        entity.director.append(item['person']['name'])
+                    else:
+                        entity.actor.append(actor)
                 except Exception as e:
                     logger.error(f"Exception:{str(e)}")
                     logger.error(traceback.format_exc())
                     logger.debug(item)
-            for item in data['directors']:
-                if type(entity) != EntityShow:
-                    entity.director.append(item['name'])
-                else:
-                    entity.director.append(EntityActor(name=item['name']))
             try: entity.runtime = int(data['duration']/60)
             except: pass
-            entity.extra_info['title_en'] = data['eng_title']
-            entity.mpaa = data['film_rating_long']
+            try:
+                data['original_title'].encode('ascii')
+                entity.extra_info['title_en'] = data['original_title']
+            except: pass
+            entity.mpaa = data['age_rating_long']
             for item in data['genres']:
-                entity.genre.append(item['name'])
+                entity.genre.append(item)
             try: entity.country.append(data['nations'][0]['name'])
             except: pass
-            try:
-                if entity.country[0] == '한국':
-                    entity.originaltitle = entity.title
-                else:
-                    entity.originaltitle = entity.extra_info['title_en']
-            except: pass
+            entity.originaltitle = data['original_title']
             if type(entity) != EntityShow:
-                entity.art.append(EntityThumb(aspect='poster', value=data['poster']['original'], thumb=data['poster']['small'], site=cls.site_name, score=60))
+                entity.art.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
                 entity.art.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
             else:
-                entity.thumb.append(EntityThumb(aspect='poster', value=data['poster']['original'], thumb=data['poster']['small'], site=cls.site_name, score=60))
+                entity.thumb.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
                 entity.thumb.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
 
-            entity.plot = data['story'] if data['story'] else ''
+            entity.plot = data['description'] if data['description'] else ''
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -107,8 +114,8 @@ class SiteWatcha(object):
     @classmethod
     def info_review(cls, code, entity, api_return=False):
         try:
-            url = 'https://pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular&page=1&size=8' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
+            url = 'https://pedia.watcha.com/api/contents/%s/comments?filter=all&order=popular' % code
+            data = cls.get_json(url)
             if api_return:
                 return data
             for item in data['result']['result']:
@@ -133,8 +140,8 @@ class SiteWatcha(object):
     @classmethod
     def info_collection(cls, code, entity, api_return=False, like_count=100):
         try:
-            url = 'https://pedia.watcha.com/api/contents/%s/decks?page=1&size=10' % code
-            data = SiteUtil.get_response(url, headers=cls.default_headers).json()
+            url = 'https://pedia.watcha.com/api/contents/%s/decks' % code
+            data = cls.get_json(url)
             if api_return:
                 return data
             for item in data['result']['result']:
@@ -144,7 +151,18 @@ class SiteWatcha(object):
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
-
+    @classmethod
+    def get_json(cls, url: str) -> dict | None:
+        try:
+            data = SiteUtil.get_response(
+                url,
+                headers=cls.default_headers,
+                proxy_url=cls._proxy_url,
+                cookies=cls._watcha_cookie,
+            ).json()
+            return data
+        except:
+            logger.error(traceback.format_exc())
 
 
 
@@ -182,10 +200,10 @@ class SiteWatchaMovie(SiteWatcha):
                     entity = EntitySearchItemMovie(cls.site_name)
                     entity.code = cls.module_char + cls.site_char + item['code']
                     entity.title = item['title']
-                    if 'poster' in item and item['poster'] is not None and 'original' in item['poster']:
-                        entity.image_url = item['poster']['original']
+                    if 'poster' in item and item['poster'] is not None and 'hd' in item['poster']:
+                        entity.image_url = item['poster']['hd']
                     entity.year = item['year']
-                    try: entity.desc = item['nations'][0]['name']
+                    try: entity.desc = f"{item['nations'][0]['name']} - {item['director_names'][0]}"
                     except: pass
                     if SiteUtil.compare(keyword, entity.title):
                         if year != 1900:
@@ -308,7 +326,7 @@ class SiteWatchaTv(SiteWatcha):
                 entity.title = item['title']
                 entity.year = item['year']
                 if 'poster' in item and item['poster'] is not None:
-                    for tmp in ['xlarge', 'large', 'medium', 'small']:
+                    for tmp in ['hd', 'xlarge', 'large', 'medium', 'small']:
                         if tmp in item['poster']:
                             entity.image_url = item['poster'][tmp]
                             break
@@ -369,7 +387,7 @@ class SiteWatchaTv(SiteWatcha):
                     season_data = cls.info_basic(item['seasons'][0]['info']['code'][2:], None, api_return=True)
                 else:
                     season_data = cls.info_basic(item['code'][2:], None, api_return=True)
-                logger.debug(season_data['eng_title'])
+                #logger.debug(season_data['eng_title'])
                 try: item['title_en'] = season_data['eng_title']
                 except: item['title_en'] = None
                 logger.debug('%s %s %s' % (item['title'], 'eng_title' in season_data, item['title_en']))

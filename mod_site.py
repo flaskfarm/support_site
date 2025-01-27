@@ -26,6 +26,9 @@ class ModuleSite(PluginModuleBase):
         'site_imgur_refresh_token': '',
         'site_imgur_account_username': '',
         'site_imgur_account_id': '',
+        'site_watcha_cookie' : '',
+        'site_watcha_use_proxy' : 'False',
+        'site_watcha_proxy_url' : '',
     }
 
     def __init__(self, P):
@@ -117,6 +120,7 @@ class ModuleSite(PluginModuleBase):
         flag_daum = False
         flag_tving = False
         flag_naver = False
+        flag_watcha = False
         for item in change_list:
             if item.startswith('site_wavve_'):
                 flag_wavve = True
@@ -126,6 +130,8 @@ class ModuleSite(PluginModuleBase):
                 flag_tving = True
             if item.startswith('site_naver_key'):
                 flag_naver = True
+            if item.startswith('site_watcha_'):
+                flag_watcha = True
 
         if flag_wavve:
             self.__wavve_init()
@@ -135,12 +141,15 @@ class ModuleSite(PluginModuleBase):
             self.__tving_init()
         if flag_naver:
             self.__naver_init()
+        if flag_watcha:
+            self.__watcha_init()
 
     def plugin_load(self):
         self.__wavve_init()
         self.__daum_init()
         self.__tving_init()
         self.__naver_init()
+        self.__watcha_init()
 
     def plugin_load_celery(self):
         '''
@@ -177,4 +186,12 @@ class ModuleSite(PluginModuleBase):
         from . import SiteNaver
         SiteNaver.initialize(
             P.ModelSetting.get('site_naver_key'),
+        )
+
+    def __watcha_init(self):
+        from . import SiteWatcha
+        SiteWatcha.initialize(
+            P.ModelSetting.get('site_watcha_cookie'),
+            P.ModelSetting.get_bool('site_watcha_use_proxy'),
+            P.ModelSetting.get('site_watcha_proxy_url'),
         )

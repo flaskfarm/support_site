@@ -54,7 +54,7 @@ from .site_tmdb import SiteTmdbFtv, SiteTmdbMovie, SiteTmdbTv
 from .site_tvdb import SiteTvdbTv
 from .site_tving import SiteTvingMovie, SiteTvingTv
 from .site_vibe import SiteVibe
-from .site_watcha import SiteWatchaKTv, SiteWatchaMovie, SiteWatchaTv
+from .site_watcha import SiteWatcha, SiteWatchaKTv, SiteWatchaMovie, SiteWatchaTv
 from .site_wavve import SiteWavveMovie, SiteWavveTv
 from .tool_imgur import ToolImgur
 

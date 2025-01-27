@@ -10,6 +10,7 @@
     {{ macros.m_tab_head('daum', 'Daum', true) }}
     {{ macros.m_tab_head('wavve', '웨이브', false) }}
     {{ macros.m_tab_head('tving', '티빙', false) }}
+    {{ macros.m_tab_head('watcha', '왓챠', false) }}
     {{ macros.m_tab_head('naver', '네이버 API', false) }}
     {{ macros.m_tab_head('imgur', 'imgur', false) }}
   {{ macros.m_tab_head_end() }}
@@ -50,6 +51,14 @@
   </div>
 {{ macros.m_tab_content_end() }}
 
+{{ macros.m_tab_content_start('watcha', false) }}
+  {{ macros.setting_input_text('site_watcha_cookie', 'Cookie', value=arg['site_watcha_cookie'],  desc=['세미콜론(;)으로 구분된 쿠키를 입력하세요.']) }}
+  {{ macros.setting_checkbox('site_watcha_use_proxy', 'Proxy 사용', value=arg['site_watcha_use_proxy'], desc=None) }}
+  <div id="site_watcha_use_proxy_div" class="collapse">
+  {{ macros.setting_input_text('site_watcha_proxy_url', 'Proxy URL', value=arg['site_watcha_proxy_url']) }}
+  </div>
+{{ macros.m_tab_content_end() }}
+
 {{ macros.m_tab_content_start('naver', false) }}
   {{ macros.setting_input_textarea('site_naver_key', '네이버 API', value=arg['site_naver_key'], row='10', desc=['여러 개의 키값을 지원합니다. 구분자 엔터', '파파고 번역 키와 중복 사용 가능', '예', 'Client_ID_1,Client_Secret_1','Client_ID_2,Client_Secret_2']) }}
 {{ macros.m_tab_content_end() }}
@@ -73,6 +82,7 @@ $(document).ready(function(){
   use_collapse("site_daum_use_proxy");
   use_collapse("site_wavve_use_proxy");
   use_collapse("site_tving_use_proxy");
+  use_collapse("site_watcha_use_proxy");
 });
 
 $('#site_daum_use_proxy').change(function() {
@@ -85,6 +95,10 @@ $('#site_wavve_use_proxy').change(function() {
 
 $('#site_tving_use_proxy').change(function() {
   use_collapse('site_tving_use_proxy');
+});
+
+$('#site_watcha_use_proxy').change(function() {
+  use_collapse('site_watcha_use_proxy');
 });
 
 
