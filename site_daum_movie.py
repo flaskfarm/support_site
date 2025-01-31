@@ -1,3 +1,4 @@
+import re
 import urllib.parse
 
 import requests
@@ -59,7 +60,7 @@ class SiteDaumMovie(SiteDaum):
             # 포스터
             c_thumbs = movie_section.xpath('.//c-doc-content//c-thumb')
             if c_thumbs:
-                entity.image_url = c_thumbs[0].attrib['data-original-src']
+                entity.image_url = cls.process_image_url(c_thumbs[0])
 
             # 줄거리
             c_summaries = movie_section.xpath('.//c-summary')
@@ -114,7 +115,7 @@ class SiteDaumMovie(SiteDaum):
                         continue
                     c_thumbs = c_doc.xpath('./c-thumb')
                     if c_thumbs:
-                        img_src = c_thumbs[0].attrib['data-original-src']
+                        img_src = cls.process_image_url(c_thumbs[0])
                         s_info.image_url = img_src if 'http' in img_src else ''
                     search_results.append(s_info.as_dict())
 
@@ -226,8 +227,9 @@ class SiteDaumMovie(SiteDaum):
     def get_movie_info(cls, code: str) -> dict[str, str | list]:
         movie_info = {}
         try:
-            code_ = code.split('#')
-            title = urllib.parse.unquote(code_[1])
+            code_, _, title = code.partition('#')
+            daum_id = code_[2:]
+            title = urllib.parse.unquote(title)
             logger.info(f'Daum info: {title=}')
             '''
             https://search.daum.net/search?w=cin&q=%ED%82%A4%EB%93%9C&DA=EM1&rtmaxcoll=EM1&irt=movie-single-tab&irk=13552&refq=%ED%82%A4%EB%93%9C&tabInfo=total
@@ -238,7 +240,7 @@ class SiteDaumMovie(SiteDaum):
                 'DA': 'EM1',
                 'rtmaxcoll': 'EM1',
                 'irt': 'movie-single-tab',
-                'irk': code_[0][2:],
+                'irk': daum_id,
                 'refq': title,
                 'tabInfo': 'total',
             }
@@ -252,7 +254,7 @@ class SiteDaumMovie(SiteDaum):
 
             entity = EntityMovie2(cls.site_name, None)
             entity.code = code
-            entity.code_list.append(['daum_id', code_[0][2:]])
+            entity.code_list.append(['daum_id', daum_id])
 
             # 제목, daum_id
             c_titles = movie_section.xpath('.//c-header-content/c-title')
@@ -268,7 +270,6 @@ class SiteDaumMovie(SiteDaum):
                     entity.year = int(release_year.strip())
                 except:
                     entity.year = 1900
-                entity.code += f'#{entity.year}#{urllib.parse.quote(entity.title)}'
 
             # 포스터
             c_thumbs = movie_section.xpath('.//c-doc-content//c-thumb')
@@ -276,7 +277,8 @@ class SiteDaumMovie(SiteDaum):
                 try:
                     w, h = int(c_thumbs[0].attrib['width']), int(c_thumbs[0].attrib['height'])
                     aspect = 'poster' if h > w else 'landscape'
-                    entity.art.append(EntityThumb(aspect=aspect, value=c_thumbs[0].attrib['data-original-src'], site=cls.site_name, score=65))
+                    image_url = cls.process_image_url(c_thumbs[0])
+                    entity.art.append(EntityThumb(aspect=aspect, value=image_url, site=cls.site_name, score=100))
                 except:
                     logger.error(traceback.format_exc())
 
@@ -320,13 +322,13 @@ class SiteDaumMovie(SiteDaum):
             # 감독/출연
             for c_doc in movie_section.xpath('.//c-list-doc[@data-title="감독/출연"]/c-doc'):
                 try:
-                    actor = EntityActor(None, site=cls.site_name)
+                    actor = EntityActor('', site=cls.site_name)
                     c_titles = c_doc.xpath('./c-title')
                     if c_titles:
                         actor.name = c_titles[0].text.strip()
                     c_thumbs = c_doc.xpath('./c-thumb')
                     if c_thumbs:
-                        thumb_url = c_thumbs[0].attrib['data-original-src']
+                        thumb_url = cls.process_image_url(c_thumbs[0])
                         actor.thumb = thumb_url if 'http' in thumb_url else urllib.parse.urljoin(cls.get_request_url(), thumb_url)
                     c_contents_descs = c_doc.xpath('./c-contents-desc')
                     if c_contents_descs:
@@ -335,7 +337,7 @@ class SiteDaumMovie(SiteDaum):
                     if c_contents_desc_subs:
                         sub_role = c_contents_desc_subs[0].text.strip()
                         if sub_role == '감독':
-                            entity.director = actor.name
+                            entity.director.append(actor.name)
                             continue
                     entity.actor.append(actor)
                 except:
@@ -347,7 +349,7 @@ class SiteDaumMovie(SiteDaum):
                     extra = EntityExtra2()
                     c_thumbs = c_doc.xpath('./c-thumb')
                     if c_thumbs:
-                        thumb_url = c_thumbs[0].attrib['data-original-src']
+                        thumb_url = cls.process_image_url(c_thumbs[0])
                         content_url = c_thumbs[0].attrib['data-href']
                         extra.thumb = thumb_url if 'http' in thumb_url else urllib.parse.urljoin(cls.get_request_url(), thumb_url)
                         extra.content_url = content_url if 'http' in thumb_url else urllib.parse.urljoin(cls.get_request_url(), content_url)
@@ -365,11 +367,10 @@ class SiteDaumMovie(SiteDaum):
             # 포토
             for c_thumb in movie_section.xpath('.//c-card[@id="em1Coll_photos"]//c-thumb'):
                 try:
-                    thumb_url = c_thumb.attrib['data-original-src']
-                    thumb_url = thumb_url if 'http' in thumb_url else urllib.parse.urljoin(cls.get_request_url(), thumb_url)
+                    image_url = cls.process_image_url(c_thumb)
                     w, h = int(c_thumb.attrib['width']), int(c_thumb.attrib['height'])
                     aspect = 'poster' if h > w else 'landscape'
-                    entity.art.append(EntityThumb(aspect=aspect, value=thumb_url, site=cls.site_name, score=50))
+                    entity.art.append(EntityThumb(aspect=aspect, value=image_url, site=cls.site_name, score=100))
                 except:
                     logger.error(traceback.format_exc())
 

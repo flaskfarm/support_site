@@ -39,15 +39,7 @@ class SiteDaumTv(SiteDaum):
     def search(cls, keyword: str, daum_id: str | int = None, year: str | int = None, image_mode: str = '0') -> dict[str, str | dict]:
         try:
             keyword = keyword.replace(' | 시리즈', '').strip()
-            keyword = cls.get_search_name_from_original(keyword)
-            '''
-            # 애플 오리지널 타이틀
-            match = re.compile("(.+)?('.+')(.+)?").search(keyword)
-            if match:
-                unquoted = match.group(2).replace("'", '')
-                paragraph = [phrase.strip() for phrase in [match.group(1), unquoted, match.group(3)] if phrase]
-                keyword = ' '.join(paragraph)
-            '''
+            logger.debug(f'Daum TV search: {keyword=} {year=}')
             ret = {}
 
             query = cls.get_default_tv_query(q=keyword, spId=daum_id)
@@ -56,6 +48,14 @@ class SiteDaumTv(SiteDaum):
             root = SiteDaum.get_tree(url)
             data = cls.get_show_info_on_home(root)
 
+            if not data:
+                # 애플 오리지널 타이틀
+                quotes = re.compile(r"'(.+?)'").findall(keyword)
+                if quotes:
+                    search_title = quotes[0]
+                    retry_data = cls.search(search_title, daum_id, year, image_mode)
+                    if retry_data['ret'] == 'success':
+                        data = retry_data['data']
             if data is not None and data['code'] in ['KD58568']:
                 data = None
             if data is None:
@@ -437,7 +437,8 @@ class SiteDaumTv(SiteDaum):
                 name_text.encode('ascii')
                 return name_text
             except UnicodeEncodeError:
-                logger.warning(f'Is it English? {name_text}')
+                #logger.warning(f'Is it English? {name_text}')
+                return
         except:
             logger.error(traceback.format_exc())
             logger.error(f'{name=}')
