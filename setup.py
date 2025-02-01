@@ -82,12 +82,15 @@ def scan_iter(expression: str) -> Iterable[str]:
         yield key
 
 
-'''
-cursor = '0'
-while cursor != 0:
-    cursor, keys = REDIS_CONN.scan(cusor=cursor, match=f'{REDIS_KEY_PLUGIN}:*', count=5000)
-    if keys:
-        REDIS_CONN.delete(*keys)
-'''
-for key in scan_iter(f'{REDIS_KEY_PLUGIN}:*'):
-    REDIS_CONN.delete(key)
+try:
+    '''
+    cursor = '0'
+    while cursor != 0:
+        cursor, keys = REDIS_CONN.scan(cusor=cursor, match=f'{REDIS_KEY_PLUGIN}:*', count=5000)
+        if keys:
+            REDIS_CONN.delete(*keys)
+    '''
+    for key in scan_iter(f'{REDIS_KEY_PLUGIN}:*'):
+        REDIS_CONN.delete(key)
+except:
+    P.logger.error(traceback.format_exc())
