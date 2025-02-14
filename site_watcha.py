@@ -89,21 +89,24 @@ class SiteWatcha(object):
             try: entity.runtime = int(data['duration']/60)
             except: pass
             try:
-                data['original_title'].encode('ascii')
-                entity.extra_info['title_en'] = data['original_title']
+                entity.extra_info['title_en'] = data.get('eng_title', '')
+                if not entity.extra_info['title_en']:
+                    data['original_title'].encode('ascii')
+                    entity.extra_info['title_en'] = data.get('original_title', '')
             except: pass
-            entity.mpaa = data['age_rating_long']
+            entity.mpaa = data.get('film_rating_long') or data.get('age_rating_long') or data.get('age_rating_short', '')
             for item in data['genres']:
                 entity.genre.append(item)
             try: entity.country.append(data['nations'][0]['name'])
             except: pass
             entity.originaltitle = data['original_title']
-            if type(entity) != EntityShow:
-                entity.art.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
-                entity.art.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
-            else:
-                entity.thumb.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
-                entity.thumb.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
+            if data.get('poster'):
+                if type(entity) != EntityShow:
+                    entity.art.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
+                    entity.art.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
+                else:
+                    entity.thumb.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
+                    entity.thumb.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
 
             entity.plot = data['description'] if data['description'] else ''
         except Exception as e:
@@ -207,7 +210,7 @@ class SiteWatchaMovie(SiteWatcha):
                     entity.title = ''.join(pritable_chars)
                     if 'poster' in item and item['poster'] is not None and 'hd' in item['poster']:
                         entity.image_url = item['poster']['hd']
-                    entity.year = item['year']
+                    entity.year = item.get('year') or 1900
                     try: entity.desc = f"{item['nations'][0]['name']} - {item['director_names'][0]}"
                     except: pass
                     if SiteUtil.compare(keyword, entity.title):
