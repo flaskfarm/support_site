@@ -80,12 +80,20 @@ class SiteDaum(object):
             예능 | 10.07.11. ~
             영국드라마 | 10부작 | 24.11.15. ~
             뉴스 | 70.10.05. ~
+            12부작 | 25.01.06. ~ 02.11. | 완결
+            18.11.24. ~
             '''
             sub_headers = root.xpath('//div[@id="tvpColl"]//div[@class="sub_header"]/span/span')
             # 장르
             if sub_headers:
-                entity.genre = sub_headers[0].xpath('string()').strip()
-                del sub_headers[0]
+                #genre_a = sub_headers[0].xpath('./a')
+                #if genre_a:
+                #    entity.genre = genre_a[0].text.strip()
+                #    del sub_headers[0]
+                tmp = sub_headers[0].xpath('string()').strip()
+                if tmp and not tmp[0].isdigit():
+                    entity.genre = tmp
+                    del sub_headers[0]
 
             # 방송 상태 및 방영일
             '''
