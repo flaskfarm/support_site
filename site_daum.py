@@ -29,7 +29,11 @@ class SiteDaum(object):
     @classmethod
     def initialize(cls, daum_cookie: str, use_proxy: bool = False, proxy_url: str = None) -> None:
         cookies = SimpleCookie()
-        cookies.load(daum_cookie)
+        try:
+            cookies.load(daum_cookie)
+        except:
+            logger.error(traceback.format_exc())
+            logger.error('입력한 쿠키 값을 확인해 주세요.')
         cls._daum_cookie = {key:morsel.value for key, morsel in cookies.items()}
         cls._use_proxy = use_proxy
         if cls._use_proxy:

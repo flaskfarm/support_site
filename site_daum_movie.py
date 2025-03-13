@@ -230,6 +230,8 @@ class SiteDaumMovie(SiteDaum):
             code_, _, title = code.partition('#')
             daum_id = code_[2:]
             title = urllib.parse.unquote(title)
+            if not title:
+                raise Exception(f'No title in this code: {code}')
             logger.info(f'Daum info: {title=}')
             '''
             https://search.daum.net/search?w=cin&q=%ED%82%A4%EB%93%9C&DA=EM1&rtmaxcoll=EM1&irt=movie-single-tab&irk=13552&refq=%ED%82%A4%EB%93%9C&tabInfo=total

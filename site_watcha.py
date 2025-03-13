@@ -39,6 +39,10 @@ class SiteWatcha(object):
         'X-Frograms-Version': '2.1.0',
     }
 
+    IMAGE_QUALITIES = ['xlarge', 'large', 'medium', 'small']
+    POSTER_QUALITIES = ['hd', *IMAGE_QUALITIES]
+    STILLCUT_QUALITIES = ['original', 'fullhd', *IMAGE_QUALITIES]
+
     @classmethod
     def initialize(cls, watcha_cookie: str, use_proxy: bool = False, proxy_url: str = None) -> None:
         cookies = SimpleCookie()
@@ -100,18 +104,19 @@ class SiteWatcha(object):
             try: entity.country.append(data['nations'][0]['name'])
             except: pass
             entity.originaltitle = data['original_title']
-            if data.get('poster'):
-                if type(entity) != EntityShow:
-                    entity.art.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
-                    entity.art.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
-                else:
-                    entity.thumb.append(EntityThumb(aspect='poster', value=data['poster']['hd'], thumb=data['poster']['small'], site=cls.site_name, score=60))
-                    entity.thumb.append(EntityThumb(aspect='landscape', value=data['stillcut']['original'], thumb=data['stillcut']['small'], site=cls.site_name, score=60))
-
+            images = {
+                'posters': [data['poster'][q] for q in cls.POSTER_QUALITIES if q in (data.get('poster') or {})],
+                'stillcuts': [data['stillcut'][q] for q in cls.STILLCUT_QUALITIES if q in (data.get('stillcut') or {})]
+            }
+            for key in images:
+                if not images[key]: continue
+                thumb_entity = EntityThumb(aspect='poster' if key == 'posters' else 'landscape', value=images[key][0], thumb=images[key][-1], site=cls.site_name, score=60)
+                entity.thumb.append(thumb_entity) if type(entity) is EntityShow else entity.art.append(thumb_entity)
             entity.plot = data['description'] if data['description'] else ''
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
+            logger.error(f'code={code}')
 
 
     @classmethod
