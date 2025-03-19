@@ -46,7 +46,11 @@ class SiteWatcha(object):
     @classmethod
     def initialize(cls, watcha_cookie: str, use_proxy: bool = False, proxy_url: str = None) -> None:
         cookies = SimpleCookie()
-        cookies.load(watcha_cookie)
+        try:
+            cookies.load(watcha_cookie)
+        except:
+            logger.error(traceback.format_exc())
+            logger.error('입력한 쿠키 값을 확인해 주세요.')
         cls._watcha_cookie = {key:morsel.value for key, morsel in cookies.items()}
         cls._use_proxy = use_proxy
         cls._proxy_url = proxy_url if cls._use_proxy else None

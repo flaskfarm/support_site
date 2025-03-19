@@ -19,7 +19,7 @@
 <form id='setting' name='setting'>
 <div class="tab-content" id="nav-tabContent">
 {{ macros.m_tab_content_start('daum', true) }}
-  {{ macros.setting_input_text('site_daum_cookie', 'Cookie', value=arg['site_daum_cookie'],  desc=['세미콜론(;)으로 구분된 쿠키를 입력하세요.', '_T_ANO=xxxxx', '_T_ANO=xxxxx; _EXAMPLE_COOKIE=COOKIE_VALUE;']) }}
+  {{ macros.setting_input_text('site_daum_cookie', 'Cookie', value=arg['site_daum_cookie'],  desc=['세미 콜론(;)으로 구분된 key=value; 형식의 쿠키를 입력하세요.', '_T_ANO=xxxxx', '_T_ANO=xxxxx; _EXAMPLE_COOKIE=COOKIE_VALUE;']) }}
   {{ macros.setting_checkbox('site_daum_use_proxy', 'Proxy 사용', value=arg['site_daum_use_proxy'], desc=None) }}
   <div id="site_daum_use_proxy_div" class="collapse">
   {{ macros.setting_input_text('site_daum_proxy_url', 'Proxy URL', value=arg['site_daum_proxy_url']) }}
@@ -33,7 +33,7 @@
 {{ macros.m_tab_content_start('wavve', false) }}
   {{ macros.setting_input_textarea('site_wavve_credential', 'Credential', value=arg['site_wavve_credential'], row='6') }}
   {{ macros.setting_checkbox('site_wavve_use_proxy', 'Proxy 사용', value=arg['site_wavve_use_proxy'], desc=None) }}
-  {{ macros.setting_input_text_and_buttons('site_wavve_profile', '프로필', [['site_wavve_login_btn', 'Credential 갱신']],value=arg['site_wavve_profile'], desc=['계정 정보','형식: {"id": "아이디", "password": "비밀번호", "profile": "0부터 시작하는 프로필 번호"}','잦은 로그인 시도시 이전 Credential Expire']) }}
+  {{ macros.setting_input_text_and_buttons('site_wavve_profile', '프로필', [['site_wavve_login_btn', 'Credential 갱신']],value=arg['site_wavve_profile'], desc=['계정 정보','형식: {"id": "아이디", "password": "비밀번호", "profile": "0부터 시작하는 프로필 번호", "device_id": "갱신시 자동 입력"}','잦은 로그인 시도시 이전 Credential Expire']) }}
   <div id="site_wavve_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_wavve_proxy_url', 'Proxy URL', value=arg['site_wavve_proxy_url'], desc=None) }}
   </div>
@@ -52,7 +52,7 @@
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('watcha', false) }}
-  {{ macros.setting_input_text('site_watcha_cookie', 'Cookie', value=arg['site_watcha_cookie'],  desc=['세미콜론(;)으로 구분된 쿠키를 입력하세요.']) }}
+  {{ macros.setting_input_text('site_watcha_cookie', 'Cookie', value=arg['site_watcha_cookie'],  desc=['세미 콜론(;)으로 구분된 key=value; 형식의 쿠키를 입력하세요.']) }}
   {{ macros.setting_checkbox('site_watcha_use_proxy', 'Proxy 사용', value=arg['site_watcha_use_proxy'], desc=None) }}
   <div id="site_watcha_use_proxy_div" class="collapse">
   {{ macros.setting_input_text('site_watcha_proxy_url', 'Proxy URL', value=arg['site_watcha_proxy_url']) }}

@@ -7,8 +7,8 @@ class ModuleSite(PluginModuleBase):
         f"site_wavve_credential": "",
         f"site_wavve_use_proxy": "False",
         f"site_wavve_proxy_url": "",
-        f"site_wavve_profile":'{"id": "", "password": "", "profile": "0"}',
-        'site_daum_cookie' : 'TIARA=2KF1ajSnpkcUMt_AybEXcWY4pblBYRevTpfe177Yr-Z4As9lEoe5RS1i4nDhXbJiy2e.l5weR5Qq38qWoaUNFU7gxRChQhkpe5DL.Aex4vM0',
+        f"site_wavve_profile":'{"id": "", "password": "", "profile": "0", "device_id": ""}',
+        'site_daum_cookie' : '',
         'site_daum_use_proxy' : 'False',
         'site_daum_proxy_url' : '',
         'site_daum_test' : '오버 더 레인보우',
@@ -65,9 +65,8 @@ class ModuleSite(PluginModuleBase):
                 from . import SupportWavve
                 account = json.loads(arg1)
                 P.ModelSetting.set('site_wavve_profile', arg1)
-                result = SupportWavve.do_login(account['id'], account['password'], account['profile'])
+                result = SupportWavve.do_login(account['id'], account['password'], account['profile'], account.get('device_id'))
                 if result[0]:
-                    P.ModelSetting.set('site_wavve_credential', result[1]['credential'])
                     ret['msg'] = "로그인 성공<br>Credential을 갱신하였습니다."
                     ret['credential'] = result[1]['credential']
                 else:
