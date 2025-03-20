@@ -33,7 +33,7 @@
 {{ macros.m_tab_content_start('wavve', false) }}
   {{ macros.setting_input_textarea('site_wavve_credential', 'Credential', value=arg['site_wavve_credential'], row='6') }}
   {{ macros.setting_checkbox('site_wavve_use_proxy', 'Proxy 사용', value=arg['site_wavve_use_proxy'], desc=None) }}
-  {{ macros.setting_input_text_and_buttons('site_wavve_profile', '프로필', [['site_wavve_login_btn', 'Credential 갱신']],value=arg['site_wavve_profile'], desc=['계정 정보','형식: {"id": "아이디", "password": "비밀번호", "profile": "0부터 시작하는 프로필 번호", "device_id": "갱신시 자동 입력"}','잦은 로그인 시도시 이전 Credential Expire']) }}
+  {{ macros.setting_input_text_and_buttons('site_wavve_profile', '프로필', [['site_wavve_login_btn', 'Credential 갱신']],value=arg['site_wavve_profile'], desc=['계정 정보','형식: {"id": "아이디", "password": "비밀번호", "profile": "0부터 시작하는 프로필 번호", "device_id": "갱신시 자동 입력"}','잦은 로그인 시도시 이전 Credential Expire', 'id, password 값이 있을 경우 자동으로 Credential 갱신']) }}
   <div id="site_wavve_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_wavve_proxy_url', 'Proxy URL', value=arg['site_wavve_proxy_url'], desc=None) }}
   </div>
