@@ -138,9 +138,14 @@ class SiteDaum(object):
             # 스튜디오
             studio_elements = root.xpath('//div[@id="tvpColl"]//dd[@class="program"]//span[@class="inner"]')
             if studio_elements:
-                studio_element_a = studio_elements[0].xpath('a')
-                if studio_element_a:
-                    entity.studio = studio_element_a[0].text.strip()
+                for element in studio_elements:
+                    a_tags = element.xpath('a')
+                    if a_tags:
+                        entity.studio = a_tags[0].text.strip()
+                        break
+                else:
+                    ptr = re.compile(r'(.+\w)\s[월화수목금토일].*')
+                    entity.studio = ptr.sub(r'\1', studio_elements[0].text.strip())
 
             # 설명
             desc_elements = root.xpath('//div[@id="tvpColl"]//*[contains(@class, "desc_story")]')
