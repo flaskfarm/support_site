@@ -101,7 +101,8 @@ class SiteWavveTv(SiteWavve):
     def _apply_tv_by_program(cls, show, program_info, all_episode=True):
         try:
             show['extra_info']['wavve_id'] = program_info['programid']
-            show['plot'] = program_info['programsynopsis'].replace('<br>', '\r\n')
+            if program_info.get('programsynopsis'):
+                show['plot'] = program_info['programsynopsis'].replace('<br>', '\r\n')
             score = 70
             show['thumb'].append(EntityThumb(aspect='landscape', value='https://' + program_info['image'], site=cls.site_name, score=0).as_dict())
             program_info['posterimage']= program_info['posterimage'].replace('img.pooq.co.kr/BMS/program_poster', 'image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster')
