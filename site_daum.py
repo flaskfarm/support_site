@@ -46,7 +46,7 @@ class SiteDaum(object):
         doc = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
         captcha_scripts = doc.xpath('//script[contains(text(), "captcha")]')
         if captcha_scripts:
-            logger.warning(f'url="{url}"\nbody="{lxml.etree.tostring(doc, encoding=str)}"')
+            logger.warning(f'url="{url}"\nbody="{html.escape(lxml.etree.tostring(doc, encoding=str))}"')
         return doc
 
     @classmethod
