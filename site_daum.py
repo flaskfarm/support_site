@@ -44,10 +44,20 @@ class SiteDaum(object):
     @classmethod
     def get_tree(cls, url: str) -> lxml.html.HtmlElement:
         doc = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
-        captcha_scripts = doc.xpath('//script[contains(text(), "captcha")]')
-        if captcha_scripts:
-            logger.warning(f'url="{url}"\nbody="{html.escape(lxml.etree.tostring(doc, encoding=str))}"')
+        cls.is_duam_captcha(doc)
         return doc
+
+    redirect_pattern = re.compile(r"location\.(replace|assign|href\s?=).?[\"'](.+?)[\"'].?")
+
+    @classmethod
+    def is_duam_captcha(cls, doc: lxml.html.HtmlElement) -> bool:
+        script_text = doc.xpath("string(//head//script)")
+        match = cls.redirect_pattern.search(script_text)
+        if redirect := match.group(2) if match else None:
+            logger.warning(f"{redirect=}")
+            if 'captcha' in redirect:
+                return True
+        return False
 
     @classmethod
     def get_show_info_on_home(cls, root: lxml.html.HtmlElement) -> dict | None:

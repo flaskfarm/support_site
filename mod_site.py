@@ -143,6 +143,13 @@ class ModuleSite(PluginModuleBase):
         if flag_watcha:
             self.__watcha_init()
 
+        if any((flag_wavve, flag_daum, flag_tving, flag_naver, flag_watcha)):
+            try:
+                from . import SiteUtil
+                SiteUtil.initialize()
+            except:
+                logger.error(traceback.format_exc())
+
     def plugin_load(self):
         self.__wavve_init()
         self.__daum_init()

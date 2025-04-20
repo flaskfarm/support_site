@@ -376,8 +376,8 @@ class SiteDaumTv(SiteDaum):
                 entity.premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
                 hset(f'{cls.REDIS_KEY_DAUM}:tv:show:{show_id}:episodes:{entity.episode}', 'premiered', entity.premiered)
                 entity.year = date.year if date else 1900
-                weekday = cls.weekdays[date.weekday()]
-                title_date = date.strftime("%Y.%m.%d.")
+                weekday = cls.weekdays[date.weekday()] if date else None
+                title_date = date.strftime("%Y.%m.%d.") if date else ' '.join(date_text).strip()
                 date_in_title = f'{title_date}({weekday})' if weekday else title_date
             except:
                 logger.error(traceback.format_exc())

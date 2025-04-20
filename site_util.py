@@ -19,6 +19,11 @@ class SiteUtil(object):
     }
 
     @classmethod
+    def initialize(cls):
+        logger.debug('Request session has been initialized.')
+        cls.session = requests.Session()
+
+    @classmethod
     def get_tree(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
         text = cls.get_text(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify)
         if text is None:
@@ -48,7 +53,7 @@ class SiteUtil(object):
             else:
                 res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies, verify=verify)
         if not 300 > res.status_code > 199:
-            logger.warning(f'http_code={res.status_code} url="{res.url} "body="{html.escape(res.text)}"')
+            logger.warning(f'http_code={res.status_code} url="{res.url}" "body="{html.escape(res.text)}"')
         return res
 
 
