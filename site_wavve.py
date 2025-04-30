@@ -89,9 +89,12 @@ class SiteWavveTv(SiteWavve):
                         # 2021-10-03  JTBC2 부자의 탄생
                         # Daum 검색 -> 회차정보 없음 -> 동명 드라마 에피 정보가 들어가버림
                         # 스튜디오로나 첫날짜가 같다면 동일로 판단. 이것들 정보가 항상 있는지 파악 못함
-                        if info is not None and (show['studio'] == info['cpname'] or show['premiered'] == info['firstreleasedate']):
-                            cls._apply_tv_by_program(show, info)
-                            break
+                        if info:
+                            if show['studio'] == info['cpname'] or show['premiered'] == info['firstreleasedate']:
+                                cls._apply_tv_by_program(show, info)
+                                break
+                            else:
+                                logger.debug(f'Not match: {show["title"]=} {show["studio"]=} {info["cpname"]=} {show["premiered"]=} {info["firstreleasedate"]=}')
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
