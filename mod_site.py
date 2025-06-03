@@ -29,6 +29,8 @@ class ModuleSite(PluginModuleBase):
         'site_watcha_cookie' : '',
         'site_watcha_use_proxy' : 'False',
         'site_watcha_proxy_url' : '',
+        'site_wavve_patterns_episode': '^(\d{1,5})$\n^.+\D+(\d{1,5})$',
+        'site_wavve_patterns_title': '^(.*)$',
     }
 
     def __init__(self, P):
