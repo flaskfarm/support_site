@@ -602,8 +602,9 @@ class SiteUtil(object):
 
     @classmethod
     def normalize_url(cls, url: str, scheme: str ='https') -> str:
-        url = url.lstrip('/')
+        if url.startswith('http'):
+            return url
         parsed = urllib.parse.urlparse(url, scheme=scheme)
         if not parsed.netloc:
-            parsed = urllib.parse.urlparse(f'{parsed.scheme}://{url}', scheme=scheme)
+            parsed = urllib.parse.urlparse(f'{parsed.scheme}://{url.strip('/')}', scheme=scheme)
         return urllib.parse.urlunparse(parsed)
