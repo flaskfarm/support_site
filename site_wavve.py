@@ -57,7 +57,7 @@ class SiteWavveTv(SiteWavve):
                     if match:
                         entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + match.group('code')
                     item['thumbnail'] = item['thumbnail'].replace('img.pooq.co.kr/BMS/program_poster', 'image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster')
-                    entity.image_url = 'https://' + item['thumbnail']
+                    entity.image_url = SiteUtil.normalize_url(item['thumbnail'])
                     if SiteUtil.compare_show_title(entity.title, keyword):
                         entity.score = 100 - count_100
                         count_100 += 1
@@ -107,9 +107,9 @@ class SiteWavveTv(SiteWavve):
             if program_info.get('programsynopsis'):
                 show['plot'] = program_info['programsynopsis'].replace('<br>', '\r\n')
             score = 70
-            show['thumb'].append(EntityThumb(aspect='landscape', value='https://' + program_info['image'], site=cls.site_name, score=0).as_dict())
+            show['thumb'].append(EntityThumb(aspect='landscape', value=SiteUtil.normalize_url(program_info['image']), site=cls.site_name, score=0).as_dict())
             program_info['posterimage']= program_info['posterimage'].replace('img.pooq.co.kr/BMS/program_poster', 'image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster')
-            show['thumb'].append(EntityThumb(aspect='poster', value='https://' + program_info['posterimage'], site=cls.site_name, score=score).as_dict())
+            show['thumb'].append(EntityThumb(aspect='poster', value=SiteUtil.normalize_url(program_info['posterimage']), site=cls.site_name, score=score).as_dict())
 
             page = 1
             epi = None
@@ -128,7 +128,7 @@ class SiteWavveTv(SiteWavve):
 
                     show['extra_info']['episodes'][epi_no][cls.site_name] = {
                         'code' : cls.module_char + cls.site_char + epi['contentid'],
-                        'thumb' : 'https://' + epi['image'],
+                        'thumb' : SiteUtil.normalize_url(epi['image']),
                         'plot' : epi['synopsis'].replace('<br>', '\r\n'),
                         'premiered' : epi['releasedate'],
                         'title' : epi['episodetitle'],
@@ -221,7 +221,7 @@ class SiteWavveMovie(SiteWavve):
                         entity.code = cls.module_char + cls.site_char + match.group('code')
 
                     entity.title = item['title_list'][0]['text']
-                    entity.image_url = 'https://' + item['thumbnail']
+                    entity.image_url = SiteUtil.normalize_url(item['thumbnail'])
                     entity.desc = u'Age: %s' % (item['age'])
 
                     if SiteUtil.compare(keyword, entity.title):
@@ -280,7 +280,7 @@ class SiteWavveMovie(SiteWavve):
             for item in wavve_data['directors']['list']:
                 entity.director.append(item['text'])
 
-            entity.art.append(EntityThumb(aspect='poster', value='https://' + wavve_data['image'], site=cls.site_name, score=50))
+            entity.art.append(EntityThumb(aspect='poster', value=SiteUtil.normalize_url(wavve_data['image']), site=cls.site_name, score=50))
 
             try: entity.ratings.append(EntityRatings(float(wavve_data['rating']), name=cls.site_name))
             except: pass

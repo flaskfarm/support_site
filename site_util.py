@@ -599,3 +599,11 @@ class SiteUtil(object):
         'War & Politics' : u'전쟁 & 정치',
         'Reality' : '리얼리티',
     }
+
+    @classmethod
+    def normalize_url(cls, url: str, scheme: str ='https') -> str:
+        url = url.lstrip('/')
+        parsed = urllib.parse.urlparse(url, scheme=scheme)
+        if not parsed.netloc:
+            parsed = urllib.parse.urlparse(f'{parsed.scheme}://{url}', scheme=scheme)
+        return urllib.parse.urlunparse(parsed)
