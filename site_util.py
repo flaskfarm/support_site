@@ -606,5 +606,5 @@ class SiteUtil(object):
             return url
         parsed = urllib.parse.urlparse(url, scheme=scheme)
         if not parsed.netloc:
-            parsed = urllib.parse.urlparse(f'{parsed.scheme}://{url.strip('/')}', scheme=scheme)
+            parsed = urllib.parse.urlparse(f"{parsed.scheme}://{url.strip('/')}", scheme=scheme)
         return urllib.parse.urlunparse(parsed)
