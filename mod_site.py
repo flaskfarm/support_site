@@ -3,7 +3,7 @@ from .setup import *
 
 class ModuleSite(PluginModuleBase):
     db_default = {
-        f'db_version' : '1',
+        f'db_version' : '1.1',
         f"site_wavve_credential": "",
         f"site_wavve_use_proxy": "False",
         f"site_wavve_proxy_url": "",
@@ -29,8 +29,8 @@ class ModuleSite(PluginModuleBase):
         'site_watcha_cookie' : '',
         'site_watcha_use_proxy' : 'False',
         'site_watcha_proxy_url' : '',
-        'site_wavve_patterns_episode': '^(\d{1,5})$\n^.+\D+(\d{1,5})$',
-        'site_wavve_patterns_title': '^(.*)$',
+        'site_wavve_patterns_episode': '^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$',
+        'site_wavve_patterns_title': '^(?P<title>.*)$',
     }
 
     def __init__(self, P):
@@ -203,3 +203,14 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get_bool('site_watcha_use_proxy'),
             P.ModelSetting.get('site_watcha_proxy_url'),
         )
+
+    def migration(self) -> None:
+        '''override'''
+        version = P.ModelSetting.get('db_version')
+        P.logger.debug(f'현재 DB 버전: {version}')
+        if version == '1':
+            P.ModelSetting.set('site_wavve_patterns_episode', '^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$')
+            P.ModelSetting.set('site_wavve_patterns_title', '^(?P<title>.*)$')
+            version = '1.1'
+        P.logger.debug(f'최종 DB 버전: {version}')
+        P.ModelSetting.set('db_version', version)

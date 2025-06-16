@@ -37,8 +37,8 @@
   <div id="site_wavve_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_wavve_proxy_url', 'Proxy URL', value=arg['site_wavve_proxy_url'], desc=None) }}
   </div>
-  {{ macros.setting_input_textarea('site_wavve_patterns_title', '제목 정규식', value=arg['site_wavve_patterns_title'], row='6', desc=['파일명으로 사용할 제목을 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 매칭되는 첫번째 그룹의 문자열을 사용', '기본값:', '^(.*)$']) }}
-  {{ macros.setting_input_textarea('site_wavve_patterns_episode', '회차 번호 정규식', value=arg['site_wavve_patterns_episode'], row='6', desc=['파일명으로 사용할 회차 번호를 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 매칭되는 첫번째 그룹의 문자열을 회차 번호로 판단', '기본값:', '^(\d{1,5})$', '^.+\D+(\d{1,5})$']) }}
+  {{ macros.setting_input_textarea('site_wavve_patterns_title', '제목 정규식', value=arg['site_wavve_patterns_title'], row='6', desc=['파일명으로 사용할 제목을 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 title 그룹의 문자열을 사용', '기본값: ^(?P<title>.*)$', '예시: ^(?P<title>1박2일) 시즌.*$']) }}
+  {{ macros.setting_input_textarea('site_wavve_patterns_episode', '회차 번호 정규식', value=arg['site_wavve_patterns_episode'], row='6', desc=['파일명으로 사용할 회차 번호를 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 episode 그룹의 문자열을 회차 번호로 판단', '회차번호는 0보다 크고 최대 5자리까지만 인정', '기본값: ^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$', '']) }}
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('tving', false) }}
