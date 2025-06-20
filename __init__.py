@@ -57,6 +57,7 @@ from .site_vibe import SiteVibe
 from .site_watcha import SiteWatcha, SiteWatchaKTv, SiteWatchaMovie, SiteWatchaTv
 from .site_wavve import SiteWavveMovie, SiteWavveTv
 from .tool_imgur import ToolImgur
+from .tool_naver_cafe import ToolNaverCafe
 
 """
 from .site_fc2.site_7mmtv import Site7mmTv

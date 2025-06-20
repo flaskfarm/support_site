@@ -31,6 +31,12 @@ class ModuleSite(PluginModuleBase):
         'site_watcha_proxy_url' : '',
         'site_wavve_patterns_episode': '^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$',
         'site_wavve_patterns_title': '^(?P<title>.*)$',
+        'site_naver_login_client_id' : '',
+        'site_naver_login_client_secret' : '',
+        'site_naver_login_refresh_token' : '',
+        'site_naver_login_refresh_token_time' : '',
+        'site_naver_login_access_token' : '',
+        'site_naver_login_access_token_time' : '',
     }
 
     def __init__(self, P):
@@ -87,20 +93,9 @@ class ModuleSite(PluginModuleBase):
             else:
                 ret['msg'] = '실패'
                 ret['ret'] = 'error'
-
-        """
-        elif command == 'imgur_auth':
-            P.ModelSetting.set('site_imgur_client_id', arg1)
-            P.ModelSetting.set('site_imgur_client_secret', arg2)
-            from .tool_imgur import ToolImgur
-            tmp = ToolImgur.request_auth(arg1, arg2)
-            if tmp[0]:
-                ret['html'] = tmp[1]
-            else:
-                ret['ret'] = 'error'
-                ret['msg'] = f"실패: 응답코드 - {tmp[1]}"
-            return jsonify(ret)
-        """
+        elif command == 'naverlogin_callback_process':
+            from . import ToolNaverCafe
+            ret = ToolNaverCafe.do_login(arg1, arg2)
         return jsonify(ret)
 
     def process_normal(self, sub, req):

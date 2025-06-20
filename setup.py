@@ -19,6 +19,10 @@ setting = {
         ]
     },
     'default_route': 'normal',
+    'recent_menu_plugin_except_list': [
+        'site|naverlogin',
+        'site|imgur',
+    ]
 }
 
 
