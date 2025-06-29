@@ -1,7 +1,6 @@
 import urllib.parse
 from datetime import datetime
 from http.cookies import SimpleCookie
-import html
 
 import requests
 import lxml.etree
@@ -83,7 +82,7 @@ class SiteDaum(object):
                     html_titles_text = ' '.join(html_titles).strip()
                     logger.warning(f'검색 실패: {html_titles_text}')
                 else:
-                    logger.warning(f'검색 실패: {html.escape(lxml.etree.tostring(root, encoding=str))}')
+                    logger.warning(f'검색 실패: {lxml.etree.tostring(root, encoding=str)}')
                 return
 
             # 에피소드 번호 초기화
