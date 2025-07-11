@@ -1,25 +1,12 @@
-# -*- coding: utf-8 -*-
-# python
-import json
-import os
-import time
 import traceback
 
-import lxml.builder as builder
-# third-party
-import requests
-from flask import Blueprint, Response, redirect, request, send_file
-# sjva 공용
-from framework import SystemModelSetting, app, check_api, path_data, py_urllib
-from framework.logger import get_logger
-from framework.util import Util
 from lxml import etree as ET
-from lxml import html
 from lxml.builder import E
+import lxml.builder as builder
+from flask import Response
 
-from .plugin import P
-
-logger = P.logger
+from support import SupportFile
+from .setup import P, logger, app
 
 
 class UtilNfo(object):
@@ -56,14 +43,7 @@ class UtilNfo(object):
     @classmethod
     def _make_nfo_movie(cls, info):
         try:
-            #logger.debug('make nfo movie')
-            #logger.debug(json.dumps(info, indent=4))
-
             movie = builder.ElementMaker().movie()
-
-            #EE = builder.ElementMaker(namespace="http://www.itunes.com/dtds/podcast-1.0.dtd", nsmap={'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'})
-
-            #logger.debug('TITLE : %s', info['title'])
 
             movie = E.movie (
                 E.title(cls.change_html(info['title'])),
@@ -124,9 +104,6 @@ class UtilNfo(object):
             if isinstance(tmp, bytes):
                tmp = tmp.decode('utf-8')
             return tmp
-            #return app.response_class(tmp, mimetype='application/xml')
-
-
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -150,7 +127,4 @@ class UtilNfo(object):
             return response
         elif output == 'save':
             if savepath is not None:
-                from tool_base import ToolBaseFile
-                return ToolBaseFile.write(text, savepath)
-
-
+                return SupportFile.write_file(savepath, text)

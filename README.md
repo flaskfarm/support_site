@@ -1,6 +1,9 @@
 ## 공동개발
 
 ## Changelog
+- 1.2.0 (2025.07.11) by soju6jan
+  - jav uncensored 준비
+<br><br>  
 - 1.1.46 (2025.06.29)
     - Flaskfarm 로그 보안 적용 수정
 <br><br>
