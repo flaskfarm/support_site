@@ -7,15 +7,20 @@ from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 import traceback
 try:
-    import cloudscraper
+    import imagehash
 except ImportError:
-    os.system("pip install cloudscraper")
-    import cloudscraper
+    os.system("pip install imagehash")
+    import imagehash
 try:
     import requests_cache
 except ImportError:
     os.system("pip install requests-cache")
     import requests_cache
+try:
+    import cloudscraper
+except ImportError:
+    os.system("pip install cloudscraper")
+    import cloudscraper
 
 import requests
 from lxml import html
