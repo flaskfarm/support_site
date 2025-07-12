@@ -7,7 +7,6 @@ from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, 
 from ..setup import P, logger
 from ..site_util_av import SiteUtilAv as SiteUtil
 
-
 class SiteMgstage:
     site_name = "mgsdvd"
     site_char = "M"
@@ -32,7 +31,6 @@ class SiteMgstage:
     PTN_RATING = re.compile(r"\s(?P<rating>[\d\.]+)点\s.+\s(?P<vote>\d+)\s件")
 
 
-
     @classmethod
     def get_label_from_ui_code(cls, ui_code_str: str) -> str:
         if not ui_code_str or not isinstance(ui_code_str, str): return ""
@@ -45,7 +43,6 @@ class SiteMgstage:
         if match:
             return match.group('label')
         return label_part
-
 
 
     @classmethod
@@ -143,7 +140,6 @@ class SiteMgstage:
         return sorted_result
 
 
-
     @classmethod
     def search(cls, keyword, **kwargs):
         ret = {}
@@ -190,30 +186,6 @@ class SiteMgstage:
         return ret
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class SiteMgstageDvd(SiteMgstage):
     module_char = "C"
 
@@ -228,8 +200,6 @@ class SiteMgstageDvd(SiteMgstage):
             if potential_pf not in arts:
                 arts.insert(0, potential_pf)
         return {"pl": pl, "arts": arts}
-
-
 
 
     @classmethod
@@ -582,18 +552,38 @@ class SiteMgstageDvd(SiteMgstage):
         logger.debug(f"MGStage ({cls.module_char}): Final Images Decision - Poster='{str(final_poster_source)[:100]}...' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_url_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
 
         # --- 이미지 최종 적용 (서버 저장 또는 프록시) ---
-        if use_image_server and image_mode == 'image_server' and ui_code_for_image:
-            # 포스터 저장
+        if not (use_image_server and image_mode == 'image_server'):
+            # 프록시 모드 처리
+            if not skip_default_poster_logic and final_poster_source:
+                if not any(t.aspect == 'poster' for t in entity.thumb):
+                    processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
+                    if processed_poster:
+                        entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
+
+            if not skip_default_landscape_logic and final_landscape_url_source:
+                if not any(t.aspect == 'landscape' for t in entity.thumb):
+                    processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
+                    if processed_landscape:
+                        entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+
+            if arts_urls_for_processing:
+                if entity.fanart is None: entity.fanart = []
+                for art_url in arts_urls_for_processing:
+                    processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
+                    if processed_art and processed_art not in entity.fanart:
+                        entity.fanart.append(processed_art)
+
+        elif use_image_server and image_mode == 'image_server' and ui_code_for_image:
             if not skip_default_poster_logic and final_poster_source:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
                     p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                     if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
-            # 랜드스케이프 저장
+
             if not skip_default_landscape_logic and final_landscape_url_source:
                 if not any(t.aspect == 'landscape' for t in entity.thumb):
                     pl_path = SiteUtil.save_image_to_server_path(final_landscape_url_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
                     if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
-            # 팬아트 저장
+            
             if arts_urls_for_processing:
                 if entity.fanart is None: entity.fanart = []
                 current_fanart_urls_on_server = {fanart_url for fanart_url in entity.fanart if isinstance(fanart_url, str) and fanart_url.startswith(image_server_url)}
@@ -634,13 +624,6 @@ class SiteMgstageDvd(SiteMgstage):
 
         logger.info(f"MGStage ({cls.module_char}): __info finished for {code}. UI Code: {ui_code_for_image}, PSkip: {skip_default_poster_logic}, PLSkip: {skip_default_landscape_logic}, Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}")
         return entity
-
-
-
-
-
-
-
 
 
     @classmethod

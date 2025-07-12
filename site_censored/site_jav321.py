@@ -110,7 +110,7 @@ class SiteJav321:
         keyword,
         do_trans=True,
         proxy_url=None,
-        image_mode="0",
+        image_mode="original",
         manual=False,
         priority_label_setting_str="",
         maintain_series_number_labels=""
@@ -198,7 +198,7 @@ class SiteJav321:
             item.title = title_tags[0].strip() if title_tags else "제목 없음"
             
             if manual:
-                _image_mode = "1" if image_mode != "0" else image_mode
+                _image_mode = "ff_proxy" if image_mode != "original" else image_mode
                 if item.image_url: item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
                 item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
             else:
@@ -222,7 +222,7 @@ class SiteJav321:
         try:
             do_trans_arg = kwargs.get('do_trans', True)
             proxy_url_arg = kwargs.get('proxy_url', None)
-            image_mode_arg = kwargs.get('image_mode', "0")
+            image_mode_arg = kwargs.get('image_mode', "original")
             manual_arg = kwargs.get('manual', False)
             priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
             maintain_series_labels_arg = kwargs.get('maintain_series_number_labels', "")
@@ -360,7 +360,7 @@ class SiteJav321:
         code,
         do_trans=True,
         proxy_url=None,
-        image_mode="0",
+        image_mode="original",
         max_arts=10,
         use_extras=True,
         dmm_parser_rules=None,
@@ -791,9 +791,28 @@ class SiteJav321:
                 logger.exception(f"Jav321: Error during default image processing logic for {code}: {e_img_proc_default}")
 
             # === 5. 이미지 서버 저장 로직 (플레이스홀더 저장 방지) ===
-            if use_image_server and image_mode == '4' and ui_code_for_image:
+            if not (use_image_server and image_mode == 'image_server'):
+                # 프록시 모드
+                if not skip_default_poster_logic and final_poster_source:
+                    if not any(t.aspect == 'poster' for t in entity.thumb):
+                        processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
+                        if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
+
+                if not skip_default_landscape_logic and final_landscape_url_source:
+                    if not any(t.aspect == 'landscape' for t in entity.thumb):
+                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
+                        if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+
+                if arts_urls_for_processing:
+                    if entity.fanart is None: entity.fanart = []
+                    for art_url in arts_urls_for_processing:
+                        processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
+                        if processed_art and processed_art not in entity.fanart:
+                            entity.fanart.append(processed_art)
+
+            elif use_image_server and image_mode == 'image_server' and ui_code_for_image:
+                # 이미지 서버 모드
                 logger.info(f"Jav321: Saving images to Image Server for {ui_code_for_image}")
-                # 포스터 저장
                 if not skip_default_poster_logic and final_poster_source:
                     is_final_poster_placeholder = False
                     if now_printing_path and isinstance(final_poster_source, str) and final_poster_source.startswith("http") and \
@@ -805,7 +824,7 @@ class SiteJav321:
                         if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
                     elif is_final_poster_placeholder:
                         logger.debug(f"Jav321 ImgServ: Final poster source ('{final_poster_source}') is a placeholder. Skipping save.")
-                # 랜드스케이프 저장
+
                 if not skip_default_landscape_logic and final_landscape_url_source:
                     if not (now_printing_path and SiteUtil.are_images_visually_same(final_landscape_url_source, now_printing_path, proxy_url=proxy_url)) and \
                     not any(t.aspect == 'landscape' for t in entity.thumb):
@@ -814,16 +833,14 @@ class SiteJav321:
                     elif (now_printing_path and SiteUtil.are_images_visually_same(final_landscape_url_source, now_printing_path, proxy_url=proxy_url)):
                         logger.debug(f"Jav321 ImgServ: Final landscape source ('{final_landscape_url_source}') is a placeholder. Skipping save.")
 
-                # 팬아트 저장 (arts_urls_for_processing는 이미 플레이스홀더가 걸러진 리스트)
                 if arts_urls_for_processing:
                     if entity.fanart is None: entity.fanart = []
                     current_fanart_urls_on_server = set([thumb.value for thumb in entity.thumb if thumb.aspect == 'fanart' and isinstance(thumb.value, str)] + \
                                                         [fanart_url for fanart_url in entity.fanart if isinstance(fanart_url, str)])
                     processed_fanart_count_server = len(current_fanart_urls_on_server)
 
-                    for idx, art_url_item_server in enumerate(arts_urls_for_processing): # 이 리스트는 이미 플레이스홀더 걸러짐
+                    for idx, art_url_item_server in enumerate(arts_urls_for_processing):
                         if processed_fanart_count_server >= max_arts: break
-                        # arts_urls_for_processing는 제외 로직도 이미 적용됨
                         art_relative_path = SiteUtil.save_image_to_server_path(art_url_item_server, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
                         if art_relative_path:
                             full_art_url_server = f"{image_server_url}/{art_relative_path}"

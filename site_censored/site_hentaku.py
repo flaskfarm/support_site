@@ -9,7 +9,7 @@ class SiteHentaku:
     site_name = "hentaku"
 
     @staticmethod
-    def __get_actor_info(originalname, proxy_url=None, image_mode="0"):
+    def __get_actor_info(originalname, proxy_url=None, image_mode="original"):
         url = "https://hentaku.co/starsearch.php"
         tree = SiteUtil.get_tree(url, post_data={"name": originalname}, proxy_url=proxy_url)
 
@@ -40,7 +40,7 @@ class SiteHentaku:
     def get_actor_info(entity_actor, **kwargs) -> bool:
         retry = kwargs.pop("retry", True)
         proxy_url = kwargs.get("proxy_url") 
-        image_mode = kwargs.get("image_mode", "0")
+        image_mode = kwargs.get("image_mode", "original")
         info = None
         try:
             info = SiteHentaku.__get_actor_info(

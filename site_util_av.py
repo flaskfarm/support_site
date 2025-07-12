@@ -350,8 +350,8 @@ class SiteUtilAv:
         JavDB용으로 PL 이미지를 특별 처리하여 포스터로 사용할 임시 파일 경로와 추천 crop_mode를 반환합니다.
         - PL 이미지의 aspect ratio를 확인합니다.
         - 1.8 이상 (가로로 매우 김): 오른쪽 절반을 잘라 임시 파일로 저장하고, 추천 crop_mode는 'c' (센터).
-        - 1.8 미만 (일반 가로): 원본 PL URL을 그대로 사용하고, 추천 crop_mode는 'r' (오른쪽).
-        성공 시 (임시 파일 경로 또는 원본 URL, 추천 crop_mode, 원본 PL URL), 실패 시 (None, None, None) 반환.
+        - 1.8 미만 (일반 가로): 이 경우에는 이미지 처리를 하지 않고, 원본 URL과 crop 'r'을 반환합니다.
+        - 성공 시 (임시 파일 경로 또는 원본 URL, 추천 crop_mode, 원본 PL URL), 실패 시 (None, None, None) 반환.
         """
         try:
             # logger.debug(f"JavDB Poster Util: Trying get_javdb_poster_from_pl_local for pl_url='{pl_url}', code='{original_code_for_log}'")
@@ -362,46 +362,55 @@ class SiteUtilAv:
             if pl_image_original is None:
                 logger.debug(f"JavDB Poster Util: Failed to open pl_image_original from '{pl_url}'.")
                 return None, None, None
-
-            original_format = pl_image_original.format # 원본 포맷 저장
-
+            
             pl_width, pl_height = pl_image_original.size
             aspect_ratio = pl_width / pl_height if pl_height > 0 else 0
-            # logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height}), format={original_format}")
+            # logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height})")
 
-            processed_pil_object = pl_image_original # 기본적으로 원본 PIL 객체
-            recommended_crop_mode = 'r' # 기본 추천 크롭 모드
-
-            if aspect_ratio >= 1.8: # 가로로 매우 긴 이미지
+            if aspect_ratio >= 1.8: # 가로로 매우 긴 이미지만 처리
                 logger.debug(f"JavDB Poster Util: PL is very wide (ratio {aspect_ratio:.2f}). Processing right-half.")
                 right_half_box = (pl_width / 2, 0, pl_width, pl_height)
                 try:
                     right_half_img_obj = pl_image_original.crop(right_half_box)
                     if right_half_img_obj:
-                        if original_format: right_half_img_obj.format = original_format # 원본 포맷 유지
-                        processed_pil_object = right_half_img_obj
-                        recommended_crop_mode = 'c'
-                        logger.debug(f"JavDB Poster Util: Successfully cropped right-half. Recommended crop: 'c'.")
-                    else: # 크롭 자체가 실패 (매우 드문 경우)
+                        # 임시 파일로 저장
+                        img_format = right_half_img_obj.format if right_half_img_obj.format else pl_image_original.format
+                        if not img_format: img_format = "JPEG"
+                        ext = img_format.lower().replace("jpeg", "jpg")
+                        if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
+                        
+                        temp_filename = f"javdb_temp_poster_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
+                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                        
+                        save_params = {}
+                        if ext in ['jpg', 'webp']: save_params['quality'] = 95
+                        elif ext == 'png': save_params['optimize'] = True
+
+                        img_to_save = right_half_img_obj
+                        if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
+                            img_to_save = img_to_save.convert('RGB')
+                        
+                        img_to_save.save(temp_filepath, **save_params)
+                        logger.debug(f"JavDB Poster Util: Saved processed image to temp file: {temp_filepath}")
+                        
+                        pl_image_original.close() # 원본 이미지 닫기
+                        right_half_img_obj.close() # 잘라낸 이미지 닫기
+                        
+                        return temp_filepath, 'c', pl_url # 임시 파일 경로, 추천 크롭 'c', 원본 pl_url 반환
+                    else:
                         logger.debug("JavDB Poster Util: Cropping right-half returned None. Using original PL.")
-                except Exception as e_crop_half:
-                    logger.error(f"JavDB Poster Util: Error cropping right-half: {e_crop_half}. Using original PL.")
-            else: # 일반적인 가로 이미지
-                logger.debug(f"JavDB Poster Util: PL is normal landscape. Recommended crop: 'r'.")
-                # processed_pil_object는 이미 pl_image_original, recommended_crop_mode는 'r'
-
-            # 원본 포맷이 없었다면, 여기서라도 기본값 설정 시도 (선택적)
-            if processed_pil_object and not processed_pil_object.format:
-                logger.debug("JavDB Poster Util: Processed PIL object still has no format. Defaulting to JPEG for safety.")
-                processed_pil_object.format = "JPEG"
-
-            return processed_pil_object, recommended_crop_mode, pl_url
+                except Exception as e_process:
+                    logger.error(f"JavDB Poster Util: Error processing/saving wide image: {e_process}. Using original PL.")
+            
+            # 1.8 미만 비율 또는 처리 실패 시, PIL 객체를 닫고 원본 URL 반환
+            pl_image_original.close()
+            return pl_url, 'r', pl_url
 
         except Exception as e:
             logger.exception(f"JavDB Poster Util: Error in get_javdb_poster_from_pl_local: {e}")
-            if 'pl_image_original' in locals() and pl_image_original: # 원본이라도 열렸다면
-                if not pl_image_original.format : pl_image_original.format = "JPEG"
-                return pl_image_original, 'r', pl_url if 'pl_url' in locals() else None
+            if 'pl_image_original' in locals() and pl_image_original:
+                pl_image_original.close()
             return None, None, None
 
 

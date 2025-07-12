@@ -33,7 +33,7 @@ class SiteAvdbs:
         """Avdbs.com 웹사이트에서 배우 정보를 가져오는 내부 메소드 (Fallback용)"""
         # logger.debug(f"WEB Fallback: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
         proxy_url = kwargs.get('proxy_url')
-        image_mode = kwargs.get('image_mode', '0')
+        image_mode = kwargs.get('image_mode', 'original')
 
         with requests.Session() as s:
             enhanced_headers = {
@@ -171,7 +171,7 @@ class SiteAvdbs:
         use_local_db = kwargs.get('use_local_db', False)
         local_db_path = kwargs.get('local_db_path') if use_local_db else None
         proxy_url = kwargs.get('proxy_url')
-        image_mode = kwargs.get('image_mode', '0')
+        image_mode = kwargs.get('image_mode', 'original')
         db_image_base_url = kwargs.get('db_image_base_url', '')
         site_name_for_db = kwargs.get('site_name_for_db_query', SiteAvdbs.site_name)
 

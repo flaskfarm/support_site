@@ -687,7 +687,7 @@ class SiteDmm:
         try:
             do_trans_arg = kwargs.get('do_trans', True)
             proxy_url_arg = kwargs.get('proxy_url', None)
-            image_mode_arg = kwargs.get('image_mode', "0")
+            image_mode_arg = kwargs.get('image_mode', "original")
             manual_arg = kwargs.get('manual', False)
             priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
             dmm_parser_rules = kwargs.get('dmm_parser_rules', {})
@@ -963,7 +963,7 @@ class SiteDmm:
 
     @classmethod
     def __info( 
-        cls, code, do_trans=True, proxy_url=None, image_mode="0", max_arts=10, use_extras=True, **kwargs 
+        cls, code, do_trans=True, proxy_url=None, image_mode="original", max_arts=10, use_extras=True, **kwargs 
     ):
         # === 1. 설정값 로드, 캐시 로드, 페이지 로딩, Entity 초기화 ===
         use_image_server = kwargs.get('use_image_server', False)
@@ -1500,7 +1500,7 @@ class SiteDmm:
         logger.debug(f"DMM ({entity.content_type}): Final Images Decision - Poster='{str(final_poster_source)[:100] if final_poster_source else 'None'}' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
 
         # entity.thumb 및 entity.fanart 채우기
-        if not (use_image_server and image_mode == '4'):
+        if not (use_image_server and image_mode == 'image_server'):
             if final_poster_source and not skip_default_poster_logic:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
                     processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
@@ -1515,7 +1515,7 @@ class SiteDmm:
                 processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
                 if processed_art: entity.fanart.append(processed_art)
 
-        elif use_image_server and image_mode == '4' and ui_code_for_image:
+        elif use_image_server and image_mode == 'image_server' and ui_code_for_image:
             if final_poster_source and not skip_default_poster_logic:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
                     p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)

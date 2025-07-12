@@ -3,6 +3,7 @@ import traceback
 from lxml import html
 import os 
 import urllib.parse as py_urllib_parse
+from PIL import Image
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
@@ -21,7 +22,7 @@ class SiteJavdb:
         keyword,
         do_trans=True,
         proxy_url=None,
-        image_mode="0",
+        image_mode="original",
         manual=False,
         cf_clearance_cookie_value='',
         priority_label_setting_str=""
@@ -75,7 +76,7 @@ class SiteJavdb:
 
         if res_for_search is None:
             logger.error(f"JavDB Search: Failed to get response from SiteUtil.get_response_cs for '{keyword_for_url}'. Proxy used: {'Yes' if proxy_url else 'No'}. Check SiteUtil logs for specific error (e.g., 403).")
-            return {'ret': 'error', 'data': f"Failed to get response object for '{keyword_for_url}'. Check proxy, network, or SiteUtil logs."}
+            return []
 
         html_content_text = res_for_search.text
 
@@ -83,25 +84,22 @@ class SiteJavdb:
             logger.warning(f"JavDB Search: Status code {res_for_search.status_code} for URL: {res_for_search.url} (keyword: '{keyword_for_url}')")
             if "cf-error-details" in html_content_text or "Cloudflare to restrict access" in html_content_text:
                 logger.error(f"JavDB Search: Cloudflare restriction page detected for '{keyword_for_url}' (potentially IP block or stricter rules).")
-                return {'ret': 'error', 'data': 'Cloudflare restriction page (possibly IP block).'}
             if "Due to copyright restrictions" in html_content_text or "由於版權限制" in html_content_text:
                 logger.error(f"JavDB Search: Access prohibited for '{keyword_for_url}' (country block).")
-                return {'ret': 'error', 'data': 'Country block detected by JavDB.'}
             if "cf-challenge-running" in html_content_text or "Checking if the site connection is secure" in html_content_text or "Verifying you are human" in html_content_text:
                 logger.error(f"JavDB Search: Cloudflare challenge page detected for '{keyword_for_url}'. cf_clearance cookie might be invalid or missing.")
-                return {'ret': 'error', 'data': 'Cloudflare JS challenge page detected.'}
-            return {'ret': 'error', 'data': f'HTTP Status: {res_for_search.status_code} for {keyword_for_url}.'}
+            return []
 
         try:
             tree = html.fromstring(html_content_text)
         except Exception as e_parse:
             logger.error(f"JavDB Search: Failed to parse HTML for '{keyword_for_url}': {e_parse}")
             logger.error(traceback.format_exc())
-            return {'ret': 'error', 'data': f"Failed to parse HTML content for '{keyword_for_url}'."}
+            return []
 
         if tree is None:
             logger.warning(f"JavDB Search: Tree is None after parsing for '{keyword_for_url}'.")
-            return {'ret': 'error', 'data': f"Parsed tree is None for '{keyword_for_url}'."}
+            return []
 
         final_search_results_list = []
         keyword_lower_norm = keyword_for_url.replace('-', '').replace(' ', '')
@@ -117,20 +115,20 @@ class SiteJavdb:
                 return []
 
             # --- XPath 실패 시 HTML 저장 로직 ---
-            try:
-                safe_keyword_for_filename = keyword_for_url.replace('/', '_').replace('\\', '_').replace(':', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace('<', '_').replace('>', '_').replace('|', '_')
+            #try:
+            #    safe_keyword_for_filename = keyword_for_url.replace('/', '_').replace('\\', '_').replace(':', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace('<', '_').replace('>', '_').replace('|', '_')
 
-                unique_suffix = os.urandom(4).hex() 
+            #    unique_suffix = os.urandom(4).hex() 
 
-                debug_filename = f"javdb_xpath_fail_{safe_keyword_for_filename}_{unique_suffix}.html"
-                debug_html_path = os.path.join(path_data, 'tmp', debug_filename)
+            #    debug_filename = f"javdb_xpath_fail_{safe_keyword_for_filename}_{unique_suffix}.html"
+            #    debug_html_path = os.path.join(path_data, 'tmp', debug_filename)
 
-                os.makedirs(os.path.join(path_data, 'debug'), exist_ok=True) 
-                with open(debug_html_path, 'w', encoding='utf-8') as f:
-                    f.write(html_content_text)
-                logger.info(f"JavDB Search: XPath failed. HTML content for '{keyword_for_url}' saved to: {debug_html_path}")
-            except Exception as e_save_html:
-                logger.error(f"JavDB Search: Failed to save HTML content on XPath failure for '{keyword_for_url}': {e_save_html}")
+            #    os.makedirs(os.path.join(path_data, 'debug'), exist_ok=True) 
+            #    with open(debug_html_path, 'w', encoding='utf-8') as f:
+            #        f.write(html_content_text)
+            #    logger.info(f"JavDB Search: XPath failed. HTML content for '{keyword_for_url}' saved to: {debug_html_path}")
+            #except Exception as e_save_html:
+            #    logger.error(f"JavDB Search: Failed to save HTML content on XPath failure for '{keyword_for_url}': {e_save_html}")
             # --- HTML 저장 로직 끝 ---
 
             title_match = re.search(r'<title>(.*?)</title>', html_content_text, re.IGNORECASE | re.DOTALL)
@@ -275,7 +273,7 @@ class SiteJavdb:
         sorted_result = sorted(final_search_results_list, key=lambda k: k.get("score", 0), reverse=True)
         if sorted_result:
             log_count = min(len(sorted_result), 5)
-            logger.debug(f"JavBus Search: Top {log_count} results for '{keyword_for_url}':")
+            logger.debug(f"JavDB Search: Top {log_count} results for '{keyword_for_url}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
                 logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
         return sorted_result
@@ -287,7 +285,7 @@ class SiteJavdb:
         try:
             do_trans_arg = kwargs.get('do_trans', True)
             proxy_url_arg = kwargs.get('proxy_url', None)
-            image_mode_arg = kwargs.get('image_mode', '0')
+            image_mode_arg = kwargs.get('image_mode', 'original')
             manual_arg = kwargs.get('manual', False)
             cf_clearance_cookie_value_arg = kwargs.get('cf_clearance_cookie_value', '')
             priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
@@ -323,7 +321,7 @@ class SiteJavdb:
     def __info(cls, code, **kwargs):
         do_trans = kwargs.get('do_trans', True)
         proxy_url = kwargs.get('proxy_url', None)
-        image_mode = kwargs.get('image_mode', '0')
+        image_mode = kwargs.get('image_mode', 'original')
         max_arts = kwargs.get('max_arts', 10) 
         use_image_server = kwargs.get('use_image_server', False)
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
@@ -342,6 +340,7 @@ class SiteJavdb:
 
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{cls.site_base_url}/v/{original_code_for_url}"
+        temp_poster_file_to_clean = None  # 삭제할 임시 파일 경로를 저장할 변수
 
         try:
             logger.debug(f"JavDB Info: Accessing URL: {detail_url} for code {code}")
@@ -367,7 +366,7 @@ class SiteJavdb:
             entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
 
             # 1. 페이지의 "ID" 필드에서 표준 ui_code 파싱
-            id_panel_block = tree_info.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]')
+            id_panel_block = tree_info.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()')
             base_ui_code = id_panel_block[0].strip().upper() if id_panel_block else ""
             if not base_ui_code:
                 h2_visible_code_node = tree_info.xpath('//h2[@class="title is-4"]/strong[1]/text()')
@@ -569,7 +568,6 @@ class SiteJavdb:
             final_poster_source = None 
             final_poster_crop_mode = None 
             final_landscape_source = None
-            temp_poster_file = None 
 
             # 1. 이미지 URL 추출 (PL, Arts)
             pl_url = None
@@ -684,20 +682,38 @@ class SiteJavdb:
                                     crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
                                     cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
                                     if cropped_pil_object:
-                                        temp_poster_source = cropped_pil_object
-                                        temp_crop_mode = None
-                                        logger.info(f"JavDB Poster (Prio 3): Fixed-size crop. Poster is PIL object.")
-                        except Exception: pass
+                                        # PIL 객체를 임시 파일로 저장하고 그 경로를 사용
+                                        temp_filename = f"javdb_fixed_crop_{current_ui_code_for_image.replace('/','_')}_{os.urandom(4).hex()}.jpg"
+                                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                                        
+                                        img_to_save = cropped_pil_object
+                                        if img_to_save.mode not in ('RGB', 'L'):
+                                            img_to_save = img_to_save.convert('RGB')
+                                        
+                                        img_to_save.save(temp_filepath, format="JPEG", quality=95)
+                                        
+                                        temp_poster_source = temp_filepath
+                                        temp_poster_file_to_clean = temp_filepath # 삭제를 위해 경로 저장
+                                        temp_crop_mode = None # 이미 잘랐으므로 추가 크롭 없음
+                                        logger.info(f"JavDB Poster (Prio 3): Fixed-size crop applied. Using temp file: {temp_filepath}")
+                                    cropped_pil_object.close()
+                                pl_image_obj_for_fixed_crop.close()
+                        except Exception as e_fixed_crop:
+                            logger.warning(f"JavDB Info: Error during fixed-size crop: {e_fixed_crop}")
 
                     # 4. 가로로 더 긴 이미지 처리(2:1 비율)
                     if temp_poster_source is None:
                         log_id = entity.ui_code or original_code_for_url
                         try:
-                            poster_obj, rec_crop, _ = SiteUtil.get_javdb_poster_from_pl_local(valid_pl_url, log_id, proxy_url=proxy_url)
-                            if poster_obj: 
-                                temp_poster_source = poster_obj
+                            processed_source, rec_crop, _ = SiteUtil.get_javdb_poster_from_pl_local(valid_pl_url, log_id, proxy_url=proxy_url)
+                            if processed_source:
+                                temp_poster_source = processed_source
                                 temp_crop_mode = rec_crop
-                                logger.info(f"JavDB Poster (Prio 4): JavDB-style. Type: {type(temp_poster_source)}, Crop: {temp_crop_mode}")
+                                # 반환값이 임시 파일 경로인지 확인하고, 그렇다면 삭제 리스트에 추가
+                                if isinstance(processed_source, str) and os.path.basename(processed_source).startswith("javdb_temp_poster_"):
+                                    temp_poster_file_to_clean = processed_source
+                                logger.info(f"JavDB Poster (Prio 4): JavDB-style. Source: '{temp_poster_source}', Crop: {temp_crop_mode}")
                         except Exception: pass
 
                     # 5. 일반 처리(crop: r)
@@ -720,25 +736,44 @@ class SiteJavdb:
                     logger.warning(f"JavDB Info: Default landscape cannot be generated as no valid PL URL.")
 
             # === 이미지 최종 적용 (서버 저장 또는 프록시) ===
-            # 5-A. 이미지 서버 사용 시
-            if use_image_server and image_mode == '4' and current_ui_code_for_image: 
+            if not (use_image_server and image_mode == 'image_server'):
+                # 프록시 모드
+                if not skip_default_poster_logic and final_poster_source:
+                    if not any(t.aspect == 'poster' for t in entity.thumb):
+                        processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
+                        if processed_poster:
+                            entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
+
+                if not skip_default_landscape_logic and final_landscape_source:
+                    if not any(t.aspect == 'landscape' for t in entity.thumb):
+                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_source, proxy_url=proxy_url)
+                        if processed_landscape:
+                            entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+
+                if arts_urls:
+                    if entity.fanart is None: entity.fanart = []
+                    unique_arts_for_fanart = []
+                    vr_poster_override_url_proxy = None
+                    if is_vr_content and isinstance(final_poster_source, str) and final_poster_source in arts_urls and final_poster_crop_mode is None:
+                        vr_poster_override_url_proxy = final_poster_source
+
+                    for art_url_item in arts_urls: 
+                        if not (vr_poster_override_url_proxy and art_url_item == vr_poster_override_url_proxy):
+                            if art_url_item not in unique_arts_for_fanart:
+                                unique_arts_for_fanart.append(art_url_item)
+
+                    for art_url_item in unique_arts_for_fanart:
+                        if len(entity.fanart) >= max_arts: break
+                        processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
+                        if processed_art and processed_art not in entity.fanart:
+                            entity.fanart.append(processed_art)
+                            
+            elif use_image_server and image_mode == 'image_server' and current_ui_code_for_image: 
+                # 이미지 서버 모드
                 if final_poster_source and not skip_default_poster_logic:
                     if not any(t.aspect == 'poster' for t in entity.thumb):
-                        source_for_server_poster = final_poster_source
-                        if isinstance(final_poster_source, Image.Image):
-                            temp_poster_file = os.path.join(path_data, "tmp", f"temp_poster_javdb_{current_ui_code_for_image.replace('/','_')}_{os.urandom(4).hex()}.jpg")
-                            try:
-                                pil_img_to_save = final_poster_source
-                                if pil_img_to_save.mode not in ('RGB', 'L'): pil_img_to_save = pil_img_to_save.convert('RGB')
-                                os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                                pil_img_to_save.save(temp_poster_file, format="JPEG", quality=95)
-                                source_for_server_poster = temp_poster_file
-                            except Exception as e_temp_save:
-                                logger.error(f"JavDB Info: Failed to save PIL poster: {e_temp_save}. Fallback to PL URL.")
-                                source_for_server_poster = valid_pl_url if valid_pl_url else None
-                        if source_for_server_poster:
-                            p_path = SiteUtil.save_image_to_server_path(source_for_server_poster, 'p', image_server_local_path, image_path_segment, current_ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                            if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
+                        p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, current_ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
+                        if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
 
                 if final_landscape_source and not skip_default_landscape_logic:
                     if not any(t.aspect == 'landscape' for t in entity.thumb):
@@ -764,41 +799,7 @@ class SiteJavdb:
                         if art_relative_path: 
                             full_art_url = f"{image_server_url}/{art_relative_path}"
                             if full_art_url not in entity.fanart: entity.fanart.append(full_art_url); current_fanart_server_count += 1
-
-            # 5-B. 이미지 서버 사용 안 할 때
-            else: 
-                if final_poster_source and not skip_default_poster_logic:
-                    if not any(t.aspect == 'poster' for t in entity.thumb):
-                        processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                        if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-
-                if final_landscape_source and not skip_default_landscape_logic:
-                    if not any(t.aspect == 'landscape' for t in entity.thumb):
-                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_source, proxy_url=proxy_url) 
-                        if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
-
-                if arts_urls:
-                    if entity.fanart is None: entity.fanart = []
-                    unique_arts_for_fanart = []
-                    vr_poster_override_url_proxy = None
-                    if is_vr_content and isinstance(final_poster_source, str) and final_poster_source in arts_urls and final_poster_crop_mode is None:
-                        vr_poster_override_url_proxy = final_poster_source
-
-                    for art_url_item in arts_urls: 
-                        if not (vr_poster_override_url_proxy and art_url_item == vr_poster_override_url_proxy):
-                            if art_url_item not in unique_arts_for_fanart: unique_arts_for_fanart.append(art_url_item)
-
-                    for art_url_item in unique_arts_for_fanart:
-                        if len(entity.fanart) >= max_arts : break
-                        processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
-                        if processed_art and processed_art not in entity.fanart:
-                            entity.fanart.append(processed_art)
-
-            if temp_poster_file and os.path.exists(temp_poster_file):
-                try: os.remove(temp_poster_file)
-                except Exception as e_remove: logger.error(f"JavDB Info: Failed to remove temp poster: {e_remove}")
-            # === 이미지 최종 적용 종료 ===
-
+            
             # === 7. 트레일러 처리 ===
             if use_extras_setting:
                 entity.extras = []
@@ -824,6 +825,13 @@ class SiteJavdb:
         except Exception as e_main_info:
             logger.exception(f"JavDB __info Exception for input code {code}: {e_main_info}")
             return None
+        finally:
+            if 'temp_poster_file_to_clean' in locals() and temp_poster_file_to_clean and os.path.exists(temp_poster_file_to_clean):
+                try:
+                    os.remove(temp_poster_file_to_clean)
+                    logger.debug(f"JavDB __info: Cleaned up temp poster file: {temp_poster_file_to_clean}")
+                except Exception as e_remove_exc:
+                    logger.error(f"JavDB __info: Failed to remove temp poster on exception: {e_remove_exc}")
 
 
     @classmethod
