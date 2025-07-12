@@ -252,7 +252,7 @@ class SiteDmm:
         keyword,
         do_trans=True,
         proxy_url=None,
-        image_mode="0",
+        image_mode="ff_proxy",
         manual=False,
         priority_label_setting_str="",
         dmm_parser_rules: dict = None,
@@ -516,7 +516,7 @@ class SiteDmm:
 
                 # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
-                    _image_mode = "1" if image_mode != "0" else image_mode
+                    _image_mode = "ff_proxy" if image_mode != "original" else image_mode
                     try: item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
                     except Exception as e_img: logger.error(f"DMM Search: ImgProcErr (manual):{e_img}")
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + type_prefix + item.title

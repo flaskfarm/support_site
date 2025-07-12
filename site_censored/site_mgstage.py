@@ -31,6 +31,8 @@ class SiteMgstage:
     ]
     PTN_RATING = re.compile(r"\s(?P<rating>[\d\.]+)点\s.+\s(?P<vote>\d+)\s件")
 
+
+
     @classmethod
     def get_label_from_ui_code(cls, ui_code_str: str) -> str:
         if not ui_code_str or not isinstance(ui_code_str, str): return ""
@@ -44,12 +46,14 @@ class SiteMgstage:
             return match.group('label')
         return label_part
 
+
+
     @classmethod
     def __search(
         cls,
         keyword,
         do_trans=True,
-        proxy_url=None, image_mode="0",
+        proxy_url=None, image_mode="original",
         manual=False,
         priority_label_setting_str=""
         ):
@@ -93,7 +97,7 @@ class SiteMgstage:
                 item.title = item.title_ko = title.strip()
 
                 if manual:
-                    _image_mode = "1" if image_mode != "0" else image_mode
+                    _image_mode = "ff_proxy" if image_mode != "original" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
@@ -138,6 +142,8 @@ class SiteMgstage:
                 logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
         return sorted_result
 
+
+
     @classmethod
     def search(cls, keyword, **kwargs):
         ret = {}
@@ -148,7 +154,7 @@ class SiteMgstage:
 
             do_trans_arg = kwargs.get('do_trans', True)
             proxy_url_arg = kwargs.get('proxy_url', None)
-            image_mode_arg = kwargs.get('image_mode', "0")
+            image_mode_arg = kwargs.get('image_mode', "original")
             manual_arg = kwargs.get('manual', False)
             priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
 
@@ -184,6 +190,30 @@ class SiteMgstage:
         return ret
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class SiteMgstageDvd(SiteMgstage):
     module_char = "C"
 
@@ -199,13 +229,16 @@ class SiteMgstageDvd(SiteMgstage):
                 arts.insert(0, potential_pf)
         return {"pl": pl, "arts": arts}
 
+
+
+
     @classmethod
     def __info( 
         cls,
         code,
         do_trans=True,
         proxy_url=None,
-        image_mode="0",
+        image_mode="original",
         max_arts=10,
         use_extras=True,
         ps_to_poster_labels_str="", 
@@ -377,20 +410,45 @@ class SiteMgstageDvd(SiteMgstage):
                     if len(parts) == 2 and parts[0].upper() == label_from_ui_code_for_settings and parts[1].lower() in ["r", "l", "c"]:
                         forced_crop_mode_for_this_item = parts[1].lower(); break
 
-        user_custom_poster_url = None; user_custom_landscape_url = None
-        skip_default_poster_logic = False; skip_default_landscape_logic = False
+        user_custom_poster_url = None
+        user_custom_landscape_url = None
+        skip_default_poster_logic = False
+        skip_default_landscape_logic = False
+
         if use_image_server and image_server_local_path and image_server_url and ui_code_for_image:
             poster_suffixes = ["_p_user.jpg", "_p_user.png", "_p_user.webp"]
             landscape_suffixes = ["_pl_user.jpg", "_pl_user.png", "_pl_user.webp"]
             for suffix in poster_suffixes:
                 _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix, image_server_url)
-                if web_url: user_custom_poster_url = web_url; entity.thumb.append(EntityThumb(aspect="poster", value=user_custom_poster_url)); skip_default_poster_logic = True; logger.debug(f"MGStage ({cls.module_char}): Using user custom poster: {web_url}"); break 
+                
+                if web_url: 
+                    user_custom_poster_url = web_url
+                    entity.thumb.append(
+                        EntityThumb(
+                            aspect="poster", 
+                            value=user_custom_poster_url
+                        )
+                    )
+                    skip_default_poster_logic = True
+                    logger.debug(f"MGStage ({cls.module_char}): Using user custom poster: {web_url}")
+                    break 
             for suffix in landscape_suffixes:
                 _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix, image_server_url)
-                if web_url: user_custom_landscape_url = web_url; entity.thumb.append(EntityThumb(aspect="landscape", value=user_custom_landscape_url)); skip_default_landscape_logic = True; logger.debug(f"MGStage ({cls.module_char}): Using user custom landscape: {web_url}"); break
+                if web_url: 
+                    user_custom_landscape_url = web_url
+                    entity.thumb.append(
+                        EntityThumb(
+                            aspect="landscape", 
+                            value=user_custom_landscape_url
+                        )
+                    )
+                    skip_default_landscape_logic = True
+                    logger.debug(f"MGStage ({cls.module_char}): Using user custom landscape: {web_url}")
+                    break
 
-        final_poster_source = None; final_poster_crop_mode = None
-        final_landscape_url_source = None;
+        final_poster_source = None
+        final_poster_crop_mode = None
+        final_landscape_url_source = None
         arts_urls_for_processing = []
         mgs_special_poster_filepath = None
 
@@ -524,7 +582,7 @@ class SiteMgstageDvd(SiteMgstage):
         logger.debug(f"MGStage ({cls.module_char}): Final Images Decision - Poster='{str(final_poster_source)[:100]}...' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_url_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
 
         # --- 이미지 최종 적용 (서버 저장 또는 프록시) ---
-        if use_image_server and image_mode == '4' and ui_code_for_image:
+        if use_image_server and image_mode == 'image_server' and ui_code_for_image:
             # 포스터 저장
             if not skip_default_poster_logic and final_poster_source:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
@@ -578,12 +636,26 @@ class SiteMgstageDvd(SiteMgstage):
         return entity
 
 
+
+
+
+
+
+
+
     @classmethod
     def info(cls, code, **kwargs):
         ret = {}
         try:
             entity = cls.__info(code, **kwargs) 
-            if entity: ret["ret"] = "success"; ret["data"] = entity.as_dict()
-            else: ret["ret"] = "error"; ret["data"] = f"Failed to get MGStage ({cls.module_char}) info for {code}"
-        except Exception as e: ret["ret"] = "exception"; ret["data"] = str(e); logger.exception(f"MGStage ({cls.module_char}) info error: {e}")
+            if entity: 
+                ret["ret"] = "success"
+                ret["data"] = entity.as_dict()
+            else: 
+                ret["ret"] = "error"
+                ret["data"] = f"Failed to get MGStage ({cls.module_char}) info for {code}"
+        except Exception as e: 
+            ret["ret"] = "exception"
+            ret["data"] = str(e)
+            logger.exception(f"MGStage ({cls.module_char}) info error: {e}")
         return ret

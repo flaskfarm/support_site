@@ -7,6 +7,11 @@ from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 import traceback
 try:
+    import cloudscraper
+except ImportError:
+    os.system("pip install cloudscraper")
+    import cloudscraper
+try:
     import imagehash
 except ImportError:
     os.system("pip install imagehash")
@@ -16,18 +21,13 @@ try:
 except ImportError:
     os.system("pip install requests-cache")
     import requests_cache
-try:
-    import cloudscraper
-except ImportError:
-    os.system("pip install cloudscraper")
-    import cloudscraper
 
 import requests
 from lxml import html
 from PIL import Image
 
 from tool import ToolUtil
-from .setup import P, logger, path_data
+from .setup import P, logger, path_data, F
 from .cache_util import CacheUtil
 from .constants import (AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO,
                         AV_STUDIO, COUNTRY_CODE_TRANSLATE, GENRE_MAP)
@@ -37,18 +37,24 @@ from .trans_util import TransUtil
 
 
 class SiteUtilAv:
-    try:
-        from requests_cache import CachedSession
+    if F.config['run_celery'] == False:
+        try:
+            from requests_cache import CachedSession
 
-        session = CachedSession(
-            P.package_name,
-            use_temp=True,
-            expire_after=timedelta(hours=6),
-        )
-        # logger.debug("requests_cache.CachedSession initialized successfully.")
-    except Exception as e:
-        logger.debug("requests cache 사용 안함: %s", e)
+            session = CachedSession(
+                P.package_name,
+                use_temp=True,
+                expire_after=timedelta(hours=6),
+            )
+            # logger.debug("requests_cache.CachedSession initialized successfully.")
+        except Exception as e:
+            logger.debug("requests cache 사용 안함: %s", e)
+            session = requests.Session()
+    else:
+        # 2025.07.12
+        # Celery 환경에서는 requests_cache를 사용하지 않음.
         session = requests.Session()
+
 
     default_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36",
@@ -158,6 +164,7 @@ class SiteUtilAv:
 
     @classmethod
     def get_response(cls, url, **kwargs):
+        kwargs['verify'] = False  # SSL 인증서 검증 비활성화 (필요시)   
         proxy_url_from_arg = kwargs.pop("proxy_url", None)
 
         proxies_for_this_request = None
@@ -402,15 +409,23 @@ class SiteUtilAv:
     def imopen(cls, img_src, proxy_url=None):
         if isinstance(img_src, Image.Image):
             return img_src
-        try:
-            # local file
-            return Image.open(img_src)
-        except (FileNotFoundError, OSError):
+        if img_src.startswith("http"):
             # remote url
             try:
+                # 2025.07.12 by soju
+                # url이 ff proxy를 사용하는 경우 proxy_url 이 또 들어온다.
+                if proxy_url and 'normal/image_proxy' in img_src:
+                    proxy_url = None  # ff proxy URL은 이미 내부적으로 처리됨
                 res = cls.get_response(img_src, proxy_url=proxy_url)
                 return Image.open(BytesIO(res.content))
             except Exception:
+                logger.exception("이미지 여는 중 예외:")
+                return None
+        else:
+            try:
+                # local file
+                return Image.open(img_src)
+            except (FileNotFoundError, OSError):
                 logger.exception("이미지 여는 중 예외:")
                 return None
 
@@ -530,7 +545,7 @@ class SiteUtilAv:
         
         # logger.debug(f"process_image_mode: mode='{image_mode}', source='{log_name}', crop='{crop_mode}'")
 
-        if image_mode == "0": 
+        if image_mode == "original": 
             return image_source
 
         #if image_mode in ["1", "2"]:
@@ -539,11 +554,11 @@ class SiteUtilAv:
                 logger.debug(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'.")
                 return image_source
             
-            api_path = "image_proxy" if image_mode == "1" else "discord_proxy"
-            tmp = f"/metadata/api/{api_path}?url=" + quote_plus(image_source)
+            api_path = "image_proxy" if image_mode == "ff_proxy" else "discord_proxy"
+            tmp = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{api_path}?url=" + quote_plus(image_source)
             if proxy_url: tmp += "&proxy_url=" + quote_plus(proxy_url)
             if crop_mode: tmp += "&crop_mode=" + quote_plus(crop_mode)
-            return ToolUtil.make_apikey_url(tmp)
+            return tmp
 
         # image_mode '3' (직접 디스코드 업로드)
         # image_mode '5' (로컬 임시파일 생성 후 디스코드 업로드)
