@@ -65,7 +65,7 @@ from .site_censored.site_dmm import SiteDmm
 from .site_censored.site_hentaku import SiteHentaku
 from .site_censored.site_jav321 import SiteJav321
 from .site_censored.site_javbus import SiteJavbus
-from .site_censored.site_mgstage import SiteMgstageDvd
+from .site_censored.site_mgstage import SiteMgstage
 from .site_censored.site_javdb import SiteJavdb
 from .site_util_av import SiteUtilAv
 from .tool_discord import DiscordUtil
