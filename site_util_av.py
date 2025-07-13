@@ -259,7 +259,12 @@ class SiteUtilAv:
 
                     # is_hq_poster 유사도 검사 시도
                     # logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
-                    is_similar = cls.is_hq_poster(ps_image, center_cropped_candidate_obj)
+                    is_similar = cls.is_hq_poster(
+                        ps_image, 
+                        center_cropped_candidate_obj, 
+                        sm_source_info=ps_url, 
+                        lg_source_info=obj_name
+                    )
 
                     if is_similar:
                         logger.debug(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
@@ -552,38 +557,41 @@ class SiteUtilAv:
         if isinstance(image_source, str) and os.path.exists(image_source):
             log_name = f"localfile:{os.path.basename(image_source)}"
         
-        # logger.debug(f"process_image_mode: mode='{image_mode}', source='{log_name}', crop='{crop_mode}'")
-
         if image_mode == "original": 
             return image_source
 
-        #if image_mode in ["1", "2"]:
-        if image_mode in ["ff_proxy", "discord_redirect"]:
-            if not (isinstance(image_source, str) and not os.path.exists(image_source)):
-                logger.debug(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'.")
+        # SJVA 프록시(ff_proxy, discord_redirect)가 로컬 파일을 처리할 수 없으므로,
+        # 로컬 파일인 경우 mode 3(discord_proxy)으로 강제 전환
+        is_local_file = isinstance(image_source, str) and os.path.exists(image_source)
+        
+        effective_image_mode = image_mode
+        if is_local_file and image_mode in ["ff_proxy", "discord_redirect"]:
+            logger.debug(f"Local file '{log_name}' cannot be used with mode '{image_mode}'. Switching to 'discord_proxy' (mode 3).")
+            effective_image_mode = "discord_proxy"
+
+        if effective_image_mode in ["ff_proxy", "discord_redirect"]:
+            # 이제 이 코드는 URL일 때만 실행됨
+            if not isinstance(image_source, str): # PIL 객체 등은 처리 불가
                 return image_source
-            
-            api_path = "image_proxy" if image_mode == "ff_proxy" else "discord_proxy"
+            api_path = "image_proxy" if effective_image_mode == "ff_proxy" else "discord_proxy"
             tmp = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{api_path}?url=" + quote_plus(image_source)
             if proxy_url: tmp += "&proxy_url=" + quote_plus(proxy_url)
             if crop_mode: tmp += "&crop_mode=" + quote_plus(crop_mode)
             return tmp
 
-        # image_mode '3' (직접 디스코드 업로드)
-        # image_mode '5' (로컬 임시파일 생성 후 디스코드 업로드)
-        #if image_mode == "3":
-        if image_mode == "discord_proxy":
+        if effective_image_mode == "discord_proxy":
             discord_kwargs = {}
             if proxy_url: discord_kwargs['proxy_url'] = proxy_url
             if crop_mode: discord_kwargs['crop_mode'] = crop_mode
             
-            if not isinstance(image_source, str):
-                logger.error(f"process_image_mode (mode 3): image_source is not a URL/filepath. Type: {type(image_source)}")
+            if not isinstance(image_source, (str, Image.Image)): # PIL 객체도 처리 가능하도록
+                logger.error(f"process_image_mode (discord_proxy): image_source is not a URL/filepath/PIL object. Type: {type(image_source)}")
                 return None
-
+            
+            # discord_proxy_image는 URL, 로컬 파일 경로, PIL 객체를 모두 처리
             return cls.discord_proxy_image(image_source, **discord_kwargs)
 
-        if image_mode == "5":
+        if image_mode == "image_server":
             # 1. image_source (URL)로 이미지 열기
             im_opened = cls.imopen(image_source, proxy_url=proxy_url)
             if im_opened is None: return image_source
@@ -596,19 +604,19 @@ class SiteUtilAv:
             
             # 3. 임시 파일로 저장
             #    파일 이름에 crop_mode 정보를 포함시키는 것이 좋음 (만약 여기서 크롭했다면)
-            temp_filename_mode5 = f"proxy_mode5_{os.path.basename(image_source if isinstance(image_source, str) else 'img')}_{time.time()}.jpg"
-            if crop_mode: temp_filename_mode5 = f"proxy_mode5_crop{crop_mode}_{os.path.basename(image_source if isinstance(image_source, str) else 'img')}_{time.time()}.jpg"
+            temp_filename_mode_image_server = f"proxy_mode_image_server_{os.path.basename(image_source if isinstance(image_source, str) else 'img')}_{time.time()}.jpg"
+            if crop_mode: temp_filename_mode_image_server = f"proxy_mode_image_server_crop{crop_mode}_{os.path.basename(image_source if isinstance(image_source, str) else 'img')}_{time.time()}.jpg"
 
-            temp_filepath_mode5 = os.path.join(path_data, "tmp", temp_filename_mode5)
+            temp_filepath_mode_image_server = os.path.join(path_data, "tmp", temp_filename_mode_image_server)
             try:
                 save_format = im_opened.format if im_opened.format else "JPEG"
                 # JPEG 저장 시 RGB 변환 필요할 수 있음
-                img_to_save_mode5 = im_opened
-                if save_format == 'JPEG' and img_to_save_mode5.mode not in ('RGB', 'L'):
-                    img_to_save_mode5 = img_to_save_mode5.convert('RGB')
+                img_to_save_mode_image_server = im_opened
+                if save_format == 'JPEG' and img_to_save_mode_image_server.mode not in ('RGB', 'L'):
+                    img_to_save_mode_image_server = img_to_save_mode_image_server.convert('RGB')
 
-                img_to_save_mode5.save(temp_filepath_mode5, format=save_format, quality=95)
-                return cls.discord_proxy_image_localfile(temp_filepath_mode5) 
+                img_to_save_mode_image_server.save(temp_filepath_mode_image_server, format=save_format, quality=95)
+                return cls.discord_proxy_image_localfile(temp_filepath_mode_image_server)
             except Exception as e_save5:
                 logger.exception(f"process_image_mode: Mode 5 failed to save/proxy image from '{log_name}': {e_save5}")
                 return image_source
@@ -875,6 +883,111 @@ class SiteUtilAv:
                 try:
                     im_to_process.close()
                 except Exception: pass
+
+
+    @classmethod
+    def _check_and_apply_user_images(cls, entity, settings):
+        """[내부헬퍼] 사용자 지정 이미지가 있는지 확인하고, 있다면 entity.thumb에 추가."""
+        skip_poster = False
+        skip_landscape = False
+        
+        if not (settings.get('use_image_server') and settings.get('ui_code')):
+            return skip_poster, skip_landscape
+
+        base_path = settings.get('image_server_local_path')
+        segment = settings.get('image_path_segment')
+        ui_code = settings.get('ui_code')
+        server_url = settings.get('image_server_url')
+
+        # 포스터 확인
+        for suffix in ["_p_user.jpg", "_p_user.png", "_p_user.webp"]:
+            _, web_url = cls.get_user_custom_image_paths(base_path, segment, ui_code, suffix, server_url)
+            if web_url:
+                if not any(t.aspect == 'poster' for t in entity.thumb):
+                    entity.thumb.append(EntityThumb(aspect="poster", value=web_url))
+                skip_poster = True
+                logger.debug(f"[ImageUtil] Found user custom poster: {web_url}")
+                break
+        
+        # 풍경(landscape) 확인
+        for suffix in ["_pl_user.jpg", "_pl_user.png", "_pl_user.webp"]:
+            _, web_url = cls.get_user_custom_image_paths(base_path, segment, ui_code, suffix, server_url)
+            if web_url:
+                if not any(t.aspect == 'landscape' for t in entity.thumb):
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=web_url))
+                skip_landscape = True
+                logger.debug(f"[ImageUtil] Found user custom landscape: {web_url}")
+                break
+        
+        return skip_poster, skip_landscape
+
+
+    @classmethod
+    def finalize_images_for_entity(cls, entity, image_sources, settings):
+        """
+        최종 결정된 이미지 소스를 받아, 설정에 따라 처리 후 entity에 추가하는 통합 함수.
+        이 함수는 '어떤' 이미지를 쓸지 결정하지 않고, '어떻게' 처리할지만 담당한다.
+
+        :param entity: 메타데이터 EntityMovie 객체
+        :param image_sources: {'poster_source':..., 'poster_crop':..., 'landscape_source':..., 'arts':...} 형식의 딕셔너리
+        :param settings: {'image_mode':..., 'proxy_url':..., 'use_image_server':..., 등} 형식의 딕셔너리
+        """
+        # 1. 사용자 지정 이미지 우선 확인 및 적용
+        skip_poster, skip_landscape = cls._check_and_apply_user_images(entity, settings)
+
+        # 2. 인자에서 소스 및 설정값 추출
+        poster_source = image_sources.get('poster_source')
+        poster_crop = image_sources.get('poster_crop')
+        landscape_source = image_sources.get('landscape_source')
+        final_art_urls = image_sources.get('arts', [])
+
+        image_mode = settings.get('image_mode', 'original')
+        proxy_url = settings.get('proxy_url')
+        use_image_server = settings.get('use_image_server', False)
+
+        # 3. 이미지 모드에 따라 이미지 처리 및 entity에 추가
+        if use_image_server and image_mode == 'image_server':
+            # 이미지 서버 저장 로직
+            base_path = settings.get('image_server_local_path')
+            segment = settings.get('image_path_segment')
+            ui_code = settings.get('ui_code')
+            server_url = settings.get('image_server_url')
+            
+            if not all([base_path, segment, ui_code, server_url]):
+                logger.error("[ImageUtil] 이미지 서버 설정이 불완전하여 저장을 건너뜁니다.")
+                return
+
+            if poster_source and not skip_poster:
+                p_path = cls.save_image_to_server_path(poster_source, 'p', base_path, segment, ui_code, proxy_url=proxy_url, crop_mode=poster_crop)
+                if p_path and not any(t.aspect == 'poster' for t in entity.thumb):
+                    entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url}/{p_path}"))
+            
+            if landscape_source and not skip_landscape:
+                pl_path = cls.save_image_to_server_path(landscape_source, 'pl', base_path, segment, ui_code, proxy_url=proxy_url)
+                if pl_path and not any(t.aspect == 'landscape' for t in entity.thumb):
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=f"{server_url}/{pl_path}"))
+
+            for idx, art_url in enumerate(final_art_urls):
+                art_path = cls.save_image_to_server_path(art_url, 'art', base_path, segment, ui_code, art_index=idx + 1, proxy_url=proxy_url)
+                if art_path: entity.fanart.append(f"{server_url}/{art_path}")
+        
+        else:
+            # 일반 URL 처리 로직 (프록시 등)
+            if poster_source and not skip_poster:
+                processed_poster = cls.process_image_mode(image_mode, poster_source, proxy_url=proxy_url, crop_mode=poster_crop)
+                if processed_poster and not any(t.aspect == 'poster' for t in entity.thumb):
+                    entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
+
+            if landscape_source and not skip_landscape:
+                processed_landscape = cls.process_image_mode(image_mode, landscape_source, proxy_url=proxy_url)
+                if processed_landscape and not any(t.aspect == 'landscape' for t in entity.thumb):
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+
+            for art_url in final_art_urls:
+                processed_art = cls.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
+                if processed_art: entity.fanart.append(processed_art)
+
+        logger.info(f"[ImageUtil] 이미지 최종 처리 완료. Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}")
 
 
     @classmethod
@@ -1222,17 +1335,18 @@ class SiteUtilAv:
 
 
     @classmethod
-    def _internal_has_hq_poster_comparison(cls, im_sm_obj, im_lg_to_compare, function_name_for_log="has_hq_poster"):
+    def _internal_has_hq_poster_comparison(cls, im_sm_obj, im_lg_to_compare, function_name_for_log="has_hq_poster", sm_source_info=None, lg_source_info=None):
+        # [수정] sm_source_info, lg_source_info 파라미터를 기본값 None으로 추가
         try:
             from imagehash import average_hash, phash
         except ImportError:
-            logger.warning(f"{function_name_for_log}: ImageHash library not found.")
+            logger.warning(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': ImageHash library not found.")
             return None
 
         ws, hs = im_sm_obj.size
         wl, hl = im_lg_to_compare.size
         if ws > wl or hs > hl:
-            logger.debug(f"{function_name_for_log}: Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
+            logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
             return None
 
         positions = ["r", "l", "c"]
@@ -1242,37 +1356,38 @@ class SiteUtilAv:
                 cropped_im = cls.imcrop(im_lg_to_compare, position=pos)
                 if cropped_im is None: continue
                 if average_hash(im_sm_obj) - average_hash(cropped_im) <= ahash_threshold:
-                    # logger.debug(f"{function_name_for_log}: Found similar (ahash) at pos '{pos}'.")
+                    # [수정] 로그 강화
+                    logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Found similar (ahash) at pos '{pos}'.")
                     return pos
             except Exception as e_ahash:
-                logger.error(f"{function_name_for_log}: Exception during ahash for pos '{pos}': {e_ahash}")
+                logger.error(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Exception during ahash for pos '{pos}': {e_ahash}")
                 continue
-        
-        # logger.debug(f"{function_name_for_log}: Primary check (ahash) failed. Trying phash.")
+
         phash_threshold = 10
         for pos in positions:
             try:
                 cropped_im = cls.imcrop(im_lg_to_compare, position=pos)
                 if cropped_im is None: continue
                 if phash(im_sm_obj) - phash(cropped_im) <= phash_threshold:
-                    # logger.debug(f"{function_name_for_log}: Found similar (phash) at pos '{pos}'.")
+                    logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Found similar (phash) at pos '{pos}'.")
                     return pos
             except Exception as e_phash:
-                logger.error(f"{function_name_for_log}: Exception during phash for pos '{pos}': {e_phash}")
+                logger.error(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Exception during phash for pos '{pos}': {e_phash}")
                 continue
-        
-        logger.debug(f"{function_name_for_log}: No similar region found (ahash & phash).")
+
+        logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': No similar region found (ahash & phash).")
         return None
 
 
     @classmethod
-    def is_hq_poster(cls, im_sm_source, im_lg_source, proxy_url=None):
+    def is_hq_poster(cls, im_sm_source, im_lg_source, proxy_url=None, sm_source_info=None, lg_source_info=None):
         logger.debug(f"--- is_hq_poster called ---")
-        log_sm_info = f"URL: {im_sm_source}" if isinstance(im_sm_source, str) else f"Type: {type(im_sm_source)}"
-        log_lg_info = f"URL: {im_lg_source}" if isinstance(im_lg_source, str) else f"Type: {type(im_lg_source)}"
+        log_sm_info = sm_source_info or (f"URL: {im_sm_source}" if isinstance(im_sm_source, str) else f"Type: {type(im_sm_source)}")
+        log_lg_info = lg_source_info or (f"URL: {im_lg_source}" if isinstance(im_lg_source, str) else f"Type: {type(im_lg_source)}")
+        
         logger.debug(f"  Small Image Source: {log_sm_info}")
         logger.debug(f"  Large Image Source: {log_lg_info}")
-        
+
         try:
             if im_sm_source is None or im_lg_source is None:
                 logger.debug("  Result: False (Source is None)")
@@ -1351,8 +1466,13 @@ class SiteUtilAv:
 
             # 1단계: 원본 PL 이미지로 비교 시도
             # logger.debug(f"has_hq_poster: Attempting comparison with original PL ('{im_lg_url}').")
-            found_pos = cls._internal_has_hq_poster_comparison(im_sm_obj, im_lg_obj_original, 
-                                                               function_name_for_log="has_hq_poster_original_pl")
+            found_pos = cls._internal_has_hq_poster_comparison(
+                im_sm_obj, 
+                im_lg_obj_original, 
+                function_name_for_log="has_hq_poster_original_pl",
+                sm_source_info=im_sm_url,
+                lg_source_info=im_lg_url
+            )
 
             if found_pos:
                 logger.debug(f"has_hq_poster: Found position '{found_pos}' using original PL.")
@@ -1394,9 +1514,13 @@ class SiteUtilAv:
 
             # 레터박스 제거된 이미지가 있다면, 그것으로 다시 비교 시도
             if im_lg_no_letterbox:
-                # logger.debug(f"has_hq_poster: Retrying comparison with letterbox-removed PL ('{im_lg_url}').")
-                found_pos_retry = cls._internal_has_hq_poster_comparison(im_sm_obj, im_lg_no_letterbox, 
-                                                                        function_name_for_log="has_hq_poster_letterbox_removed")
+                found_pos_retry = cls._internal_has_hq_poster_comparison(
+                    im_sm_obj, 
+                    im_lg_no_letterbox, 
+                    function_name_for_log="has_hq_poster_letterbox_removed",
+                    sm_source_info=im_sm_url,
+                    lg_source_info=f"{im_lg_url} (letterbox removed)"
+                )
                 if found_pos_retry:
                     logger.debug(f"has_hq_poster: Found position '{found_pos_retry}' using letterbox-removed PL.")
                     # 중요: 여기서 반환되는 found_pos_retry는 레터박스 제거된 이미지 기준의 크롭 위치.

@@ -8,7 +8,7 @@ from ..setup import P, logger
 from ..site_util_av import SiteUtilAv as SiteUtil
 
 class SiteMgstage:
-    site_name = "mgsdvd"
+    site_name = "mgstage"
     site_char = "M"
     site_base_url = "https://www.mgstage.com"
     module_char = None
@@ -221,12 +221,9 @@ class SiteMgstageDvd(SiteMgstage):
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
         maintain_series_number_labels_str = kwargs.get('maintain_series_number_labels', '')
 
-        # logger.debug(f"Image Server Mode Check ({cls.module_char}): image_mode={image_mode}, use_image_server={use_image_server}")
-
         cached_data = cls._ps_url_cache.get(code, {}) 
         ps_url_from_search_cache = kwargs.get('ps_url')
         if not ps_url_from_search_cache:
-            cached_data = cls._ps_url_cache.get(code, {}) 
             ps_url_from_search_cache = cached_data.get('ps')
 
         url = cls.site_base_url + f"/product/product_detail/{code[2:]}/"
@@ -240,8 +237,10 @@ class SiteMgstageDvd(SiteMgstage):
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
 
         ui_code_for_image = ""
+        mgs_special_poster_filepath = None
 
         try:
+            # === 2. 메타데이터 파싱 ===
             h1_tags = tree.xpath('//h1[@class="tag"]/text()')
             if h1_tags:
                 h1_text_raw = h1_tags[0]
@@ -253,8 +252,6 @@ class SiteMgstageDvd(SiteMgstage):
 
             temp_shohin_hatsubai = None
             temp_haishin_kaishi = None
-            
-            # ▼ 시리즈 넘버 유지 레이블 목록 세트화
             maintain_series_labels_set = {lbl.strip().upper() for lbl in maintain_series_number_labels_str.split(',') if lbl.strip()}
 
             for tr_node in tr_nodes:
@@ -264,43 +261,29 @@ class SiteMgstageDvd(SiteMgstage):
                 value_node_instance = value_node_outer[0]
 
                 if "品番" in key_text:
-                    # 1. 페이지의 공식 품번(예: 298GOOD-005)을 그대로 파싱
                     official_code = value_text_content.strip().upper()
-                    
-                    # 2. 순수 문자 레이블 추출 (예: 298GOOD -> GOOD)
                     pure_label = cls.get_label_from_ui_code(official_code)
-
-                    # 3. 설정에 따라 최종 ui_code 결정
                     if pure_label in maintain_series_labels_set:
-                        # 시리즈 넘버 유지
                         final_ui_code = official_code
                     else:
-                        # 시리즈 넘버 제거
                         match = cls.PTN_SEARCH_REAL_NO.search(official_code)
                         if match:
-                            # 정규식으로 순수 레이블과 번호 재조합
                             final_ui_code = f"{pure_label}-{match.group('no')}"
                         else:
-                            # 패턴이 안맞으면 공식 품번 그대로 사용
                             final_ui_code = official_code
                     
                     ui_code_for_image = final_ui_code.lower()
                     entity.ui_code = final_ui_code
                     entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
-
                     label_for_tag = official_code.split('-', 1)[0]
                     if entity.tag is None: entity.tag = []
                     if label_for_tag and label_for_tag not in entity.tag:
                         entity.tag.append(label_for_tag)
-                    
                     logger.debug(f"MGStage ({cls.module_char}): Official Code='{official_code}', Pure Label='{pure_label}', Final UI Code='{final_ui_code}' (Maintain Series: {pure_label in maintain_series_labels_set})")
-
                 elif "商品発売日" in key_text:
-                    if "----" not in value_text_content:
-                        temp_shohin_hatsubai = value_text_content.replace("/", "-")
+                    if "----" not in value_text_content: temp_shohin_hatsubai = value_text_content.replace("/", "-")
                 elif "配信開始日" in key_text:
-                    if "----" not in value_text_content:
-                        temp_haishin_kaishi = value_text_content.replace("/", "-")
+                    if "----" not in value_text_content: temp_haishin_kaishi = value_text_content.replace("/", "-")
                 elif "収録時間" in key_text:
                     rt_match = re.search(r'(\d+)', value_text_content)
                     if rt_match: entity.runtime = int(rt_match.group(1))
@@ -349,281 +332,143 @@ class SiteMgstageDvd(SiteMgstage):
                 logger.error(f"MGStage ({cls.module_char}): CRITICAL - Failed to parse identifier for {code}.")
                 return None
 
-        except Exception as e_meta:
-            logger.exception(f"MGStage ({cls.module_char}): Major error during metadata parsing: {e_meta}")
-            return None
-
-        label_from_ui_code_for_settings = ""
-        if hasattr(entity, 'ui_code') and entity.ui_code:
-            ui_code_for_image = entity.ui_code.lower()
-            label_from_ui_code_for_settings = cls.get_label_from_ui_code(entity.ui_code)
-            logger.debug(f"[{cls.site_name} Info] Extracted label for settings: '{label_from_ui_code_for_settings}' from ui_code '{entity.ui_code}'")
-        else:
-            logger.warning(f"[{cls.site_name} Info] entity.ui_code not found after parsing. Using fallback for image filenames.")
-            ui_code_for_image = code[len(cls.module_char)+len(cls.site_char):].replace("_", "-")
-
-        apply_ps_to_poster_for_this_item = False
-        forced_crop_mode_for_this_item = None
-
-        # 포스터 예외처리 플래그 결정
-        apply_ps_to_poster_for_this_item = False
-        forced_crop_mode_for_this_item = None
-        if label_from_ui_code_for_settings:
-            if ps_to_poster_labels_str:
-                ps_force_labels_set = {lbl.strip().upper() for lbl in ps_to_poster_labels_str.split(',') if lbl.strip()}
-                if label_from_ui_code_for_settings in ps_force_labels_set:
-                    apply_ps_to_poster_for_this_item = True
-            if crop_mode_settings_str:
-                for line in crop_mode_settings_str.splitlines():
-                    if not line.strip(): continue
-                    parts = [x.strip() for x in line.split(":", 1)]
-                    if len(parts) == 2 and parts[0].upper() == label_from_ui_code_for_settings and parts[1].lower() in ["r", "l", "c"]:
-                        forced_crop_mode_for_this_item = parts[1].lower(); break
-
-        user_custom_poster_url = None
-        user_custom_landscape_url = None
-        skip_default_poster_logic = False
-        skip_default_landscape_logic = False
-
-        if use_image_server and image_server_local_path and image_server_url and ui_code_for_image:
-            poster_suffixes = ["_p_user.jpg", "_p_user.png", "_p_user.webp"]
-            landscape_suffixes = ["_pl_user.jpg", "_pl_user.png", "_pl_user.webp"]
-            for suffix in poster_suffixes:
-                _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix, image_server_url)
-                
-                if web_url: 
-                    user_custom_poster_url = web_url
-                    entity.thumb.append(
-                        EntityThumb(
-                            aspect="poster", 
-                            value=user_custom_poster_url
-                        )
-                    )
-                    skip_default_poster_logic = True
-                    logger.debug(f"MGStage ({cls.module_char}): Using user custom poster: {web_url}")
-                    break 
-            for suffix in landscape_suffixes:
-                _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix, image_server_url)
-                if web_url: 
-                    user_custom_landscape_url = web_url
-                    entity.thumb.append(
-                        EntityThumb(
-                            aspect="landscape", 
-                            value=user_custom_landscape_url
-                        )
-                    )
-                    skip_default_landscape_logic = True
-                    logger.debug(f"MGStage ({cls.module_char}): Using user custom landscape: {web_url}")
-                    break
-
-        final_poster_source = None
-        final_poster_crop_mode = None
-        final_landscape_url_source = None
-        arts_urls_for_processing = []
-        mgs_special_poster_filepath = None
-
-        # --- 기본 이미지 처리 로직 진입 조건 ---
-        needs_default_image_processing = not skip_default_poster_logic or \
-                                         not skip_default_landscape_logic or \
-                                         (entity.fanart is None or (len(entity.fanart) < max_arts and max_arts > 0))
-
-        if needs_default_image_processing:
-            logger.debug(f"MGStage ({cls.module_char}): Running default image logic for {code} (P_skip:{skip_default_poster_logic}, PL_skip:{skip_default_landscape_logic}, FanartNeed:{entity.fanart is None or (len(entity.fanart) < max_arts and max_arts > 0)}).")
-
+            # === 3. 이미지 소스 결정 및 관계 처리 ===
+            
+            # --- 3a. 원본 이미지 URL 파싱 ---
             img_urls_from_page = cls.__img_urls(tree)
             pl_url = img_urls_from_page.get('pl')
             all_arts = img_urls_from_page.get('arts', [])
+            
+            # --- 3b. 최종 소스로 사용할 변수 초기화 ---
+            final_poster_source = None
+            final_poster_crop_mode = None
+            final_landscape_url_source = None
+            arts_urls_for_processing = []
 
-            # 랜드스케이프 결정 (기본: pl_url)
-            if not skip_default_landscape_logic and pl_url:
+            # --- 3c. 랜드스케이프 소스 결정 ---
+            if pl_url:
                 final_landscape_url_source = pl_url
 
-            # 포스터 결정 로직 (사용자 지정 포스터가 없을 때)
-            if not skip_default_poster_logic:
-                logger.debug(f"[{cls.site_name} Info] Default poster logic started. apply_ps_flag={apply_ps_to_poster_for_this_item}, forced_crop_mode='{forced_crop_mode_for_this_item}'")
-
-                # 1. "포스터 예외처리 2" (사용자 지정 크롭 모드)
-                if forced_crop_mode_for_this_item and pl_url:
-                    logger.info(f"[{cls.site_name} Info] Poster determined by 예외처리 2 (크롭 지정: '{forced_crop_mode_for_this_item}'). Using PL: {pl_url}")
-                    final_poster_source = pl_url
-                    final_poster_crop_mode = forced_crop_mode_for_this_item
-
-                # --- 위에서 포스터가 결정되지 않았고, PS Cache가 있는 경우 ---
-                if ps_url_from_search_cache: 
-                    logger.debug(f"[{cls.site_name} Info] PS cache exists. Evaluating PS-based poster options.")
-
-                    # 2. "포스터 예외처리 1" (PS 강제 사용)
-                    if apply_ps_to_poster_for_this_item:
-                        logger.info(f"[{cls.site_name} Info] Poster determined by 예외처리 1 (PS 강제). Using PS: {ps_url_from_search_cache}")
-                        final_poster_source = ps_url_from_search_cache
-                        final_poster_crop_mode = None
-
-                    # --- 일반적인 포스터 결정 로직 ---
-                    else:
-                        logger.debug(f"[{cls.site_name} Info] No forced settings applied (with PS). Applying general poster determination.")
-
-                        specific_arts_candidates = []
-                        if all_arts:
-                            if all_arts[0]: specific_arts_candidates.append(all_arts[0])
-                            if len(all_arts) > 1 and all_arts[-1] != all_arts[0]:
-                                specific_arts_candidates.append(all_arts[-1])
-
-                        # 3. is_hq_poster 검사
-                        if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
-                            if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url):
-                                final_poster_source = pl_url
-                                # final_poster_crop_mode = None
-                                logger.debug(f"[{cls.site_name} Info] Poster set to PL by is_hq_poster: {pl_url}")
-
-                        if final_poster_source is None and specific_arts_candidates:
-                            for art_candidate in specific_arts_candidates:
-                                if art_candidate == pl_url: 
-                                    continue
-                                if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
-                                    if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
-                                        final_poster_source = art_candidate
-                                        # final_poster_crop_mode = None
-                                        logger.debug(f"[{cls.site_name} Info] Poster set to Art by is_hq_poster: {art_candidate}")
-                                        break
-
-                        # 4. MGS Special 처리
-                        if (final_poster_source is None or final_poster_source == ps_url_from_search_cache) and pl_url:
-                            logger.debug(f"[{cls.site_name} Info] Attempting MGS style processing for PL ('{pl_url}') & PS ('{ps_url_from_search_cache}').")
-                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                            if temp_filepath and os.path.exists(temp_filepath):
-                                mgs_special_poster_filepath = temp_filepath
-                                final_poster_source = mgs_special_poster_filepath
-                                final_poster_crop_mode = None
-                                logger.debug(f"[{cls.site_name} Info] MGS style processing successful. Using temp file: {mgs_special_poster_filepath}")
-
-                        # 5. has_hq_poster 검사
-                        if final_poster_source is None:
-                            if pl_url:
-                                crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                                if crop_pos:
-                                    final_poster_source = pl_url
-                                    final_poster_crop_mode = crop_pos
-
-                            if final_poster_source is None and specific_arts_candidates:
-                                for art_candidate in specific_arts_candidates:
-                                    if art_candidate == pl_url: continue
-                                    crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
-                                    if crop_pos_art:
-                                        final_poster_source = art_candidate
-                                        final_poster_crop_mode = crop_pos_art; break
-
-                        # 6. 최종 폴백: PS 사용
-                        if final_poster_source is None:
-                            logger.debug(f"[{cls.site_name} Info] General/MGS special failed (with PS). Falling back to PS.")
-                            final_poster_source = ps_url_from_search_cache
-                            final_poster_crop_mode = None
-
-                else:
-                    logger.debug(f"[{cls.site_name} Info] No PS url found. Skipping poster processing")
-
-                # 최종 결정된 포스터 정보 로깅
-                if final_poster_source:
-                    logger.debug(f"[{cls.site_name} Info] Final Poster Decision - Source type: {type(final_poster_source)}, Crop: {final_poster_crop_mode}")
-                    if isinstance(final_poster_source, str): logger.debug(f"  Source URL/Path: {final_poster_source[:150]}")
-                else:
-                    logger.error(f"[{cls.site_name} Info] CRITICAL: No poster source could be determined for {code}")
-                    final_poster_source = None
-                    final_poster_crop_mode = None
-
-            # 팬아트 목록 결정
-            arts_urls_for_processing = []
-            if all_arts:
-                temp_fanart_list_mg = []
-                sources_to_exclude_for_fanart_mg = set()
-                if final_landscape_url_source: sources_to_exclude_for_fanart_mg.add(final_landscape_url_source)
-                if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
-                    sources_to_exclude_for_fanart_mg.add(final_poster_source)
-
-                if pl_url and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath:
-                    sources_to_exclude_for_fanart_mg.add(pl_url)
-
-                for art_url_item_mg in all_arts:
-                    if len(temp_fanart_list_mg) >= max_arts: break
-                    if art_url_item_mg and art_url_item_mg not in sources_to_exclude_for_fanart_mg:
-                        if art_url_item_mg not in temp_fanart_list_mg:
-                            temp_fanart_list_mg.append(art_url_item_mg)
-                arts_urls_for_processing = temp_fanart_list_mg
-
-        logger.debug(f"MGStage ({cls.module_char}): Final Images Decision - Poster='{str(final_poster_source)[:100]}...' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_url_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
-
-        # --- 이미지 최종 적용 (서버 저장 또는 프록시) ---
-        if not (use_image_server and image_mode == 'image_server'):
-            # 프록시 모드 처리
-            if not skip_default_poster_logic and final_poster_source:
-                if not any(t.aspect == 'poster' for t in entity.thumb):
-                    processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                    if processed_poster:
-                        entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-
-            if not skip_default_landscape_logic and final_landscape_url_source:
-                if not any(t.aspect == 'landscape' for t in entity.thumb):
-                    processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
-                    if processed_landscape:
-                        entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
-
-            if arts_urls_for_processing:
-                if entity.fanart is None: entity.fanart = []
-                for art_url in arts_urls_for_processing:
-                    processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
-                    if processed_art and processed_art not in entity.fanart:
-                        entity.fanart.append(processed_art)
-
-        elif use_image_server and image_mode == 'image_server' and ui_code_for_image:
-            if not skip_default_poster_logic and final_poster_source:
-                if not any(t.aspect == 'poster' for t in entity.thumb):
-                    p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                    if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
-
-            if not skip_default_landscape_logic and final_landscape_url_source:
-                if not any(t.aspect == 'landscape' for t in entity.thumb):
-                    pl_path = SiteUtil.save_image_to_server_path(final_landscape_url_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-                    if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
+            # --- 3d. 포스터 소스 결정 ---
+            apply_ps_to_poster_for_this_item = False
+            forced_crop_mode_for_this_item = None
+            if hasattr(entity, 'ui_code') and entity.ui_code:
+                label_from_ui_code = cls.get_label_from_ui_code(entity.ui_code)
+                if label_from_ui_code:
+                    if ps_to_poster_labels_str:
+                        ps_force_labels_set = {lbl.strip().upper() for lbl in ps_to_poster_labels_str.split(',') if lbl.strip()}
+                        if label_from_ui_code in ps_force_labels_set:
+                            apply_ps_to_poster_for_this_item = True
+                    if crop_mode_settings_str:
+                        for line in crop_mode_settings_str.splitlines():
+                            parts = [x.strip() for x in line.split(":", 1)]
+                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in ["r", "l", "c"]:
+                                forced_crop_mode_for_this_item = parts[1].lower(); break
             
-            if arts_urls_for_processing:
-                if entity.fanart is None: entity.fanart = []
-                current_fanart_urls_on_server = {fanart_url for fanart_url in entity.fanart if isinstance(fanart_url, str) and fanart_url.startswith(image_server_url)}
-                processed_fanart_count_server = len(current_fanart_urls_on_server)
+            if forced_crop_mode_for_this_item and pl_url:
+                final_poster_source = pl_url
+                final_poster_crop_mode = forced_crop_mode_for_this_item
+            elif ps_url_from_search_cache:
+                if apply_ps_to_poster_for_this_item:
+                    final_poster_source = ps_url_from_search_cache
+                else:
+                    specific_arts_candidates = []
+                    if all_arts:
+                        if all_arts[0]: specific_arts_candidates.append(all_arts[0])
+                        if len(all_arts) > 1 and all_arts[-1] != all_arts[0]: specific_arts_candidates.append(all_arts[-1])
+                    
+                    poster_candidates = ([pl_url] if pl_url else []) + specific_arts_candidates
+                    for candidate in poster_candidates:
+                        if SiteUtil.is_portrait_high_quality_image(candidate, proxy_url=proxy_url) and \
+                           SiteUtil.is_hq_poster(ps_url_from_search_cache, candidate, proxy_url=proxy_url,
+                                                sm_source_info=ps_url_from_search_cache, lg_source_info=candidate):
+                            final_poster_source = candidate
+                            break
+                    if final_poster_source is None and pl_url:
+                        temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
+                        if temp_filepath and os.path.exists(temp_filepath):
+                            mgs_special_poster_filepath = temp_filepath
+                            final_poster_source = mgs_special_poster_filepath
+                    if final_poster_source is None:
+                        for candidate in poster_candidates:
+                            crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, candidate, proxy_url=proxy_url)
+                            if crop_pos:
+                                final_poster_source = candidate
+                                final_poster_crop_mode = crop_pos
+                                break
 
-                for idx, art_url in enumerate(arts_urls_for_processing):
-                    if processed_fanart_count_server >= max_arts: break
-                    art_relative_path = SiteUtil.save_image_to_server_path(art_url, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
-                    if art_relative_path:
-                        full_art_url_server = f"{image_server_url}/{art_relative_path}"
-                        if full_art_url_server not in current_fanart_urls_on_server:
-                            entity.fanart.append(full_art_url_server)
-                            current_fanart_urls_on_server.add(full_art_url_server)
-                            processed_fanart_count_server +=1
+                    if final_poster_source is None:
+                        final_poster_source = ps_url_from_search_cache
+            else:
+                logger.warning(f"[{cls.site_name} Info] No PS url found. Poster cannot be determined.")
 
-        if use_extras:
-            try:
-                trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
-                if trailer_sample_btn:
-                    pid_trailer = trailer_sample_btn[0].split("/")[-1]
-                    api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
-                    api_headers_trailer = cls.headers.copy(); api_headers_trailer['Referer'] = url 
-                    api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
-                    res_json_trailer = SiteUtil.get_response(api_url_trailer, proxy_url=proxy_url, headers=api_headers_trailer).json()
-                    if res_json_trailer and res_json_trailer.get("url"):
-                        trailer_base = res_json_trailer["url"].split(".ism")[0]; trailer_final_url = trailer_base + ".mp4"
-                        trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
-                        entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
-            except Exception as e_trailer_proc_dvd:
-                logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
+            # --- 3e. 최종 팬아트 목록 결정 (아트 처리 및 변수 처리) ---
+            if all_arts and max_arts > 0:
+                used_for_thumb = set()
+                if final_landscape_url_source: used_for_thumb.add(final_landscape_url_source)
+                if final_poster_source and isinstance(final_poster_source, str): used_for_thumb.add(final_poster_source)
+                if mgs_special_poster_filepath and pl_url: used_for_thumb.add(pl_url)
+                arts_urls_for_processing = [art for art in all_arts if art and art not in used_for_thumb][:max_arts]
+            
+            logger.debug(f"MGStage (Decision Phase): Final Poster='{str(final_poster_source)[:100]}...', Landscape='{final_landscape_url_source}', Fanarts to process({len(arts_urls_for_processing)})")
 
-        final_entity = entity
-        if entity.originaltitle:
-            try: final_entity = SiteUtil.shiroutoname_info(entity)
-            except Exception as e_shirouto_proc: logger.exception(f"MGStage (Ama): Shiroutoname error: {e_shirouto_proc}")
-        else: logger.warning(f"MGStage (Ama): Skipping Shiroutoname (no originaltitle for {code}).")
-        entity = final_entity
+            # === 4. 최종 후처리 위임 ===
+            final_image_sources = {
+                'poster_source': final_poster_source,
+                'poster_crop': final_poster_crop_mode,
+                'landscape_source': final_landscape_url_source,
+                'arts': arts_urls_for_processing,
+            }
+            image_processing_settings = {
+                'image_mode': image_mode,
+                'proxy_url': proxy_url,
+                'max_arts': max_arts,
+                'ui_code': ui_code_for_image,
+                'use_image_server': use_image_server,
+                'image_server_url': image_server_url,
+                'image_server_local_path': image_server_local_path,
+                'image_path_segment': image_path_segment,
+            }
+            SiteUtil.finalize_images_for_entity(entity, final_image_sources, image_processing_settings)
 
-        logger.info(f"MGStage ({cls.module_char}): __info finished for {code}. UI Code: {ui_code_for_image}, PSkip: {skip_default_poster_logic}, PLSkip: {skip_default_landscape_logic}, Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}")
-        return entity
+            # === 5. 예고편 및 Shiroutoname 보정 처리 ===
+            if use_extras:
+                try:
+                    trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
+                    if trailer_sample_btn:
+                        pid_trailer = trailer_sample_btn[0].split("/")[-1]
+                        api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
+                        api_headers_trailer = cls.headers.copy(); api_headers_trailer['Referer'] = url 
+                        api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
+                        res_json_trailer = SiteUtil.get_response(api_url_trailer, proxy_url=proxy_url, headers=api_headers_trailer).json()
+                        if res_json_trailer and res_json_trailer.get("url"):
+                            trailer_base = res_json_trailer["url"].split(".ism")[0]; trailer_final_url = trailer_base + ".mp4"
+                            trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
+                            entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
+                except Exception as e_trailer_proc_dvd:
+                    logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
+
+            if entity.originaltitle:
+                try: 
+                    entity = SiteUtil.shiroutoname_info(entity)
+                except Exception as e_shirouto_proc: 
+                    logger.exception(f"MGStage (Ama): Shiroutoname error: {e_shirouto_proc}")
+            
+            logger.info(f"MGStage ({cls.module_char}): __info finished for {code}. UI Code: {ui_code_for_image}")
+            return entity
+
+        except Exception as e:
+            logger.exception(f"MGStage ({cls.module_char}): Major error during info processing for {code}: {e}")
+            return None # 예외 발생 시 None 반환
+        
+        finally:
+            # === 6. 임시 파일 정리 ===
+            if mgs_special_poster_filepath and os.path.exists(mgs_special_poster_filepath):
+                try:
+                    os.remove(mgs_special_poster_filepath)
+                    logger.debug(f"MGStage ({cls.module_char}): Removed MGS-style temp poster file: {mgs_special_poster_filepath}")
+                except Exception as e_remove_temp:
+                    logger.error(f"MGStage ({cls.module_char}): Failed to remove MGS-style temp poster file {mgs_special_poster_filepath}: {e_remove_temp}")
 
 
     @classmethod

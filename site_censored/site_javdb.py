@@ -340,7 +340,7 @@ class SiteJavdb:
 
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{cls.site_base_url}/v/{original_code_for_url}"
-        temp_poster_file_to_clean = None  # 삭제할 임시 파일 경로를 저장할 변수
+        temp_poster_file_to_clean = None
 
         try:
             logger.debug(f"JavDB Info: Accessing URL: {detail_url} for code {code}")
@@ -354,18 +354,16 @@ class SiteJavdb:
                 return None
 
             html_info_text = res_info.text
-
             tree_info = html.fromstring(html_info_text)
             if tree_info is None:
                 logger.warning(f"JavDB Info: Failed to parse detail page HTML for {code}.")
                 return None
 
             entity = EntityMovie(cls.site_name, code)
-            entity.country = ['일본'] 
-            entity.mpaa = '청소년 관람불가'
+            entity.country = ['일본']; entity.mpaa = '청소년 관람불가'
             entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
 
-            # 1. 페이지의 "ID" 필드에서 표준 ui_code 파싱
+            # === 2. 메타데이터 파싱 ===
             id_panel_block = tree_info.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()')
             base_ui_code = id_panel_block[0].strip().upper() if id_panel_block else ""
             if not base_ui_code:
@@ -373,32 +371,17 @@ class SiteJavdb:
                 if h2_visible_code_node:
                     base_ui_code = h2_visible_code_node[0].strip().upper()
             
-            # --- 시리즈 넘버 유지 로직 ---
-            final_ui_code = base_ui_code # 기본값
+            final_ui_code = base_ui_code
             maintain_labels_set = {label.strip().upper() for label in maintain_series_number_labels_str.split(',') if label}
-
-            logger.debug(f"JavDB Info: final_ui_code = {final_ui_code}, original_keyword = {original_keyword}, base_ui_code = {base_ui_code}, maintain_labels_set = {maintain_labels_set}")
 
             if original_keyword and base_ui_code and maintain_labels_set:
                 keyword_match = re.match(r'^(\d+)?([A-Z]+)-?(\d+)', original_keyword.upper())
                 javdb_match = re.match(r'^([A-Z]+)-(\d+)', base_ui_code)
-
-                logger.debug(f"JavDB Info: keyword_match = {keyword_match}, javdb_match = {javdb_match}")
-
                 if keyword_match and javdb_match:
                     kw_prefix, kw_label, kw_num = keyword_match.groups()
                     jb_label, jb_num = javdb_match.groups()
-                    
-                    logger.debug(f"JavDB Info: Keyword Parts: prefix={kw_prefix}, label={kw_label}, num={kw_num}")
-                    logger.debug(f"JavDB Info: JavDB Parts: label={jb_label}, num={jb_num}")
-
-                    if (kw_prefix and 
-                        kw_label == jb_label and 
-                        kw_num.lstrip('0') == jb_num.lstrip('0') and 
-                        jb_label in maintain_labels_set):
-                        
+                    if (kw_prefix and kw_label == jb_label and kw_num.lstrip('0') == jb_num.lstrip('0') and jb_label in maintain_labels_set):
                         final_ui_code = f"{kw_prefix}{base_ui_code}"
-                        logger.debug(f"JavDB Info: Applied series number '{kw_prefix}' from keyword. New ui_code: {final_ui_code}")
 
             entity.ui_code = final_ui_code if final_ui_code else original_code_for_url.upper()
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
@@ -424,414 +407,172 @@ class SiteJavdb:
             else: 
                 entity.tagline = entity.ui_code
 
-            if entity.ratings is None: entity.ratings = []
-
-            # 정보 패널 블록 전체 순회 로직
-            panel_blocks_xpath = '//nav[contains(@class, "movie-panel-info")]/div[contains(@class,"panel-block")]'
-            panel_blocks = tree_info.xpath(panel_blocks_xpath)
-
-            # 키 매핑: 실제 HTML에 나타날 수 있는 모든 언어의 키를 영어 키로 매핑
             key_map = {
-                '番號': 'id', 'id': 'id',
-                '日期': 'released date', 'released date': 'released date',
-                '時長': 'duration', 'duration': 'duration',
-                '導演': 'director', 'director': 'director',
-                '片商': 'maker', 'maker': 'maker',
-                '發行': 'publisher', 'publisher': 'publisher',
-                '系列': 'series', 'series': 'series',
-                '評分': 'rating', 'rating': 'rating',
-                '類別': 'tags', 'tags': 'tags',
-                '演員': 'actor(s)', 'actor(s)': 'actor(s)'
+                '番號': 'id', 'id': 'id', '日期': 'released date', 'released date': 'released date', '時長': 'duration', 
+                'duration': 'duration', '導演': 'director', 'director': 'director', '片商': 'maker', 'maker': 'maker', 
+                '發行': 'publisher', 'publisher': 'publisher', '系列': 'series', 'series': 'series', '評分': 'rating', 
+                'rating': 'rating', '類別': 'tags', 'tags': 'tags', '演員': 'actor(s)', 'actor(s)': 'actor(s)'
             }
-
+            panel_blocks = tree_info.xpath('//nav[contains(@class, "movie-panel-info")]/div[contains(@class,"panel-block")]')
             for block in panel_blocks:
                 strong_tag_list = block.xpath('./strong/text()')
                 if not strong_tag_list: continue
-                
-                # HTML의 키 텍스트를 가져와서 정규화된 영어 키로 변환
                 raw_key = strong_tag_list[0].strip().replace(':', '')
-                key = key_map.get(raw_key, raw_key.lower()) # 매핑에 없으면 소문자로 사용
-
+                key = key_map.get(raw_key, raw_key.lower())
                 value_node = block.xpath('./span[@class="value"]')
                 if not value_node: continue
                 value_node = value_node[0]
 
-                if key == 'id':
-                    # ID는 이미 위에서 처리했으므로 건너뛰기
-                    continue
-                elif key == 'released date':
+                if key == 'released date':
                     entity.premiered = value_node.xpath('normalize-space()')
                     if entity.premiered:
                         try: entity.year = int(entity.premiered[:4])
-                        except ValueError: logger.warning(f"JavDB Info: Year parse error from '{entity.premiered}' for code {code}")
-                
+                        except ValueError: pass
                 elif key == 'duration':
-                    duration_text = value_node.xpath('normalize-space()')
-                    duration_match = re.search(r'(\d+)', duration_text)
+                    duration_match = re.search(r'(\d+)', value_node.xpath('normalize-space()'))
                     if duration_match: entity.runtime = int(duration_match.group(1))
-                
                 elif key == 'rating':
-                    rating_text = value_node.xpath('normalize-space()')
-                    # 다국어 지원 정규식 (users|人評價)
-                    rating_match = re.search(r'([\d\.]+)\s*.*?,\s*.*?([\d,]+)\s*(?:users|人評價)', rating_text, re.I)
+                    rating_match = re.search(r'([\d\.]+)\s*.*?,\s*.*?([\d,]+)\s*(?:users|人評價)', value_node.xpath('normalize-space()'), re.I)
                     if rating_match:
                         try:
-                            rating_val_original = float(rating_match.group(1))
-                            votes_count = int(rating_match.group(2).replace(',', ''))
-                            if entity.ratings is None: entity.ratings = []
-                            entity.ratings.append(EntityRatings(rating_val_original, max=5, name=cls.site_name, votes=votes_count))
-                        except (ValueError, IndexError):
-                            logger.warning(f"JavDB Info: Could not parse rating from text: '{rating_text}' for code {code}")
-                
+                            entity.ratings.append(EntityRatings(float(rating_match.group(1)), max=5, name=cls.site_name, votes=int(rating_match.group(2).replace(',', ''))))
+                        except (ValueError, IndexError): pass
                 elif key == 'director':
                     director_text = value_node.xpath('normalize-space()')
-                    if director_text.lower() not in ['n/a', '暂无', '暫無']:
-                        entity.director = SiteUtil.trans(director_text, do_trans=do_trans, source='ja', target='ko')
-                
+                    if director_text.lower() not in ['n/a', '暂无', '暫無']: entity.director = SiteUtil.trans(director_text, do_trans=do_trans, source='ja', target='ko')
                 elif key in ('maker', 'publisher'):
                     studio_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if not entity.studio and studio_text.lower() not in ['n/a', '暂无', '暫無']:
-                        studio_name = studio_text.split(',')[0].strip()
-                        entity.studio = SiteUtil.trans(studio_name, do_trans=do_trans, source='ja', target='ko')
-                
+                        entity.studio = SiteUtil.trans(studio_text.split(',')[0].strip(), do_trans=do_trans, source='ja', target='ko')
                 elif key == 'series':
                     series_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if series_text.lower() not in ['n/a', '暂无', '暫無']:
-                        if entity.tag is None: entity.tag = []
                         series_name = SiteUtil.trans(series_text, do_trans=do_trans, source='ja', target='ko')
-                        if series_name not in entity.tag: entity.tag.append(series_name)
-                
+                        if series_name not in (entity.tag or []):
+                            if entity.tag is None: entity.tag = []
+                            entity.tag.append(series_name)
                 elif key == 'tags':
                     if entity.genre is None: entity.genre = []
-                    genre_tags_from_panel_links = value_node.xpath('./a/text()')
-                    for genre_name_raw in genre_tags_from_panel_links:
+                    for genre_name_raw in value_node.xpath('./a/text()'):
                         genre_name = genre_name_raw.strip()
                         if genre_name:
-                            # 중국어 태그도 일본어->한국어 번역기를 사용하면 대부분 잘 번역됨
                             trans_genre = SiteUtil.trans(genre_name, do_trans=do_trans, source='ja', target='ko')
                             if trans_genre not in entity.genre: entity.genre.append(trans_genre)
-                
                 elif key == 'actor(s)':
                     if entity.actor is None: entity.actor = []
-                    actor_nodes_with_gender = value_node.xpath('./a')
-                    for actor_node in actor_nodes_with_gender:
-                        actor_name_tag = actor_node.xpath('./text()')
-                        gender_symbol_node = actor_node.xpath('./following-sibling::strong[1][contains(@class, "symbol")]')
-                        
-                        if gender_symbol_node and 'female' in gender_symbol_node[0].get('class', ''):
-                            if actor_name_tag:
-                                actor_name_original_lang = actor_name_tag[0].strip()
-                                if actor_name_original_lang and actor_name_original_lang.lower() not in ['n/a', '暂无', '暫無']:
-                                    if not any(act.originalname == actor_name_original_lang for act in entity.actor):
-                                        # 배우 이름도 번역
-                                        actor_entity = EntityActor(SiteUtil.trans(actor_name_original_lang, do_trans=do_trans, source='ja', target='ko'))
-                                        actor_entity.originalname = actor_name_original_lang
-                                        entity.actor.append(actor_entity)
+                    for actor_node in value_node.xpath('./a'):
+                        if 'female' in (actor_node.xpath('./following-sibling::strong[1]/@class') or [''])[0]:
+                            actor_name = actor_node.xpath('string()').strip()
+                            if actor_name and actor_name.lower() not in ['n/a', '暂无', '暫無'] and not any(act.originalname == actor_name for act in entity.actor):
+                                actor_entity = EntityActor(SiteUtil.trans(actor_name, do_trans=do_trans, source='ja', target='ko'))
+                                actor_entity.originalname = actor_name
+                                entity.actor.append(actor_entity)
 
-            if not entity.plot:
-                if entity.tagline and entity.tagline != entity.ui_code:
-                    entity.plot = entity.tagline
+            if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
+                entity.plot = entity.tagline
 
-            # === "포스터 예외처리 2 (크롭 모드)"를 위한 레이블 기반 forced_crop_mode_for_this_item 결정 ===
-            forced_crop_mode_for_this_item = None
-            if hasattr(entity, 'ui_code') and entity.ui_code and crop_mode_settings_str:
-                label_from_ui_code_for_settings = cls.get_label_from_ui_code(entity.ui_code)
-                if label_from_ui_code_for_settings:
-                    for line in crop_mode_settings_str.splitlines():
-                        if not line.strip(): continue
-                        parts = [x.strip() for x in line.split(":", 1)]
-                        if len(parts) == 2 and parts[0].upper() == label_from_ui_code_for_settings and parts[1].lower() in ["r", "l", "c"]:
-                            forced_crop_mode_for_this_item = parts[1].lower()
-                            logger.debug(f"[{cls.site_name} Info] 레이블 기반 강제 크롭 모드 '{forced_crop_mode_for_this_item}' 적용 for ui_code '{entity.ui_code}'")
-                            break 
+            # === 3. 이미지 소스 결정 및 관계 처리 ===
 
-            # === 사용자 지정 이미지 로드 ===
-            skip_default_poster_logic = False
-            skip_default_landscape_logic = False
-            if use_image_server and image_server_local_path and image_server_url and current_ui_code_for_image:
-                poster_suffixes = ["_p_user.jpg", "_p_user.png", "_p_user.webp"]
-                landscape_suffixes = ["_pl_user.jpg", "_pl_user.png", "_pl_user.webp"]
-                for suffix in poster_suffixes:
-                    _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, current_ui_code_for_image, suffix, image_server_url)
-                    if web_url: 
-                        if not any(t.aspect == 'poster' and t.value == web_url for t in entity.thumb):
-                            entity.thumb.append(EntityThumb(aspect="poster", value=web_url))
-                        skip_default_poster_logic = True; logger.info(f"JavDB Info: Using user custom poster: {web_url}"); break 
-                for suffix in landscape_suffixes:
-                    _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, current_ui_code_for_image, suffix, image_server_url)
-                    if web_url: 
-                        if not any(t.aspect == 'landscape' and t.value == web_url for t in entity.thumb):
-                            entity.thumb.append(EntityThumb(aspect="landscape", value=web_url))
-                        skip_default_landscape_logic = True; logger.info(f"JavDB Info: Using user custom landscape: {web_url}"); break
-
-            # === 기본 이미지 처리 시작 ===
-            final_poster_source = None 
-            final_poster_crop_mode = None 
-            final_landscape_source = None
-
-            # 1. 이미지 URL 추출 (PL, Arts)
             pl_url = None
             main_cover_img_src_nodes = tree_info.xpath('//div[@class="column column-video-cover"]//img[@class="video-cover"]/@src')
             if main_cover_img_src_nodes:
                 pl_url_raw = main_cover_img_src_nodes[0].strip()
                 if pl_url_raw.startswith("//"): pl_url = "https:" + pl_url_raw
-                elif not pl_url_raw.startswith("http"): 
-                    if pl_url_raw.startswith("/"): pl_url = py_urllib_parse.urljoin(cls.site_base_url, pl_url_raw)
-                    else: logger.warning(f"JavDB Info: Unexpected PL image src format: {pl_url_raw}")
                 else: pl_url = pl_url_raw
-            else:
-                main_cover_a_href_nodes = tree_info.xpath('//div[@class="column column-video-cover"]/a[@data-fancybox="gallery"]/@href')
-                if main_cover_a_href_nodes:
-                    pl_url_raw_href = main_cover_a_href_nodes[0].strip()
-                    if pl_url_raw_href and not pl_url_raw_href.startswith("/v/"): 
-                        if pl_url_raw_href.startswith("//"): pl_url = "https:" + pl_url_raw_href
-                        elif not pl_url_raw_href.startswith("http"):
-                            if pl_url_raw_href.startswith("/"): pl_url = py_urllib_parse.urljoin(cls.site_base_url, pl_url_raw_href)
-                            else: logger.warning(f"JavDB Info: Unexpected PL a/@href format: {pl_url_raw_href}")
-                        else: pl_url = pl_url_raw_href
-            logger.debug(f"JavDB Info: Determined pl_url = '{pl_url}' after parsing page.")
 
             arts_urls = [] 
             sample_image_container = tree_info.xpath('//div[contains(@class, "preview-images")]')
             if sample_image_container:
-                sample_image_nodes_info = sample_image_container[0].xpath('./a[@class="tile-item"]/@href')
-                for art_link_raw in sample_image_nodes_info:
+                for art_link_raw in sample_image_container[0].xpath('./a[@class="tile-item"]/@href'):
                     art_full_url_raw = art_link_raw.strip()
-                    art_full_url = None
                     if art_full_url_raw:
-                        if art_full_url_raw.startswith("//"): art_full_url = "https:" + art_full_url_raw
-                        elif not art_full_url_raw.startswith("http"):
-                            if art_full_url_raw.startswith("/"): art_full_url = py_urllib_parse.urljoin(cls.site_base_url, art_full_url_raw)
-                            else: logger.warning(f"JavDB Info: Unexpected art_link_raw format: {art_full_url_raw}"); continue
-                        else: art_full_url = art_full_url_raw
-                    if art_full_url: arts_urls.append(art_full_url)
-            logger.debug(f"JavDB Info: Collected {len(arts_urls)} arts_urls: {arts_urls[:5]}")
+                        if art_full_url_raw.startswith("//"): arts_urls.append("https:" + art_full_url_raw)
+                        else: arts_urls.append(art_full_url_raw)
 
-            # 2. VR 작품 여부 판단
-            is_vr_content = False
-            title_to_check_for_vr = entity.tagline if entity.tagline and entity.tagline != entity.ui_code else actual_raw_title_text
-            if title_to_check_for_vr:
-                normalized_title_for_vr_check = title_to_check_for_vr.upper()
-                if normalized_title_for_vr_check.startswith("[VR]") or normalized_title_for_vr_check.startswith("【VR】"):
-                    is_vr_content = True
-            # logger.debug(f"JavDB Info: Is VR content? {is_vr_content} (Checked title: '{title_to_check_for_vr}')")
-
-            # 3. 유효한 PL URL 확정 (플레이스홀더 검사)
             valid_pl_url = None
             if pl_url:
                 is_placeholder = False
                 if use_image_server and image_server_local_path:
                     placeholder_path = os.path.join(image_server_local_path, 'javdb_no_img.jpg')
-                    if os.path.exists(placeholder_path):
-                        if SiteUtil.are_images_visually_same(pl_url, placeholder_path, proxy_url=proxy_url):
-                            is_placeholder = True
-                            logger.info(f"JavDB Info: PL URL ('{pl_url}') is a placeholder (javdb_no_img.jpg).")
+                    if os.path.exists(placeholder_path) and SiteUtil.are_images_visually_same(pl_url, placeholder_path, proxy_url=proxy_url):
+                        is_placeholder = True
                 if not is_placeholder:
                     valid_pl_url = pl_url
 
-            if not valid_pl_url and not skip_default_poster_logic:
-                logger.warning(f"JavDB Info: No valid PL URL for {code} for default poster generation.")
+            final_poster_source = None; final_poster_crop_mode = None
+            final_landscape_source = None; arts_urls_for_processing = []
 
-            # 4. 포스터 및 랜드스케이프 결정
-            if valid_pl_url: # 유효한 PL이 있을 때만 기본 포스터/랜드스케이프 로직 진행
-                # --- 포스터 결정 ---
-                if not skip_default_poster_logic:
-                    temp_poster_source = None
-                    temp_crop_mode = None
+            if valid_pl_url:
+                final_landscape_source = valid_pl_url
 
-                    effective_crop_mode_to_try = forced_crop_mode_for_this_item if forced_crop_mode_for_this_item else user_defined_crop_mode
-                    if effective_crop_mode_to_try:
-                        temp_poster_source = valid_pl_url
-                        temp_crop_mode = effective_crop_mode_to_try
-                        logger.debug(f"JavDB Poster (Prio 1): Effective crop_mode '{temp_crop_mode}' with PL '{valid_pl_url}'.")
+                forced_crop_mode_for_this_item = None
+                if hasattr(entity, 'ui_code') and entity.ui_code and crop_mode_settings_str:
+                    label_from_ui_code_for_settings = cls.get_label_from_ui_code(entity.ui_code)
+                    if label_from_ui_code_for_settings:
+                        for line in crop_mode_settings_str.splitlines():
+                            parts = [x.strip() for x in line.split(":", 1)]
+                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code_for_settings and parts[1].lower() in ["r", "l", "c"]:
+                                forced_crop_mode_for_this_item = parts[1].lower(); break
 
-                    # 1. PL이 세로형 고품질 이미지일 경우
-                    if temp_poster_source is None:
-                        is_pl_suitable_as_poster = False
-                        try:
-                            pl_image_obj = SiteUtil.imopen(valid_pl_url, proxy_url=proxy_url)
-                            if pl_image_obj:
-                                pl_width, pl_height = pl_image_obj.size
-                                if pl_width > 0 and pl_height > 0:
-                                    if pl_height >= pl_width and pl_width >= 300:
-                                        is_pl_suitable_as_poster = True
-                                        logger.info(f"JavDB Poster (Prio 0 - New): PL is suitable as portrait poster (W:{pl_width}, H:{pl_height}). Using PL: {valid_pl_url}")
-                            if pl_image_obj: pl_image_obj.close()
-                        except Exception as e_pl_check:
-                            logger.warning(f"JavDB Poster (Prio 0 - New): Error checking PL suitability: {e_pl_check}")
+                is_vr_content = (entity.tagline or "").upper().startswith(("[VR]", "【VR】"))
 
-                        if is_pl_suitable_as_poster:
-                            temp_poster_source = valid_pl_url
-                            temp_crop_mode = None
+                effective_crop_mode_to_try = forced_crop_mode_for_this_item or user_defined_crop_mode
+                if effective_crop_mode_to_try:
+                    final_poster_source, final_poster_crop_mode = valid_pl_url, effective_crop_mode_to_try
+                elif SiteUtil.is_portrait_high_quality_image(valid_pl_url, proxy_url=proxy_url):
+                    final_poster_source = valid_pl_url
+                elif is_vr_content and arts_urls and SiteUtil.is_portrait_high_quality_image(arts_urls[0], proxy_url=proxy_url):
+                    final_poster_source = arts_urls[0]
+                else:
+                    processed_source, rec_crop, _ = SiteUtil.get_javdb_poster_from_pl_local(valid_pl_url, entity.ui_code, proxy_url=proxy_url)
+                    if processed_source:
+                        final_poster_source, final_poster_crop_mode = processed_source, rec_crop
+                        if isinstance(processed_source, str) and os.path.basename(processed_source).startswith("javdb_temp_poster_"):
+                            temp_poster_file_to_clean = processed_source
 
-                    # 2. 세로 포스터 우선(VR / ART)
-                    if temp_poster_source is None and is_vr_content and arts_urls:
-                        first_art_url = arts_urls[0]
-                        if SiteUtil.is_portrait_high_quality_image(first_art_url, proxy_url=proxy_url, min_height=600, aspect_ratio_threshold=1.2):
-                            temp_poster_source = first_art_url
-                            temp_crop_mode = None 
-                            logger.info(f"JavDB Poster (Prio 2): VR content, using first art '{first_art_url}'.")
+            if arts_urls and max_arts > 0:
+                used_for_thumb = set()
+                if final_landscape_source: used_for_thumb.add(final_landscape_source)
+                if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
+                    used_for_thumb.add(final_poster_source)
+                arts_urls_for_processing = [art for art in arts_urls if art and art not in used_for_thumb][:max_arts]
 
-                    # 3. 특수 고정 크기 크롭 (해상도 기반: blue-ray 포스터)
-                    if temp_poster_source is None:
-                        try:
-                            pl_image_obj_for_fixed_crop = SiteUtil.imopen(valid_pl_url, proxy_url=proxy_url)
-                            if pl_image_obj_for_fixed_crop:
-                                img_width, img_height = pl_image_obj_for_fixed_crop.size
-                                if img_width == 800 and 436 <= img_height <= 446:
-                                    crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
-                                    cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
-                                    if cropped_pil_object:
-                                        # PIL 객체를 임시 파일로 저장하고 그 경로를 사용
-                                        temp_filename = f"javdb_fixed_crop_{current_ui_code_for_image.replace('/','_')}_{os.urandom(4).hex()}.jpg"
-                                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                                        
-                                        img_to_save = cropped_pil_object
-                                        if img_to_save.mode not in ('RGB', 'L'):
-                                            img_to_save = img_to_save.convert('RGB')
-                                        
-                                        img_to_save.save(temp_filepath, format="JPEG", quality=95)
-                                        
-                                        temp_poster_source = temp_filepath
-                                        temp_poster_file_to_clean = temp_filepath # 삭제를 위해 경로 저장
-                                        temp_crop_mode = None # 이미 잘랐으므로 추가 크롭 없음
-                                        logger.info(f"JavDB Poster (Prio 3): Fixed-size crop applied. Using temp file: {temp_filepath}")
-                                    cropped_pil_object.close()
-                                pl_image_obj_for_fixed_crop.close()
-                        except Exception as e_fixed_crop:
-                            logger.warning(f"JavDB Info: Error during fixed-size crop: {e_fixed_crop}")
+            # === 4. 최종 후처리 위임 ===
+            final_image_sources = {
+                'poster_source': final_poster_source, 'poster_crop': final_poster_crop_mode,
+                'landscape_source': final_landscape_source, 'arts': arts_urls_for_processing,
+            }
+            image_processing_settings = {
+                'image_mode': image_mode, 'proxy_url': proxy_url, 'max_arts': max_arts, 'ui_code': current_ui_code_for_image,
+                'use_image_server': use_image_server, 'image_server_url': image_server_url,
+                'image_server_local_path': image_server_local_path, 'image_path_segment': image_path_segment,
+            }
+            SiteUtil.finalize_images_for_entity(entity, final_image_sources, image_processing_settings)
 
-                    # 4. 가로로 더 긴 이미지 처리(2:1 비율)
-                    if temp_poster_source is None:
-                        log_id = entity.ui_code or original_code_for_url
-                        try:
-                            processed_source, rec_crop, _ = SiteUtil.get_javdb_poster_from_pl_local(valid_pl_url, log_id, proxy_url=proxy_url)
-                            if processed_source:
-                                temp_poster_source = processed_source
-                                temp_crop_mode = rec_crop
-                                # 반환값이 임시 파일 경로인지 확인하고, 그렇다면 삭제 리스트에 추가
-                                if isinstance(processed_source, str) and os.path.basename(processed_source).startswith("javdb_temp_poster_"):
-                                    temp_poster_file_to_clean = processed_source
-                                logger.info(f"JavDB Poster (Prio 4): JavDB-style. Source: '{temp_poster_source}', Crop: {temp_crop_mode}")
-                        except Exception: pass
-
-                    # 5. 일반 처리(crop: r)
-                    if temp_poster_source is None: 
-                        temp_poster_source = valid_pl_url
-                        temp_crop_mode = 'r'
-                        logger.debug(f"JavDB Poster (Prio 5 - Fallback): Default right-crop to PL: {valid_pl_url}")
-
-                    final_poster_source = temp_poster_source
-                    final_poster_crop_mode = temp_crop_mode
-
-                # 4-B. 랜드스케이프 결정
-                if not skip_default_landscape_logic:
-                    final_landscape_source = valid_pl_url
-
-            else: # valid_pl_url이 없는 경우
-                if not skip_default_poster_logic: 
-                    logger.warning(f"JavDB Info: Default poster cannot be generated as no valid PL URL.")
-                if not skip_default_landscape_logic:
-                    logger.warning(f"JavDB Info: Default landscape cannot be generated as no valid PL URL.")
-
-            # === 이미지 최종 적용 (서버 저장 또는 프록시) ===
-            if not (use_image_server and image_mode == 'image_server'):
-                # 프록시 모드
-                if not skip_default_poster_logic and final_poster_source:
-                    if not any(t.aspect == 'poster' for t in entity.thumb):
-                        processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                        if processed_poster:
-                            entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-
-                if not skip_default_landscape_logic and final_landscape_source:
-                    if not any(t.aspect == 'landscape' for t in entity.thumb):
-                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_source, proxy_url=proxy_url)
-                        if processed_landscape:
-                            entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
-
-                if arts_urls:
-                    if entity.fanart is None: entity.fanart = []
-                    unique_arts_for_fanart = []
-                    vr_poster_override_url_proxy = None
-                    if is_vr_content and isinstance(final_poster_source, str) and final_poster_source in arts_urls and final_poster_crop_mode is None:
-                        vr_poster_override_url_proxy = final_poster_source
-
-                    for art_url_item in arts_urls: 
-                        if not (vr_poster_override_url_proxy and art_url_item == vr_poster_override_url_proxy):
-                            if art_url_item not in unique_arts_for_fanart:
-                                unique_arts_for_fanart.append(art_url_item)
-
-                    for art_url_item in unique_arts_for_fanart:
-                        if len(entity.fanart) >= max_arts: break
-                        processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
-                        if processed_art and processed_art not in entity.fanart:
-                            entity.fanart.append(processed_art)
-                            
-            elif use_image_server and image_mode == 'image_server' and current_ui_code_for_image: 
-                # 이미지 서버 모드
-                if final_poster_source and not skip_default_poster_logic:
-                    if not any(t.aspect == 'poster' for t in entity.thumb):
-                        p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, current_ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                        if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
-
-                if final_landscape_source and not skip_default_landscape_logic:
-                    if not any(t.aspect == 'landscape' for t in entity.thumb):
-                        pl_path = SiteUtil.save_image_to_server_path(final_landscape_source, 'pl', image_server_local_path, image_path_segment, current_ui_code_for_image, proxy_url=proxy_url)
-                        if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
-
-                if arts_urls: # 팬아트 처리
-                    if entity.fanart is None: entity.fanart = []
-                    unique_arts_for_fanart_server = []
-                    # VR 포스터로 사용된 첫 번째 Art는 팬아트에서 제외
-                    vr_poster_override_url = None
-                    if is_vr_content and isinstance(final_poster_source, str) and final_poster_source in arts_urls and final_poster_crop_mode is None:
-                        vr_poster_override_url = final_poster_source
-
-                    for art_url_item_s in arts_urls: 
-                        if not (vr_poster_override_url and art_url_item_s == vr_poster_override_url):
-                            if art_url_item_s not in unique_arts_for_fanart_server: unique_arts_for_fanart_server.append(art_url_item_s)
-
-                    current_fanart_server_count = len([fa_url for fa_url in entity.fanart if isinstance(fa_url, str) and fa_url.startswith(image_server_url)])
-                    for idx, art_url_item_server in enumerate(unique_arts_for_fanart_server):
-                        if current_fanart_server_count >= max_arts : break
-                        art_relative_path = SiteUtil.save_image_to_server_path(art_url_item_server, 'art', image_server_local_path, image_path_segment, current_ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
-                        if art_relative_path: 
-                            full_art_url = f"{image_server_url}/{art_relative_path}"
-                            if full_art_url not in entity.fanart: entity.fanart.append(full_art_url); current_fanart_server_count += 1
-            
-            # === 7. 트레일러 처리 ===
+            # === 5. 예고편 및 Shiroutoname 보정 처리 ===
             if use_extras_setting:
-                entity.extras = []
-                trailer_title_to_use = entity.tagline if entity.tagline else entity.ui_code
-                if not trailer_title_to_use : trailer_title_to_use = code
-
                 trailer_source_tag = tree_info.xpath('//video[@id="preview-video"]/source/@src')
                 if trailer_source_tag:
                     trailer_url_raw = trailer_source_tag[0].strip()
                     if trailer_url_raw:
-                        trailer_url_final = trailer_url_raw
-                        if trailer_url_raw.startswith("//"): trailer_url_final = "https:" + trailer_url_raw
-                        elif not trailer_url_raw.startswith(("http:", "https:")): 
-                            if trailer_url_raw.startswith("/"): trailer_url_final = py_urllib_parse.urljoin(cls.site_base_url, trailer_url_raw)
-                            else: trailer_url_final = "https:" + trailer_url_raw
-                        entity.extras.append(EntityExtra("trailer", trailer_title_to_use, "mp4", trailer_url_final))
+                        trailer_url_final = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
+                        entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", trailer_url_final))
 
-            entity.code = cls.module_char + cls.site_char + original_code_for_url
+            if entity.originaltitle:
+                try: entity = SiteUtil.shiroutoname_info(entity)
+                except Exception as e_shirouto: logger.exception(f"JavDB Info: Shiroutoname correction error for {entity.originaltitle}: {e_shirouto}")
 
-            logger.info(f"JavDB Info Parsed: final_code='{entity.code}', ui_code='{entity.ui_code}', Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}, Extras: {len(entity.extras)}")
+            logger.info(f"JavDB: __info finished for {code}. UI Code: {entity.ui_code}")
             return entity
 
-        except Exception as e_main_info:
-            logger.exception(f"JavDB __info Exception for input code {code}: {e_main_info}")
-            return None
         finally:
-            if 'temp_poster_file_to_clean' in locals() and temp_poster_file_to_clean and os.path.exists(temp_poster_file_to_clean):
+            # === 6. 임시 파일 정리 ===
+            if temp_poster_file_to_clean and os.path.exists(temp_poster_file_to_clean):
                 try:
                     os.remove(temp_poster_file_to_clean)
-                    logger.debug(f"JavDB __info: Cleaned up temp poster file: {temp_poster_file_to_clean}")
-                except Exception as e_remove_exc:
-                    logger.error(f"JavDB __info: Failed to remove temp poster on exception: {e_remove_exc}")
+                    logger.debug(f"JavDB: Cleaned up temp poster file: {temp_poster_file_to_clean}")
+                except Exception as e_remove:
+                    logger.error(f"JavDB: Failed to remove temp poster file: {e_remove}")
 
 
     @classmethod

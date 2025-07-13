@@ -974,48 +974,28 @@ class SiteDmm:
         crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
         dmm_parser_rules = kwargs.get('dmm_parser_rules', {})
 
-        # <<< 디버깅 로그 추가 (5) >>>
-        logger.debug(f"SITE_DMM: __info received dmm_parser_rules via kwargs: {dmm_parser_rules}")
-
-        cached_data = cls._ps_url_cache.get(code, {}) # 기존 변수명 cached_data 사용
+        cached_data = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = kwargs.get('ps_url')
         if not ps_url_from_search_cache:
-            # 전달받은 ps_url이 없으면, 기존 캐시 방식 사용
-            cached_data = cls._ps_url_cache.get(code, {})
             content_type_from_cache = cached_data.get('main_content_type', 'unknown')
-            ps_url_from_search_cache = cached_data.get(content_type_from_cache)
+            if (content_type_from_cache == 'unknown' or not cached_data.get(content_type_from_cache)) and cached_data: 
+                for prio_type in cls.CONTENT_TYPE_PRIORITY:
+                    if prio_type in cached_data and cached_data.get(prio_type): 
+                        content_type_from_cache = prio_type
+                        break
+            ps_url_from_search_cache = cached_data.get(content_type_from_cache) if content_type_from_cache != 'unknown' else None
+        else:
+            content_type_from_cache = 'unknown' # ps_url이 직접 전달되면 타입을 알 수 없음
 
-        # content_type_from_cache 초기화 및 값 할당 (기존 변수명 사용)
-        content_type_from_cache = cached_data.get('main_content_type', 'unknown') # <<--- 기본값을 'unknown' 문자열로 명시
-
-        if (content_type_from_cache == 'unknown' or not cached_data.get(content_type_from_cache)) and cached_data: 
-            found_type_from_prio = False
-            for prio_type in cls.CONTENT_TYPE_PRIORITY:
-                if prio_type in cached_data and cached_data.get(prio_type): 
-                    content_type_from_cache = prio_type
-                    found_type_from_prio = True
-                    break
-            if not found_type_from_prio: 
-                content_type_from_cache = 'unknown'
-
-        ps_url_from_search_cache = cached_data.get(content_type_from_cache) if content_type_from_cache != 'unknown' else None
-
-        #logger.debug(f"DMM Info: Using content_type_from_cache: '{content_type_from_cache}' for page load. PS from cache for this type: {'Yes' if ps_url_from_search_cache else 'No'}")
-        #logger.debug(f"DMM Info: Using content_type_from_cache: PS from cache: {ps_url_from_search_cache}")
-
-        # 페이지 로드 및 파싱에 사용될 content_type (기존 변수명 current_content_type 유지)
-        current_content_type = content_type_from_cache 
+        current_content_type = content_type_from_cache
         if current_content_type == 'unknown':
-            current_content_type = 'videoa' 
-            # logger.warning(f"DMM Info: content_type_from_cache is 'unknown'. Defaulting page load to '{current_content_type}'.")
-
-        #logger.debug(f"DMM Info: Starting for {code}. Type to load: '{current_content_type}'. ImgMode: {image_mode}, UseImgServ: {use_image_server}")
+            current_content_type = 'videoa'
 
         if not cls._ensure_age_verified(proxy_url=proxy_url):
             logger.error(f"DMM Info ({current_content_type}): Age verification failed for {code}.")
             return None
 
-        cid_part = code[len(cls.module_char)+len(cls.site_char):] # 기존 방식대로 접두사 길이 사용
+        cid_part = code[len(cls.module_char)+len(cls.site_char):]
         detail_url = None
 
         if current_content_type == 'videoa' or current_content_type == 'vr':
@@ -1026,10 +1006,8 @@ class SiteDmm:
             logger.error(f"DMM Info: Invalid current_content_type '{current_content_type}'. Code: {code}")
             return None 
 
-        logger.debug(f"DMM Info (Processing as {current_content_type}): Accessing detail page: {detail_url}")
         referer = cls.fanza_av_url if current_content_type in ['videoa', 'vr'] else (cls.site_base_url + "/mono/dvd/")
         headers = cls._get_request_headers(referer=referer)
-
         tree = None
         try:
             tree = SiteUtil.get_tree(detail_url, proxy_url=proxy_url, headers=headers, timeout=30, verify=False)
@@ -1052,7 +1030,7 @@ class SiteDmm:
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
         ui_code_for_image = ""; entity.content_type = current_content_type
 
-        # === 2. 전체 메타데이터 파싱 (ui_code_for_image 및 entity.title 등 확정) ===
+        # === 2. 전체 메타데이터 파싱 ===
         identifier_parsed = False; is_vr_actual = False # 상세페이지에서 VR 여부 최종 확인
         try:
             #logger.debug(f"DMM Info (Parsing as {entity.content_type}): Metadata for {code}...")
@@ -1307,229 +1285,121 @@ class SiteDmm:
             logger.exception(f"DMM ({entity.content_type}): Meta parsing error for {code}: {e_meta_dmm_main_detail_full}")
             if not ui_code_for_image: return None
 
-        # === 3. 사용자 지정 포스터 확인 ===
-        user_custom_poster_url = None; user_custom_landscape_url = None
-        skip_default_poster_logic = False; skip_default_landscape_logic = False
-        if use_image_server and image_server_local_path and image_server_url and ui_code_for_image:
-            poster_suffixes = ["_p_user.jpg", "_p_user.png", "_p_user.webp"]
-            landscape_suffixes = ["_pl_user.jpg", "_pl_user.png", "_pl_user.webp"]
-            for suffix_p_dmm_user in poster_suffixes:
-                _, web_url_p_dmm_user = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix_p_dmm_user, image_server_url)
-                if web_url_p_dmm_user: user_custom_poster_url = web_url_p_dmm_user; entity.thumb.append(EntityThumb(aspect="poster", value=user_custom_poster_url)); skip_default_poster_logic = True; break 
-            for suffix_pl_dmm_user in landscape_suffixes:
-                _, web_url_pl_dmm_user = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix_pl_dmm_user, image_server_url)
-                if web_url_pl_dmm_user: user_custom_landscape_url = web_url_pl_dmm_user; entity.thumb.append(EntityThumb(aspect="landscape", value=user_custom_landscape_url)); skip_default_landscape_logic = True; break
+        # === 3. 이미지 소스 결정 및 관계 처리 (DMM 고유 로직) ===
+        try:
+            # --- 3a. 원본 이미지 URL 파싱 ---
+            logger.debug(f"DMM Info: PS url from cache: {ps_url_from_search_cache}")
 
-        # === 4. 이미지 정보 추출 및 처리 ===
-        logger.debug(f"DMM Info: PS url from cache: {ps_url_from_search_cache}")
+            now_printing_path = None
+            if use_image_server and image_server_local_path:
+                now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
+                if not os.path.exists(now_printing_path): now_printing_path = None
 
-        now_printing_path = None
-        if use_image_server and image_server_local_path:
-            now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
-            if not os.path.exists(now_printing_path): now_printing_path = None
+            raw_image_urls = cls.__img_urls(
+                tree, 
+                content_type=entity.content_type, 
+                now_printing_path=now_printing_path,
+                proxy_url=proxy_url
+            )
+            pl_url = raw_image_urls.get('pl')
+            specific_candidates_on_page = raw_image_urls.get('specific_poster_candidates', []) 
+            other_arts_on_page = raw_image_urls.get('arts', [])
 
-        # proxy_url은 __info의 파라미터로 이미 존재
-        raw_image_urls = cls.__img_urls(tree, 
-                                        content_type=entity.content_type, 
-                                        now_printing_path=now_printing_path,
-                                        proxy_url=proxy_url)
+            # --- 3b. 최종 소스로 사용할 변수 초기화 ---
+            final_poster_source = None
+            final_poster_crop_mode = None
+            final_landscape_source = None
+            arts_urls_for_processing = []
+            
+            # --- 3c. 랜드스케이프 소스 결정 ---
+            if pl_url:
+                final_landscape_source = pl_url
 
-        pl_url = raw_image_urls.get('pl')
-        specific_candidates_on_page = raw_image_urls.get('specific_poster_candidates', []) 
-        other_arts_on_page = raw_image_urls.get('arts', [])
-
-        final_poster_source = None
-        final_poster_crop_mode = None
-        final_landscape_source = None
-        arts_urls_for_processing = [] 
-
-        if not skip_default_landscape_logic:
-            final_landscape_source = pl_url
-
-        # --- 현재 아이템에 대한 PS 강제 사용 여부 및 크롭 모드 결정 ---
-        apply_ps_to_poster_for_this_item = False
-        forced_crop_mode_for_this_item = None
-
-        if hasattr(entity, 'ui_code') and entity.ui_code:
-            # 1. entity.ui_code에서 비교용 레이블 추출
-            label_from_ui_code = ""
-            if '-' in entity.ui_code:
-                temp_label_part = entity.ui_code.split('-',1)[0]
-                label_from_ui_code = temp_label_part.upper()
-
-            if label_from_ui_code:
-                # 2. PS 강제 사용 여부 결정
-                if ps_to_poster_labels_str:
-                    ps_force_labels_list = [x.strip().upper() for x in ps_to_poster_labels_str.split(',') if x.strip()]
-                    if label_from_ui_code in ps_force_labels_list:
-                        apply_ps_to_poster_for_this_item = True
-                        logger.debug(f"[{cls.site_name} Info] PS to Poster WILL BE APPLIED for label '{label_from_ui_code}' based on settings.")
-
-                # 3. 크롭 모드 결정 (PS 강제 사용이 아닐 때만 의미 있을 수 있음)
-                if crop_mode_settings_str:
-                    for line in crop_mode_settings_str.splitlines():
-                        if not line.strip(): continue
-                        parts = [x.strip() for x in line.split(":", 1)]
-                        if len(parts) == 2:
-                            setting_label = parts[0].upper()
-                            setting_mode = parts[1].lower()
-                            if setting_label == label_from_ui_code and setting_mode in ["r", "l", "c"]:
-                                forced_crop_mode_for_this_item = setting_mode
-                                logger.debug(f"[{cls.site_name} Info] Forced crop mode '{forced_crop_mode_for_this_item}' WILL BE APPLIED for label '{label_from_ui_code}'.")
+            # --- 3d. 포스터 소스 결정 (DMM 고유의 모든 규칙 적용) ---
+            apply_ps_to_poster_for_this_item = False
+            forced_crop_mode_for_this_item = None
+            if hasattr(entity, 'ui_code') and entity.ui_code:
+                label_from_ui_code = cls.get_label_from_ui_code(entity.ui_code)
+                if label_from_ui_code:
+                    if ps_to_poster_labels_str:
+                        ps_force_labels_list = {x.strip().upper() for x in ps_to_poster_labels_str.split(',') if x.strip()}
+                        if label_from_ui_code in ps_force_labels_list:
+                            apply_ps_to_poster_for_this_item = True
+                    if crop_mode_settings_str:
+                        for line in crop_mode_settings_str.splitlines():
+                            parts = [x.strip() for x in line.split(":", 1)]
+                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in ["r", "l", "c"]:
+                                forced_crop_mode_for_this_item = parts[1].lower(); break
+            
+            if forced_crop_mode_for_this_item and pl_url:
+                final_poster_source = pl_url
+                final_poster_crop_mode = forced_crop_mode_for_this_item
+            elif ps_url_from_search_cache:
+                if apply_ps_to_poster_for_this_item:
+                    final_poster_source = ps_url_from_search_cache
+                else:
+                    poster_candidates = ([pl_url] if pl_url else []) + specific_candidates_on_page
+                    for candidate in poster_candidates:
+                        if SiteUtil.is_portrait_high_quality_image(candidate, proxy_url=proxy_url) and \
+                           SiteUtil.is_hq_poster(ps_url_from_search_cache, candidate, proxy_url=proxy_url, 
+                                                sm_source_info=ps_url_from_search_cache, lg_source_info=candidate):
+                            final_poster_source = candidate
+                            break
+                    if final_poster_source is None and pl_url:
+                        try:
+                            pl_img_obj = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
+                            if pl_img_obj:
+                                w, h = pl_img_obj.size
+                                if w == 800 and 436 <= h <= 446:
+                                    final_poster_source = pl_img_obj.crop((w - 380, 0, w, h))
+                        except Exception as e_crop:
+                            logger.error(f"DMM: Error during fixed-size crop: {e_crop}")
+                    if final_poster_source is None:
+                        for candidate in poster_candidates:
+                            crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, candidate, proxy_url=proxy_url)
+                            if crop_pos:
+                                final_poster_source = candidate
+                                final_poster_crop_mode = crop_pos
                                 break
 
-            # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
-            if not skip_default_poster_logic:
-                # 1. "포스터 예외처리 2" (사용자 지정 크롭 모드)
-                if forced_crop_mode_for_this_item and pl_url:
-                    logger.info(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
-                    final_poster_source = pl_url
-                    final_poster_crop_mode = forced_crop_mode_for_this_item
+                    if final_poster_source is None:
+                        final_poster_source = ps_url_from_search_cache
+            else:
+                logger.warning(f"[{cls.site_name} Info] No PS url found. Poster cannot be determined by PS-based logic.")
+            
 
-                # --- 위에서 사용자 지정 크롭으로 포스터가 결정되지 *않았을* 경우에만 다음 로직 진행 ---
-                if final_poster_source is None: 
-                    if ps_url_from_search_cache: # PS Cache가 있는 경우
-                        logger.debug(f"[{cls.site_name} Info] PS cache exists ('{ps_url_from_search_cache}'). Evaluating PS-based poster options.")
+            # --- 3e. 최종 팬아트 목록 결정 (아트 처리 및 변수 처리) ---
+            if other_arts_on_page and max_arts > 0:
+                used_for_thumb = {url for url in [final_poster_source, final_landscape_source] if isinstance(url, str)}
+                arts_urls_for_processing = [art for art in other_arts_on_page if art and art not in used_for_thumb][:max_arts]
+            
+            logger.debug(f"DMM (Decision Phase): Final Poster='{str(final_poster_source)[:100]}...', Landscape='{final_landscape_source}', Fanarts to process({len(arts_urls_for_processing)})")
 
-                        # 2. "포스터 예외처리 1" (PS 강제 사용)
-                        if apply_ps_to_poster_for_this_item:
-                            logger.info(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url_from_search_cache}")
-                            final_poster_source = ps_url_from_search_cache
-                            final_poster_crop_mode = None
 
-                        # 일반적인 포스터 결정 로직
-                        else: # apply_ps_to_poster_for_this_item is False
-                            logger.debug(f"[{cls.site_name} Info] Applying general poster determination with PS.")
+            # === 4. 최종 후처리 위임 ===
+            final_image_sources = {
+                'poster_source': final_poster_source,
+                'poster_crop': final_poster_crop_mode,
+                'landscape_source': final_landscape_source,
+                'arts': arts_urls_for_processing,
+            }
+            image_processing_settings = {
+                'image_mode': image_mode,
+                'proxy_url': proxy_url,
+                'max_arts': max_arts,
+                'ui_code': ui_code_for_image,
+                'use_image_server': use_image_server,
+                'image_server_url': image_server_url,
+                'image_server_local_path': image_server_local_path,
+                'image_path_segment': image_path_segment,
+            }
+            
+            SiteUtil.finalize_images_for_entity(entity, final_image_sources, image_processing_settings)
+            
+        except Exception as e:
+            logger.exception(f"DMM ({entity.content_type}): Error during image processing for {code}: {e}")
 
-                            # 3. is_hq_poster
-                            if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
-                                if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url):
-                                    final_poster_source = pl_url
-                            if final_poster_source is None and specific_candidates_on_page:
-                                for art_candidate in specific_candidates_on_page:
-                                    if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
-                                        if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
-                                            final_poster_source = art_candidate; break
-
-                            # 4. 특수 고정 크롭 처리 (해상도 기반) ---
-                            if (final_poster_source is None or final_poster_source == ps_url_from_search_cache) and pl_url:
-                                logger.debug(f"DMM Poster (Priority 3-C attempt with PS): Applying fixed-size crop logic for PL: {pl_url}")
-                                try:
-                                    pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
-                                    if pl_image_obj_for_fixed_crop:
-                                        img_width, img_height = pl_image_obj_for_fixed_crop.size
-                                        if img_width == 800 and 436 <= img_height <= 446:
-                                            crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
-                                            cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
-                                            if cropped_pil_object:
-                                                final_poster_source = cropped_pil_object 
-                                                final_poster_crop_mode = None
-                                                logger.info(f"DMM: Fixed-size crop applied to PL (with PS). Poster is PIL object.")
-                                except Exception as e_fixed_crop_dmm_ps:
-                                    logger.error(f"DMM: Error during fixed-size crop (with PS): {e_fixed_crop_dmm_ps}")
-
-                            # 5. has_hq_poster
-                            if final_poster_source is None:
-                                if pl_url:
-                                    crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                                    if crop_pos:
-                                        final_poster_source = pl_url
-                                        final_poster_crop_mode = crop_pos
-                                if final_poster_source is None and specific_candidates_on_page:
-                                    for art_candidate in specific_candidates_on_page:
-                                        crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
-                                        if crop_pos_art:
-                                            final_poster_source = art_candidate
-                                            final_poster_crop_mode = crop_pos_art; break
-
-                            # 6. PS 사용 ---
-                            if final_poster_source is None: # 위 모든 PS 기반 비교 실패 시
-                                logger.debug(f"DMM Poster (Priority 4 with PS - Fallback): Using PS as poster.")
-                                final_poster_source = ps_url_from_search_cache
-                                final_poster_crop_mode = None
-
-                    else: # PS Cache가 없는 경우 (그리고 위에서 사용자 지정 크롭도 적용 안됨)
-                        logger.warning(f"[{cls.site_name} Info] No PS url found (ps_url_from_search_cache is None). Poster cannot be determined by PS-based logic.")
-                        final_poster_source = None 
-                        final_poster_crop_mode = None
-
-                # 최종 결정된 포스터 정보 로깅
-                if final_poster_source:
-                    logger.debug(f"[{cls.site_name} Info] Final Poster Decision - Source type: {type(final_poster_source)}, Crop: {final_poster_crop_mode}")
-                    if isinstance(final_poster_source, str): logger.debug(f"  Source URL/Path: {final_poster_source[:150]}")
-                else:
-                    # 이 로그는 이제 PS가 없을 때, 그리고 사용자 지정 크롭도 없을 때만 발생해야 함.
-                    logger.error(f"[{cls.site_name} Info] CRITICAL: No poster source could be determined for {code}")
-                    final_poster_source = None # 명시적으로 None
-                    final_poster_crop_mode = None
-
-        # 팬아트 목록 결정
-        arts_urls_for_processing = []
-
-        all_potential_arts_from_page = raw_image_urls.get('arts', [])
-        # logger.debug(f"DMM Info: Potential arts from __img_urls before filtering: {len(all_potential_arts_from_page)} items.")
-
-        if all_potential_arts_from_page and max_arts > 0:
-            urls_used_as_thumb = set()
-            if final_landscape_source and not skip_default_landscape_logic and isinstance(final_landscape_source, str):
-                urls_used_as_thumb.add(final_landscape_source)
-            if final_poster_source and not skip_default_poster_logic and isinstance(final_poster_source, str):
-                urls_used_as_thumb.add(final_poster_source)
-
-            # logger.debug(f"DMM Info: URLs used as poster/landscape (to be excluded from fanart): {urls_used_as_thumb}")
-
-            seen_for_fanart_processing = set()
-            for art_url in all_potential_arts_from_page:
-                if len(arts_urls_for_processing) >= max_arts:
-                    #logger.debug(f"DMM Info: Reached max_arts ({max_arts}). Stopping fanart collection.")
-                    break 
-
-                if art_url and art_url not in urls_used_as_thumb and art_url not in seen_for_fanart_processing:
-                    # 플레이스홀더 검사는 __img_urls에서 이미 수행되었다고 가정.
-                    # 만약 이 단계에서도 플레이스홀더를 엄격히 걸러내고 싶다면,
-                    # if now_printing_path and SiteUtil.are_images_visually_same(art_url, now_printing_path, proxy_url=proxy_url):
-                    #     logger.debug(f"DMM Info: Skipping fanart '{art_url}' as it is a placeholder.")
-                    #     continue
-                    arts_urls_for_processing.append(art_url)
-                    seen_for_fanart_processing.add(art_url)
-
-            logger.debug(f"DMM Info: Final arts_urls_for_processing (count: {len(arts_urls_for_processing)}): {arts_urls_for_processing[:3]}...")
-        elif max_arts == 0:
-            logger.debug(f"DMM Info: max_arts is 0. No fanart will be processed.")
-
-        logger.debug(f"DMM ({entity.content_type}): Final Images Decision - Poster='{str(final_poster_source)[:100] if final_poster_source else 'None'}' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
-
-        # entity.thumb 및 entity.fanart 채우기
-        if not (use_image_server and image_mode == 'image_server'):
-            if final_poster_source and not skip_default_poster_logic:
-                if not any(t.aspect == 'poster' for t in entity.thumb):
-                    processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                    if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-
-            if final_landscape_source and not skip_default_landscape_logic:
-                if not any(t.aspect == 'landscape' for t in entity.thumb):
-                    processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_source, proxy_url=proxy_url)
-                    if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
-
-            for art_url_item in arts_urls_for_processing:
-                processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
-                if processed_art: entity.fanart.append(processed_art)
-
-        elif use_image_server and image_mode == 'image_server' and ui_code_for_image:
-            if final_poster_source and not skip_default_poster_logic:
-                if not any(t.aspect == 'poster' for t in entity.thumb):
-                    p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                    if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
-
-            if final_landscape_source and not skip_default_landscape_logic:
-                if not any(t.aspect == 'landscape' for t in entity.thumb):
-                    pl_path = SiteUtil.save_image_to_server_path(final_landscape_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-                    if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
-
-            for idx, art_url_item_server in enumerate(arts_urls_for_processing):
-                art_relative_path = SiteUtil.save_image_to_server_path(art_url_item_server, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
-                if art_relative_path: entity.fanart.append(f"{image_server_url}/{art_relative_path}")
-
+        # === 5. 예고편(Extras) 처리 ===
         if use_extras:
             entity.extras = []
             trailer_title_for_extra = entity.tagline if entity.tagline else entity.ui_code
@@ -1567,8 +1437,9 @@ class SiteDmm:
             except Exception as e_trailer_main: 
                 logger.exception(f"DMM ({entity.content_type}): Main trailer processing error: {e_trailer_main}")
 
-        logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {ui_code_for_image}, PSkip:{skip_default_poster_logic}, PLSkip:{skip_default_landscape_logic}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
+        logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {ui_code_for_image}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
         return entity
+
 
     @classmethod
     def info(cls, code, **kwargs):
