@@ -136,8 +136,11 @@ class SiteJavbus:
                     item.score = 20 # 표준화 실패 시
 
                 if manual:
-                    _image_mode = "ff_proxy" if image_mode != "original" else image_mode
-                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                    effective_image_mode = image_mode
+                    if image_mode == "ff_proxy":
+                        logger.warning("JavBus Search: ff_proxy is not supported, switching to discord_proxy to bypass Cloudflare.")
+                        effective_image_mode = "discord_proxy"
+                    item.image_url = SiteUtil.process_image_mode(effective_image_mode, item.image_url, proxy_url=proxy_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
@@ -392,12 +395,16 @@ class SiteJavbus:
                 arts_urls_for_processing = [art for art in all_arts_from_page if art and art not in used][:max_arts]
 
             # === 4. 최종 후처리 위임 ===
+            effective_image_mode = image_mode
+            if image_mode == "ff_proxy":
+                logger.warning("JavBus Info: ff_proxy is not supported, switching to discord_proxy to bypass Cloudflare.")
+                effective_image_mode = "discord_proxy"
             final_image_sources = {
                 'poster_source': final_poster_source, 'poster_crop': final_poster_crop_mode,
                 'landscape_source': final_landscape_url_source, 'arts': arts_urls_for_processing,
             }
             image_processing_settings = {
-                'image_mode': image_mode, 'proxy_url': proxy_url, 'max_arts': max_arts, 'ui_code': ui_code_for_image,
+                'image_mode': effective_image_mode, 'proxy_url': proxy_url, 'max_arts': max_arts, 'ui_code': ui_code_for_image,
                 'use_image_server': use_image_server, 'image_server_url': image_server_url,
                 'image_server_local_path': image_server_local_path, 'image_path_segment': image_path_segment,
             }

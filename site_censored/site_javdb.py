@@ -22,7 +22,7 @@ class SiteJavdb:
         keyword,
         do_trans=True,
         proxy_url=None,
-        image_mode="original",
+        image_mode="ff_proxy",
         manual=False,
         cf_clearance_cookie_value='',
         priority_label_setting_str=""

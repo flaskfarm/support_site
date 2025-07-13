@@ -50,7 +50,8 @@ class SiteMgstage:
         cls,
         keyword,
         do_trans=True,
-        proxy_url=None, image_mode="original",
+        proxy_url=None,
+        image_mode="ff_proxy",
         manual=False,
         priority_label_setting_str=""
         ):
