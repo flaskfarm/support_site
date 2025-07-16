@@ -1526,18 +1526,9 @@ class SiteDmm(SiteAvBase):
             "crop_mode": db.get_list("jav_censored_dmm_crop_mode", ","),
             # 지정 레이블 최우선 검색
             "priority_labels": db.get_list("jav_censored_dmm_priority_search_labels", ","),
-            "max_arts": db.get_int("jav_censored_dmm_art_count"),
-            "use_extras": db.get_bool('jav_censored_dmm_use_extras'),
 
             # 설정이 바뀌면 
             "age_verified": False,  # 나이 인증 여부
-            # last_proxy_used은 나이 인증에만 사용.
-            #"last_proxy_used": None,
-
-            # 미사용
-            #"title_format": "[{title}] {tagline}",
-            #"tag_option": "not_using",
-            #"test_code": "ssni-900",
         })
 
     @classmethod

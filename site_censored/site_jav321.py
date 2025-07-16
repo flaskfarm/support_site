@@ -678,9 +678,6 @@ class SiteJav321(SiteAvBase):
     def set_config(cls, db):
         super().set_config(db)
         cls.config.update({
-            "use_proxy": db.get_bool('jav_censored_jav321_use_proxy'),
-            "proxy_url": db.get('jav_censored_jav321_proxy_url'),
-            
             # 포스터 예외처리1. 설정된 레이블은 저화질 썸네일을 포스터로 사용
             "ps_force_labels_list": db.get_list("jav_censored_jav321_small_image_to_poster", ","),
             
@@ -688,9 +685,6 @@ class SiteJav321(SiteAvBase):
             "crop_mode": db.get_list("jav_censored_jav321_crop_mode", ","),
             # 지정 레이블 최우선 검색
             "priority_labels": db.get_list("jav_censored_jav321_priority_search_labels", ","),
-            "max_arts": db.get_int("jav_censored_jav321_art_count"),
-            "use_extras": db.get_bool('jav_censored_jav321_use_extras'),
-
             "maintain_series_number_labels": db.get_list("jav_censored_jav321_maintain_series_number_labels", ","),
         })
         cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}

@@ -223,11 +223,17 @@ class SiteAvBase:
         """
         if cls.session == None:
             cls.session = cls.get_session()
+        else:
+            # 설정을 변경하면 그냥 새로 생성.
+            cls.session.close()
+            cls.session = cls.get_session()
         cls.MetadataSetting = db
         cls.config = {
             #공통
-            "image_mode": db.get('jav_censored_image_mode'),
+            "image_mode": db.get('jav_censored_image_mode'), # 사용하지 않음
             "trans_option": db.get('jav_censored_trans_option'),
+            "use_extras": db.get_bool('jav_censored_use_extras'),
+            "max_arts": db.get_int('jav_censored_art_count'),
 
             # 사이트별
             "use_proxy": db.get_bool(f"jav_censored_{cls.site_name}_use_proxy"),
