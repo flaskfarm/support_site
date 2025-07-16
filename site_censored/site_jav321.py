@@ -124,7 +124,7 @@ class SiteJav321(SiteAvBase):
                     item.image_url = cls.make_image_url(item.image_url)
                 item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
             else:
-                item.title_ko = cls.trans(item.title, do_trans=do_trans)
+                item.title_ko = cls.trans(item.title)
 
             if item.code:
                 if item.image_url: 
