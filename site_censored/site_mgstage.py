@@ -11,7 +11,7 @@ class SiteMgstage:
     site_name = "mgstage"
     site_char = "M"
     site_base_url = "https://www.mgstage.com"
-    module_char = None
+    module_char = "C"
     _ps_url_cache = {} 
 
     headers = {
@@ -187,8 +187,7 @@ class SiteMgstage:
         return ret
 
 
-class SiteMgstageDvd(SiteMgstage):
-    module_char = "C"
+
 
     @classmethod
     def __img_urls(cls, tree):

@@ -146,76 +146,11 @@ class SiteUtilAv:
             return None
 
 
+    
+
+    # 파일명에 indx 포함. 0 우, 1 좌
     @classmethod
-    def get_tree(cls, url, **kwargs):
-        text = cls.get_text(url, **kwargs)
-        # logger.debug(text)
-        if text is None:
-            return text
-        return html.fromstring(text)
-
-    @classmethod
-    def get_text(cls, url, **kwargs):
-        res = cls.get_response(url, **kwargs)
-        # logger.debug('url: %s, %s', res.status_code, url)
-        # if res.status_code != 200:
-        #    return None
-        return res.text
-
-    @classmethod
-    def get_response(cls, url, **kwargs):
-        kwargs['verify'] = False  # SSL 인증서 검증 비활성화 (필요시)   
-        proxy_url_from_arg = kwargs.pop("proxy_url", None)
-
-        proxies_for_this_request = None
-        if proxy_url_from_arg:
-            proxies_for_this_request = {"http": proxy_url_from_arg, "https": proxy_url_from_arg}
-            # logger.debug(f"SiteUtil.get_response for URL='{url}': Using EXPLICIT proxy from argument: {proxies_for_this_request}")
-        else:
-            proxies_for_this_request = {} # 세션 기본 프록시 무시
-            # logger.debug(f"SiteUtil.get_response for URL='{url}': NO explicit proxy from argument. Setting proxies to {proxies_for_this_request} to bypass session proxies for this request.")
-
-        request_headers = kwargs.pop("headers", cls.default_headers.copy())
-        method = kwargs.pop("method", "GET")
-        post_data = kwargs.pop("post_data", None)
-        if post_data:
-            method = "POST"
-            kwargs["data"] = post_data
-
-        if "javbus.com" in url:
-            request_headers["referer"] = "https://www.javbus.com/"
-
-        try:
-            res = cls.session.request(method, url, headers=request_headers, proxies=proxies_for_this_request, **kwargs)
-
-            #log_source = "FROM CACHE" if hasattr(res, 'from_cache') and res.from_cache else "fetched (NOT from cache or cache expired/missed)"
-
-            #if res.status_code == 200:
-            #    logger.info(f"SiteUtil.get_response: URL '{url}' {log_source}. Status: {res.status_code} OK.")
-            #else:
-            #    logger.warning(f"SiteUtil.get_response: URL '{url}' {log_source}. Status: {res.status_code} (Not 200 OK).")
-
-            return res
-
-        except requests.exceptions.Timeout as e_timeout:
-            # 에러 로그에 사용하려 했던 프록시 정보 (proxy_url_from_arg)를 명시
-            logger.error(f"SiteUtil.get_response: Timeout for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_timeout}")
-            return None
-        except requests.exceptions.ConnectionError as e_conn:
-            logger.error(f"SiteUtil.get_response: ConnectionError for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_conn}")
-            return None
-        except requests.exceptions.RequestException as e_req:
-            logger.error(f"SiteUtil.get_response: RequestException (other) for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_req}")
-            logger.error(traceback.format_exc()) 
-            return None 
-        except Exception as e_general:
-            logger.error(f"SiteUtil.get_response: General Exception for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_general}")
-            logger.error(traceback.format_exc())
-            return None
-
-
-    @classmethod
-    def get_mgs_half_pl_poster_info_local(cls, ps_url: str, pl_url: str, proxy_url: str = None):
+    def get_mgs_half_pl_poster_info_local(cls, ps_url: str, pl_url: str, proxy_url: str = None, do_save:bool = True):
         """
         MGStage용으로 pl 이미지를 특별 처리합니다. (로컬 임시 파일 사용)
         pl 이미지를 가로로 반으로 자르고 (오른쪽 우선), 각 절반의 중앙 부분을 ps와 비교합니다.
@@ -249,53 +184,61 @@ class SiteUtilAv:
             left_half_img_obj = pl_image_original.crop(left_half_box)
             if left_half_img_obj: candidate_sources.append( (left_half_img_obj, f"{pl_url} (left_half)") )
 
+            idx = 0
             for img_obj_to_crop, obj_name in candidate_sources:
                 # logger.debug(f"MGS Special Local: Processing candidate source: {obj_name}")
                 # 중앙 크롭 시도
-                center_cropped_candidate_obj = cls.imcrop(img_obj_to_crop, position='c') 
+                with img_obj_to_crop:
+                    with cls.imcrop(img_obj_to_crop, position='c') as center_cropped_candidate_obj:
 
-                if center_cropped_candidate_obj:
-                    # logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
+                        if center_cropped_candidate_obj:
+                            # logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
 
-                    # is_hq_poster 유사도 검사 시도
-                    # logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
-                    is_similar = cls.is_hq_poster(
-                        ps_image, 
-                        center_cropped_candidate_obj, 
-                        sm_source_info=ps_url, 
-                        lg_source_info=obj_name
-                    )
+                            # is_hq_poster 유사도 검사 시도
+                            # logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
+                            is_similar = cls.is_hq_poster(
+                                ps_image, 
+                                center_cropped_candidate_obj, 
+                                sm_source_info=ps_url, 
+                                lg_source_info=obj_name
+                            )
 
-                    if is_similar:
-                        logger.debug(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
-                        # 성공! 이 객체를 저장하고 반환
-                        try:
-                            img_format = center_cropped_candidate_obj.format if center_cropped_candidate_obj.format else "JPEG"
-                            ext = img_format.lower().replace("jpeg", "jpg")
-                            if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
-                            temp_filename = f"mgs_temp_poster_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
-                            temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                            os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                            save_params = {}
-                            if ext in ['jpg', 'webp']: save_params['quality'] = 95
-                            elif ext == 'png': save_params['optimize'] = True
+                            if is_similar:
+                                logger.debug(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
+                                # 성공! 이 객체를 저장하고 반환
+                                img_format = center_cropped_candidate_obj.format if center_cropped_candidate_obj.format else "JPEG"
+                                ext = img_format.lower().replace("jpeg", "jpg")
+                                if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
+                                temp_filename = f"mgs_temp_poster_{int(time.time())}_{os.urandom(4).hex()}_{idx}.{ext}"
+                                temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                                if do_save == False:
+                                    center_cropped_candidate_obj.close()
+                                    return temp_filepath, None, pl_url
 
-                            # JPEG 저장 시 RGB 변환 필요할 수 있음
-                            img_to_save = center_cropped_candidate_obj
-                            if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
-                                img_to_save = img_to_save.convert('RGB')
+                                try:
+                                    
+                                    os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                                    save_params = {}
+                                    if ext in ['jpg', 'webp']: save_params['quality'] = 95
+                                    elif ext == 'png': save_params['optimize'] = True
 
-                            img_to_save.save(temp_filepath, **save_params)
-                            logger.debug(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
-                            return temp_filepath, None, pl_url # 성공 반환 (파일경로, crop=None, 원본pl)
-                        except Exception as e_save_hq:
-                            logger.exception(f"MGS Special Local: Failed to save HQ similarity match from {obj_name}: {e_save_hq}")
+                                    # JPEG 저장 시 RGB 변환 필요할 수 있음
+                                    img_to_save = center_cropped_candidate_obj
+                                    if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
+                                        img_to_save = img_to_save.convert('RGB')
 
-                    else: # is_hq_poster 검사 실패
-                        logger.debug(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
-                else: # 크롭 자체 실패
-                    logger.debug(f"MGS Special Local: Failed to crop center from {obj_name}.")
+                                    img_to_save.save(temp_filepath, **save_params)
+                                    logger.debug(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
+                                    return temp_filepath, None, pl_url # 성공 반환 (파일경로, crop=None, 원본pl)
+                                except Exception as e_save_hq:
+                                    logger.exception(f"MGS Special Local: Failed to save HQ similarity match from {obj_name}: {e_save_hq}")
 
+                            else: # is_hq_poster 검사 실패
+                                logger.debug(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
+                        else: # 크롭 자체 실패
+                            logger.debug(f"MGS Special Local: Failed to crop center from {obj_name}.")
+                idx += 1
+            
             logger.debug("MGS Special Local: All similarity checks failed. No suitable poster found.")
             return None, None, None # 최종적으로 실패 반환
 
@@ -419,72 +362,9 @@ class SiteUtilAv:
             return None, None, None
 
 
-    @classmethod
-    def imopen(cls, img_src, proxy_url=None):
-        if isinstance(img_src, Image.Image):
-            return img_src
-        if img_src.startswith("http"):
-            # remote url
-            try:
-                # 2025.07.12 by soju
-                # url이 ff proxy를 사용하는 경우 proxy_url 이 또 들어온다.
-                if proxy_url and 'normal/image_proxy' in img_src:
-                    proxy_url = None  # ff proxy URL은 이미 내부적으로 처리됨
-                res = cls.get_response(img_src, proxy_url=proxy_url)
-                return Image.open(BytesIO(res.content))
-            except Exception:
-                logger.exception("이미지 여는 중 예외:")
-                return None
-        else:
-            try:
-                # local file
-                return Image.open(img_src)
-            except (FileNotFoundError, OSError):
-                logger.exception("이미지 여는 중 예외:")
-                return None
+    
 
-    @classmethod
-    def imcrop(cls, im, position=None, box_only=False):
-        """원본 이미지에서 잘라내 세로로 긴 포스터를 만드는 함수"""
-
-        if not isinstance(im, Image.Image):
-            return im
-
-        original_format = im.format
-
-        width, height = im.size
-        new_w = height / 1.4225
-        if position == "l":
-            left = 0
-        elif position == "c":
-            left = (width - new_w) / 2
-        else:
-            # default: from right
-            left = width - new_w
-        
-        # left, right 값이 이미지 경계를 벗어나지 않도록 조정 (음수 또는 width 초과 방지)
-        left = max(0, min(left, width - new_w))
-        right = left + new_w
-        if right > width : # new_w가 너무 커서 오른쪽 경계를 넘는 경우
-            new_w = width - left
-            right = width
-        if new_w <= 0 : # 계산된 너비가 0 이하이면 크롭 불가
-            logger.debug(f"imcrop: Calculated new_w ({new_w}) is invalid for image size {width}x{height}. Returning original.")
-            return im # 원본 반환 또는 None
-
-        box = (left, 0, right, height)
-        
-        if box_only:
-            return box
-        
-        try:
-            cropped_im = im.crop(box)
-            if cropped_im and original_format: # 크롭 성공했고 원본 포맷 정보가 있었다면
-                cropped_im.format = original_format # format 속성 복사
-            return cropped_im
-        except Exception as e_crop:
-            logger.error(f"Error during im.crop with box {box}: {e_crop}")
-            return None # 크롭 실패 시 None 반환
+    
 
     @classmethod
     def resolve_jav_imgs(cls, img_urls: dict, ps_to_poster: bool = False, proxy_url: str = None, crop_mode: str = None):
@@ -531,23 +411,8 @@ class SiteUtilAv:
             }
         )
 
-    @classmethod
-    def process_jav_imgs(cls, image_mode: str, img_urls: dict, proxy_url: str = None):
-        thumbs = []
-
-        landscape = img_urls["landscape"]
-        if landscape:
-            _url = cls.process_image_mode(image_mode, landscape, proxy_url=proxy_url)
-            thumbs.append(EntityThumb(aspect="landscape", value=_url))
-
-        poster, poster_crop = img_urls["poster"], img_urls["poster_crop"]
-        if poster:
-            _url = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url, crop_mode=poster_crop)
-            thumbs.append(EntityThumb(aspect="poster", value=_url))
-
-        return thumbs
-
-
+    
+    
     @classmethod
     def process_image_mode(cls, image_mode, image_source, proxy_url=None, crop_mode=None):
         if image_source is None:
@@ -1060,12 +925,7 @@ class SiteUtilAv:
             entity.actor = [EntityActor(a["name"]) for a in data["actors"]]
         return entity
 
-    @classmethod
-    def trans(cls, text, do_trans=True, source="ja", target="ko"):
-        text = text.strip()
-        if do_trans and text:
-            return TransUtil.trans(text, source=source, target=target).strip()
-        return text
+
 
     @classmethod
     def discord_proxy_image(cls, image_url: str, **kwargs) -> str: # 첫 인자는 URL 또는 파일 경로 (문자열)
@@ -1269,69 +1129,7 @@ class SiteUtilAv:
         # logger.debug(ret)
         return ret
 
-    @classmethod
-    def are_images_visually_same(cls, img_src1, img_src2, proxy_url=None, threshold=10):
-        """
-        두 이미지 소스(URL 또는 로컬 경로)가 시각적으로 거의 동일한지 비교합니다.
-        Image hashing (dhash + phash)을 사용하여 거리가 임계값 미만인지 확인합니다.
-        """
-        # logger.debug(f"Comparing visual similarity (threshold: {threshold})...")
-        # log_src1 = img_src1 if isinstance(img_src1, str) else "PIL Object 1"
-        # log_src2 = img_src2 if isinstance(img_src2, str) else "PIL Object 2"
-        # logger.debug(f"  Source 1: {log_src1}")
-        # logger.debug(f"  Source 2: {log_src2}")
-
-        try:
-            if img_src1 is None or img_src2 is None:
-                logger.debug("  Result: False (One or both sources are None)")
-                return False
-
-            # 이미지 열기 (imopen은 URL, 경로, PIL 객체 처리 가능)
-            # 첫 번째 이미지는 proxy_url 사용 가능, 두 번째는 주로 로컬 파일이므로 불필요
-            im1 = cls.imopen(img_src1, proxy_url=proxy_url) 
-            im2 = cls.imopen(img_src2) # 두 번째는 로컬 파일 경로 가정
-
-            if im1 is None or im2 is None:
-                logger.debug("  Result: False (Failed to open one or both images)")
-                return False
-            # logger.debug("  Images opened successfully.")
-
-            try:
-                from imagehash import dhash, phash # 한 번에 임포트
-
-                # 크기가 약간 달라도 해시는 비슷할 수 있으므로 크기 비교는 선택적
-                # w1, h1 = im1.size; w2, h2 = im2.size
-                # if w1 != w2 or h1 != h2:
-                #     logger.debug(f"  Sizes differ: ({w1}x{h1}) vs ({w2}x{h2}). Might still be visually similar.")
-
-                # dhash 및 phash 계산
-                dhash1 = dhash(im1); dhash2 = dhash(im2)
-                phash1 = phash(im1); phash2 = phash(im2)
-
-                # 거리 계산
-                d_dist = dhash1 - dhash2
-                p_dist = phash1 - phash2
-                combined_dist = d_dist + p_dist
-
-                # logger.debug(f"  dhash distance: {d_dist}")
-                # logger.debug(f"  phash distance: {p_dist}")
-                # logger.debug(f"  Combined distance: {combined_dist}")
-
-                # 임계값 비교
-                is_same = combined_dist < threshold
-                # logger.debug(f"  Result: {is_same} (Combined distance < {threshold})")
-                return is_same
-
-            except ImportError:
-                logger.warning("  ImageHash library not found. Cannot perform visual similarity check.")
-                return False # 라이브러리 없으면 비교 불가
-            except Exception as hash_e:
-                logger.exception(f"  Error during image hash comparison: {hash_e}")
-                return False # 해시 비교 중 오류
-
-        except Exception as e:
-            logger.exception(f"  Error in are_images_visually_same: {e}")
-            return False # 전체 함수 오류
+    
 
 
     @classmethod
@@ -1534,6 +1332,30 @@ class SiteUtilAv:
             logger.exception(f"Error in has_hq_poster function for PL ('{im_lg_url if isinstance(im_lg_url, str) else 'Non-URL_LG'}'): {e}")
             return None
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    #############################################################
+    # 유틸리티성.... 나중에 SiteUtil과 합친다.
+    ############################################################# 
+    
     @classmethod
     def change_html(cls, text):
         if not text:
@@ -1704,3 +1526,288 @@ class SiteUtilAv:
             res = tag
 
         return res
+
+
+
+
+
+
+
+
+    # 범용 이미지 처리
+    @classmethod
+    def imcrop(cls, im, position=None, box_only=False):
+        """원본 이미지에서 잘라내 세로로 긴 포스터를 만드는 함수"""
+
+        if not isinstance(im, Image.Image):
+            return im
+
+        original_format = im.format
+
+        width, height = im.size
+        new_w = height / 1.4225
+        if position == "l":
+            left = 0
+        elif position == "c":
+            left = (width - new_w) / 2
+        else:
+            # default: from right
+            left = width - new_w
+        
+        # left, right 값이 이미지 경계를 벗어나지 않도록 조정 (음수 또는 width 초과 방지)
+        left = max(0, min(left, width - new_w))
+        right = left + new_w
+        if right > width : # new_w가 너무 커서 오른쪽 경계를 넘는 경우
+            new_w = width - left
+            right = width
+        if new_w <= 0 : # 계산된 너비가 0 이하이면 크롭 불가
+            logger.debug(f"imcrop: Calculated new_w ({new_w}) is invalid for image size {width}x{height}. Returning original.")
+            return im # 원본 반환 또는 None
+
+        box = (left, 0, right, height)
+        
+        if box_only:
+            return box
+        
+        try:
+            cropped_im = im.crop(box)
+            if cropped_im and original_format: # 크롭 성공했고 원본 포맷 정보가 있었다면
+                cropped_im.format = original_format # format 속성 복사
+            return cropped_im
+        except Exception as e_crop:
+            logger.error(f"Error during im.crop with box {box}: {e_crop}")
+            return None # 크롭 실패 시 None 반환
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    #############################################################
+    # SiteAvBase 에 넘어간 메소드들
+    ############################################################# 
+
+    @classmethod
+    def get_tree(cls, url, **kwargs):
+        text = cls.get_text(url, **kwargs)
+        # logger.debug(text)
+        if text is None:
+            return text
+        return html.fromstring(text)
+
+    @classmethod
+    def get_text(cls, url, **kwargs):
+        res = cls.get_response(url, **kwargs)
+        # logger.debug('url: %s, %s', res.status_code, url)
+        # if res.status_code != 200:
+        #    return None
+        return res.text
+
+    @classmethod
+    def get_response(cls, url, **kwargs):
+        kwargs['verify'] = False  # SSL 인증서 검증 비활성화 (필요시)   
+        proxy_url_from_arg = kwargs.pop("proxy_url", None)
+
+        proxies_for_this_request = None
+        if proxy_url_from_arg:
+            proxies_for_this_request = {"http": proxy_url_from_arg, "https": proxy_url_from_arg}
+            # logger.debug(f"SiteUtil.get_response for URL='{url}': Using EXPLICIT proxy from argument: {proxies_for_this_request}")
+        else:
+            proxies_for_this_request = {} # 세션 기본 프록시 무시
+            # logger.debug(f"SiteUtil.get_response for URL='{url}': NO explicit proxy from argument. Setting proxies to {proxies_for_this_request} to bypass session proxies for this request.")
+
+        request_headers = kwargs.pop("headers", cls.default_headers.copy())
+        method = kwargs.pop("method", "GET")
+        post_data = kwargs.pop("post_data", None)
+        if post_data:
+            method = "POST"
+            kwargs["data"] = post_data
+
+        if "javbus.com" in url:
+            request_headers["referer"] = "https://www.javbus.com/"
+
+        try:
+            res = cls.session.request(method, url, headers=request_headers, proxies=proxies_for_this_request, **kwargs)
+
+            #log_source = "FROM CACHE" if hasattr(res, 'from_cache') and res.from_cache else "fetched (NOT from cache or cache expired/missed)"
+
+            #if res.status_code == 200:
+            #    logger.info(f"SiteUtil.get_response: URL '{url}' {log_source}. Status: {res.status_code} OK.")
+            #else:
+            #    logger.warning(f"SiteUtil.get_response: URL '{url}' {log_source}. Status: {res.status_code} (Not 200 OK).")
+
+            return res
+
+        except requests.exceptions.Timeout as e_timeout:
+            # 에러 로그에 사용하려 했던 프록시 정보 (proxy_url_from_arg)를 명시
+            logger.error(f"SiteUtil.get_response: Timeout for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_timeout}")
+            return None
+        except requests.exceptions.ConnectionError as e_conn:
+            logger.error(f"SiteUtil.get_response: ConnectionError for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_conn}")
+            return None
+        except requests.exceptions.RequestException as e_req:
+            logger.error(f"SiteUtil.get_response: RequestException (other) for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_req}")
+            logger.error(traceback.format_exc()) 
+            return None 
+        except Exception as e_general:
+            logger.error(f"SiteUtil.get_response: General Exception for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_general}")
+            logger.error(traceback.format_exc())
+            return None
+        
+    @classmethod
+    def are_images_visually_same(cls, img_src1, img_src2, proxy_url=None, threshold=10):
+        """
+        두 이미지 소스(URL 또는 로컬 경로)가 시각적으로 거의 동일한지 비교합니다.
+        Image hashing (dhash + phash)을 사용하여 거리가 임계값 미만인지 확인합니다.
+        """
+        # logger.debug(f"Comparing visual similarity (threshold: {threshold})...")
+        # log_src1 = img_src1 if isinstance(img_src1, str) else "PIL Object 1"
+        # log_src2 = img_src2 if isinstance(img_src2, str) else "PIL Object 2"
+        # logger.debug(f"  Source 1: {log_src1}")
+        # logger.debug(f"  Source 2: {log_src2}")
+
+        try:
+            if img_src1 is None or img_src2 is None:
+                logger.debug("  Result: False (One or both sources are None)")
+                return False
+
+            # 이미지 열기 (imopen은 URL, 경로, PIL 객체 처리 가능)
+            # 첫 번째 이미지는 proxy_url 사용 가능, 두 번째는 주로 로컬 파일이므로 불필요
+            im1 = cls.imopen(img_src1, proxy_url=proxy_url) 
+            im2 = cls.imopen(img_src2) # 두 번째는 로컬 파일 경로 가정
+
+            if im1 is None or im2 is None:
+                logger.debug("  Result: False (Failed to open one or both images)")
+                return False
+            # logger.debug("  Images opened successfully.")
+
+            try:
+                from imagehash import dhash, phash # 한 번에 임포트
+
+                # 크기가 약간 달라도 해시는 비슷할 수 있으므로 크기 비교는 선택적
+                # w1, h1 = im1.size; w2, h2 = im2.size
+                # if w1 != w2 or h1 != h2:
+                #     logger.debug(f"  Sizes differ: ({w1}x{h1}) vs ({w2}x{h2}). Might still be visually similar.")
+
+                # dhash 및 phash 계산
+                dhash1 = dhash(im1); dhash2 = dhash(im2)
+                phash1 = phash(im1); phash2 = phash(im2)
+
+                # 거리 계산
+                d_dist = dhash1 - dhash2
+                p_dist = phash1 - phash2
+                combined_dist = d_dist + p_dist
+
+                # logger.debug(f"  dhash distance: {d_dist}")
+                # logger.debug(f"  phash distance: {p_dist}")
+                # logger.debug(f"  Combined distance: {combined_dist}")
+
+                # 임계값 비교
+                is_same = combined_dist < threshold
+                # logger.debug(f"  Result: {is_same} (Combined distance < {threshold})")
+                return is_same
+
+            except ImportError:
+                logger.warning("  ImageHash library not found. Cannot perform visual similarity check.")
+                return False # 라이브러리 없으면 비교 불가
+            except Exception as hash_e:
+                logger.exception(f"  Error during image hash comparison: {hash_e}")
+                return False # 해시 비교 중 오류
+
+        except Exception as e:
+            logger.exception(f"  Error in are_images_visually_same: {e}")
+            return False # 전체 함수 오류
+        
+
+
+    @classmethod
+    def imopen(cls, img_src, proxy_url=None):
+        if isinstance(img_src, Image.Image):
+            return img_src
+        if img_src.startswith("http"):
+            # remote url
+            try:
+                # 2025.07.12 by soju
+                # url이 ff proxy를 사용하는 경우 proxy_url 이 또 들어온다.
+                if proxy_url and 'normal/image_proxy' in img_src:
+                    proxy_url = None  # ff proxy URL은 이미 내부적으로 처리됨
+                res = cls.get_response(img_src, proxy_url=proxy_url)
+                return Image.open(BytesIO(res.content))
+            except Exception:
+                logger.exception("이미지 여는 중 예외:")
+                return None
+        else:
+            try:
+                # local file
+                return Image.open(img_src)
+            except (FileNotFoundError, OSError):
+                logger.exception("이미지 여는 중 예외:")
+                return None
+            
+    
+
+    @classmethod
+    def trans(cls, text, do_trans=True, source="ja", target="ko"):
+        text = text.strip()
+        if do_trans and text:
+            return TransUtil.trans(text, source=source, target=target).strip()
+        return text

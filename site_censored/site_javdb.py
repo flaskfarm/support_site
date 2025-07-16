@@ -10,9 +10,11 @@ from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, En
 from ..setup import P, logger, path_data
 from ..site_util_av import SiteUtilAv as SiteUtil
 
+
+SITE_BASE_URL = 'https://javdb.com'
+
 class SiteJavdb:
     site_name = 'javdb'
-    site_base_url = 'https://javdb.com'
     module_char = 'C'
     site_char = 'J'
 
@@ -64,7 +66,7 @@ class SiteJavdb:
                     keyword_for_url = temp_keyword
                     label_for_compare = temp_keyword
         search_keyword_for_url = py_urllib_parse.quote_plus(keyword_for_url)
-        search_url = f"{cls.site_base_url}/search?q={search_keyword_for_url}&f=all"
+        search_url = f"{SITE_BASE_URL}/search?q={search_keyword_for_url}&f=all"
 
         logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
 
@@ -339,7 +341,7 @@ class SiteJavdb:
             custom_cookies['cf_clearance'] = cf_clearance_cookie_value
 
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
-        detail_url = f"{cls.site_base_url}/v/{original_code_for_url}"
+        detail_url = f"{SITE_BASE_URL}/v/{original_code_for_url}"
         temp_poster_file_to_clean = None
 
         try:
