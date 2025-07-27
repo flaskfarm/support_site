@@ -384,7 +384,7 @@ class SiteAvBase:
 
             return SiteUtilAv.imcrop(target, position='c')
         except Exception as e:
-            logger.exception(f"MGS Special Local: Error in get_mgs_half_pl_poster_info_local: {e}")
+            logger.exception(f"MGS Special Local: Error in : {e}")
 
 
     # jav_image 기본 처리
@@ -952,7 +952,104 @@ class SiteAvBase:
 
 
 
+    
+    # 파일명에 indx 포함. 0 우, 1 좌
+    @classmethod
+    def get_mgs_half_pl_poster_info_local(cls, ps_url: str, pl_url: str, do_save:bool = True):
+        """
+        MGStage용으로 pl 이미지를 특별 처리합니다. (로컬 임시 파일 사용)
+        pl 이미지를 가로로 반으로 자르고 (오른쪽 우선), 각 절반의 중앙 부분을 ps와 비교합니다.
+        is_hq_poster 검사 성공 시에만 해당 결과를 사용하고,
+        모든 검사 실패 시에는 None, None, None을 반환합니다.
+        """
+        try:
+            # logger.debug(f"MGS Special Local: Trying get_mgs_half_pl_poster_info_local for ps='{ps_url}', pl='{pl_url}'")
+            if not ps_url or not pl_url: return None, None, None
 
+            ps_image = cls.imopen(ps_url)
+            pl_image_original = cls.imopen(pl_url)
+
+            if ps_image is None or pl_image_original is None:
+                # logger.debug("MGS Special Local: Failed to open ps_image or pl_image_original.")
+                return None, None, None
+
+            pl_width, pl_height = pl_image_original.size
+            if pl_width < pl_height * 1.1: # 가로가 세로의 1.1배보다 작으면 충분히 넓지 않다고 판단
+                # logger.debug(f"MGS Special Local: pl_image_original not wide enough ({pl_width}x{pl_height}). Skipping.")
+                return None, None, None
+
+            # 처리 순서 정의: 오른쪽 먼저
+            candidate_sources = []
+            # 오른쪽 절반
+            right_half_box = (pl_width / 2, 0, pl_width, pl_height)
+            right_half_img_obj = pl_image_original.crop(right_half_box)
+            if right_half_img_obj: candidate_sources.append( (right_half_img_obj, f"{pl_url} (right_half)") )
+            # 왼쪽 절반
+            left_half_box = (0, 0, pl_width / 2, pl_height)
+            left_half_img_obj = pl_image_original.crop(left_half_box)
+            if left_half_img_obj: candidate_sources.append( (left_half_img_obj, f"{pl_url} (left_half)") )
+
+            idx = 0
+            for img_obj_to_crop, obj_name in candidate_sources:
+                # logger.debug(f"MGS Special Local: Processing candidate source: {obj_name}")
+                # 중앙 크롭 시도
+                with img_obj_to_crop:
+                    with cls.imcrop(img_obj_to_crop, position='c') as center_cropped_candidate_obj:
+
+                        if center_cropped_candidate_obj:
+                            # logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
+
+                            # is_hq_poster 유사도 검사 시도
+                            # logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
+                            is_similar = cls.is_hq_poster(
+                                ps_image, 
+                                center_cropped_candidate_obj, 
+                                sm_source_info=ps_url, 
+                                lg_source_info=obj_name
+                            )
+
+                            if is_similar:
+                                logger.debug(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
+                                # 성공! 이 객체를 저장하고 반환
+                                img_format = center_cropped_candidate_obj.format if center_cropped_candidate_obj.format else "JPEG"
+                                ext = img_format.lower().replace("jpeg", "jpg")
+                                if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
+                                temp_filename = f"mgs_temp_poster_{int(time.time())}_{os.urandom(4).hex()}_{idx}.{ext}"
+                                temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                                if do_save == False:
+                                    center_cropped_candidate_obj.close()
+                                    return temp_filepath, None, pl_url
+
+                                try:
+                                    
+                                    os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                                    save_params = {}
+                                    if ext in ['jpg', 'webp']: save_params['quality'] = 95
+                                    elif ext == 'png': save_params['optimize'] = True
+
+                                    # JPEG 저장 시 RGB 변환 필요할 수 있음
+                                    img_to_save = center_cropped_candidate_obj
+                                    if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
+                                        img_to_save = img_to_save.convert('RGB')
+
+                                    img_to_save.save(temp_filepath, **save_params)
+                                    logger.debug(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
+                                    return temp_filepath, None, pl_url # 성공 반환 (파일경로, crop=None, 원본pl)
+                                except Exception as e_save_hq:
+                                    logger.exception(f"MGS Special Local: Failed to save HQ similarity match from {obj_name}: {e_save_hq}")
+
+                            else: # is_hq_poster 검사 실패
+                                logger.debug(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
+                        else: # 크롭 자체 실패
+                            logger.debug(f"MGS Special Local: Failed to crop center from {obj_name}.")
+                idx += 1
+            
+            logger.debug("MGS Special Local: All similarity checks failed. No suitable poster found.")
+            return None, None, None # 최종적으로 실패 반환
+
+        except Exception as e:
+            logger.exception(f"MGS Special Local: Error in get_mgs_half_pl_poster_info_local: {e}")
+            return None, None, None
 
 
 
