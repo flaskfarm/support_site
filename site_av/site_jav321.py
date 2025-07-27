@@ -6,9 +6,9 @@ from copy import deepcopy
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from ..setup import P, logger
-from ..site_util_av import SiteUtilAv as SiteUtil
 from .site_dmm import SiteDmm
 from .site_av_base import SiteAvBase
+from ..constants import AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 
 SITE_BASE_URL = "https://www.jav321.com"
 
@@ -27,7 +27,7 @@ class SiteJav321(SiteAvBase):
     def search(cls, keyword, do_trans, manual):
         ret = {}
         try:
-            data = cls.__search(keyword, do_trans=do_trans, manual=manual)
+            data = cls.__search(keyword, do_trans, manual)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"; ret["data"] = str(exception)
@@ -164,10 +164,9 @@ class SiteJav321(SiteAvBase):
     def __info(cls, code):
         url_pid = code[2:]
         url = f"{SITE_BASE_URL}/video/{url_pid}"
-        headers = SiteUtil.default_headers.copy(); headers['Referer'] = SITE_BASE_URL + "/"
         tree = None
         try:
-            tree = cls.get_tree(url, headers=headers)
+            tree = cls.get_tree(url)
             if tree is None or not tree.xpath('/html/body/div[2]/div[1]/div[1]'): 
                 logger.error(f"Jav321: Failed to get valid detail page tree for {code}. URL: {url}")
                 return None
@@ -251,11 +250,12 @@ class SiteJav321(SiteAvBase):
                         temp_genre_list = []
                         for genre_link in genre_a_tags:
                             genre_ja_cleaned = cls._clean_value(genre_link.text_content().strip())
-                            if not genre_ja_cleaned or genre_ja_cleaned in SiteUtil.av_genre_ignore_ja: continue
-                            if genre_ja_cleaned in SiteUtil.av_genre: temp_genre_list.append(SiteUtil.av_genre[genre_ja_cleaned])
+                            if not genre_ja_cleaned or genre_ja_cleaned in AV_GENRE_IGNORE_JA: continue
+                            if genre_ja_cleaned in AV_GENRE: temp_genre_list.append(AV_GENRE[genre_ja_cleaned])
                             else:
                                 genre_ko_item = cls.trans(genre_ja_cleaned).replace(" ", "")
-                                if genre_ko_item not in SiteUtil.av_genre_ignore_ko: temp_genre_list.append(genre_ko_item)
+                                if genre_ko_item not in AV_GENRE_IGNORE_KO: 
+                                    temp_genre_list.append(genre_ko_item)
                         if temp_genre_list: entity.genre = list(set(temp_genre_list))
                     elif current_key == "配信開始日":
                         date_val_cleaned = cls._clean_value((b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0])
@@ -362,7 +362,7 @@ class SiteJav321(SiteAvBase):
             
             if forced_crop_mode_for_this_item and valid_pl_candidate:
                 final_image_sources['poster_source'] = valid_pl_candidate
-                final_image_sources['poster_mode'] = forced_crop_mode_for_this_item
+                final_image_sources['poster_mode'] = f"crop_{forced_crop_mode_for_this_item}"
             elif valid_ps_candidate:
                 if apply_ps_to_poster_for_this_item:
                     final_image_sources['poster_source'] = valid_ps_candidate
@@ -372,14 +372,12 @@ class SiteJav321(SiteAvBase):
                     poster_candidates = ([valid_pl_candidate] if valid_pl_candidate else []) + specific_arts
                     
                     for candidate in poster_candidates:
-                        tmp1 = SiteUtil.is_portrait_high_quality_image(
-                            candidate, 
-                            proxy_url=cls.config['proxy_url']
+                        tmp1 = cls.is_portrait_high_quality_image(
+                            candidate
                         )
-                        tmpe2 = SiteUtil.is_hq_poster(
+                        tmpe2 = cls.is_hq_poster(
                             valid_ps_candidate, 
                             candidate, 
-                            proxy_url=cls.config['proxy_url'], 
                             sm_source_info=valid_ps_candidate, 
                             lg_source_info=candidate
                         )
@@ -387,10 +385,9 @@ class SiteJav321(SiteAvBase):
                             final_image_sources['poster_source'] = candidate
                             break
                     if final_image_sources['poster_source'] is None and valid_pl_candidate:
-                        _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(
+                        _temp_filepath, _, _ = cls.get_mgs_half_pl_poster_info_local(
                             valid_ps_candidate, 
                             valid_pl_candidate, 
-                            proxy_url=cls.config['proxy_url'],
                             do_save=False
                         )
                         if _temp_filepath:
@@ -401,7 +398,7 @@ class SiteJav321(SiteAvBase):
 
                     if final_image_sources['poster_source'] is None:
                         for candidate in poster_candidates:
-                            crop_pos = SiteUtil.has_hq_poster(valid_ps_candidate, candidate, proxy_url=cls.config['proxy_url'])
+                            crop_pos = cls.has_hq_poster(valid_ps_candidate, candidate)
                             if crop_pos:
                                 final_image_sources['poster_source'] = candidate
                                 final_image_sources['poster_mode'] = f"crop_{crop_pos}"
@@ -421,7 +418,7 @@ class SiteJav321(SiteAvBase):
                 # 플레이스홀더 제외 로직 포함
                 final_image_sources['args'] = [
                     art for art in all_arts_from_page 
-                    if art and art not in used_for_thumb and not (now_printing_path and SiteUtil.are_images_visually_same(art, now_printing_path, proxy_url=cls.config['proxy_url']))
+                    if art and art not in used_for_thumb and not (now_printing_path and cls.are_images_visually_same(art, now_printing_path))
                 ][:cls.config['max_arts']]
 
 
@@ -440,7 +437,7 @@ class SiteJav321(SiteAvBase):
                 except Exception as e_trailer: logger.exception(f"Jav321: Error processing trailer for {code}: {e_trailer}")
 
             if entity.originaltitle:
-                try: entity = SiteUtil.shiroutoname_info(entity)
+                try: entity = cls.shiroutoname_info(entity)
                 except Exception as e_shirouto: logger.exception(f"Jav321: Exception during Shiroutoname call for {entity.originaltitle}: {e_shirouto}")
             
             logger.info(f"Jav321: __info finished for {code}. UI Code: {ui_code_for_image}")
@@ -459,7 +456,6 @@ class SiteJav321(SiteAvBase):
                     logger.debug(f"Jav321: Removed MGS-style temp poster file: {mgs_special_poster_filepath}")
                 except Exception as e_remove_temp:
                     logger.error(f"Jav321: Failed to remove MGS-style temp poster file {mgs_special_poster_filepath}: {e_remove_temp}")
-
 
 
     @classmethod
@@ -529,7 +525,6 @@ class SiteJav321(SiteAvBase):
         
         logger.debug(f"Jav321 ImgUrls Final: PS='{img_urls['ps']}', PL='{img_urls['pl']}', Arts({len(img_urls['arts'])})='{img_urls['arts'][:3]}...'")
         return img_urls
-
 
     # endregion INFO
     ################################################
@@ -679,13 +674,13 @@ class SiteJav321(SiteAvBase):
         super().set_config(db)
         cls.config.update({
             # 포스터 예외처리1. 설정된 레이블은 저화질 썸네일을 포스터로 사용
-            "ps_force_labels_list": db.get_list("jav_censored_jav321_small_image_to_poster", ","),
-            
+            "ps_force_labels_list": db.get_list(f"jav_censored_{cls.site_name}_small_image_to_poster", ","),
+
             # 포스터 예외처리2. 가로 이미지 크롭이 필요한 경우 그 위치를 수동 지정
-            "crop_mode": db.get_list("jav_censored_jav321_crop_mode", ","),
+            "crop_mode": db.get_list(f"jav_censored_{cls.site_name}_crop_mode", ","),
             # 지정 레이블 최우선 검색
-            "priority_labels": db.get_list("jav_censored_jav321_priority_search_labels", ","),
-            "maintain_series_number_labels": db.get_list("jav_censored_jav321_maintain_series_number_labels", ","),
+            "priority_labels": db.get_list(f"jav_censored_{cls.site_name}_priority_search_labels", ","),
+            "maintain_series_number_labels": db.get_list(f"jav_censored_{cls.site_name}_maintain_series_number_labels", ","),
         })
         cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
         cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config['ps_force_labels_list'] if lbl.strip()}

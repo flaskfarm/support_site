@@ -1,70 +1,58 @@
-# -*- coding: utf-8 -*-
-import json
 import re
 import traceback
-
-import requests
-from dateutil.parser import parse
-from framework import SystemModelSetting
-from framework.util import Util
 from lxml import html
-from system import SystemLogicTrans
-
+from dateutil.parser import parse
 from ..entity_av import EntityAVSearch
-from ..entity_base import (EntityActor, EntityExtra, EntityMovie,
-                           EntityRatings, EntityThumb)
-#########################################################
-from ..plugin import P
-from ..site_util import SiteUtil
+from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityThumb)
+from ..setup import P, logger
+from .site_av_base import SiteAvBase
 
-logger = P.logger
-ModelSetting = P.ModelSetting
+SITE_BASE_URL = 'https://caribbeancom.com'
 
-class SiteCarib(object):
+class SiteCarib(SiteAvBase):
     site_name = 'carib'
-    site_base_url = 'https://caribbeancom.com'
+    site_char = 'C'    
     module_char = 'E'
-    site_char = 'C'
+    default_headers = SiteAvBase.base_default_headers.copy()
 
     @classmethod
-    def search(cls, keyword, do_trans=True, proxy_url=None, image_mode='0', manual=False):
+    def search(cls, keyword, do_trans=True, manual=False):
         try:
             ret = {}
-
             if re.search('(\\d{6}-\\d{3})', keyword, re.I) is not None:
                 code = re.search('(\\d{6}-\\d{3})', keyword, re.I).group()
             else:
-                # logger.debug(f'invalid keyword: {keyword}')
                 ret['ret'] = 'failed'
                 ret['data'] = 'invalid keyword'
                 return ret
 
-            url = f'{cls.site_base_url}/moviepages/{code}/index.html'
-
-            if SiteUtil.get_response(url, proxy_url=proxy_url).status_code == 404:
+            url = f'{SITE_BASE_URL}/moviepages/{code}/index.html'
+            logger.debug(f"Searching URL: {url}")
+            res = cls.get_response(url)
+            if res.status_code == 404:
                 # logger.debug(f'not found: {keyword}')
                 ret['ret'] = 'failed'
                 ret['data'] = 'not found'
                 return ret
 
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
+            tree = html.fromstring(res.text)
             
             ret = {'data' : []}
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code
-
             item.title = item.title_ko = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')[0].strip()
-            item.year = parse(tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]/span[@itemprop="uploadDate"]/text()')[0].strip()).date().year
+            item.year = "20" + code[4:6]
 
             item.image_url = f'https://www.caribbeancom.com/moviepages/{code}/images/l_l.jpg'
             if manual == True:
-                if image_mode == '3':
-                    image_mode = '0'
-                item.image_url = SiteUtil.process_image_mode(image_mode, item.image_url, proxy_url=proxy_url)
-            
+                try:
+                    if cls.config['use_proxy']:
+                        item.image_url = cls.make_image_url(item.image_url)
+                except Exception as e_img: 
+                    logger.error(f"DMM Search: ImgProcErr (manual):{e_img}")
             if do_trans:
-                item.title_ko = SiteUtil.trans(item.title, source='ja', target='ko')
+                item.title_ko = cls.trans(item.title)
             
             item.ui_code = f'carib-{code}'
 
@@ -89,44 +77,50 @@ class SiteCarib(object):
 
 
     @classmethod
-    def info(cls, code, do_trans=True, proxy_url=None, image_mode='0'):
+    def info(cls, code):
         try:
             ret = {}
-            url = f'{cls.site_base_url}/moviepages/{code[2:]}/index.html'
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
+            url = f'{SITE_BASE_URL}/moviepages/{code[2:]}/index.html'
+            tree = cls.get_tree(url)
             entity = EntityMovie(cls.site_name, code)
             entity.country = [u'일본']
             entity.mpaa = u'청소년 관람불가'
-
+            
             # 썸네일
+            final_image_sources = {
+                'poster_source': None,
+                'poster_mode': None,
+                'landscape_source': None,
+                'arts': [],
+            }
+
             entity.thumb = []
-            if SiteUtil.get_response(f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/jacket.jpg', proxy_url=proxy_url).status_code == 404:
-                data_poster = SiteUtil.get_image_url(f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/l_l.jpg', image_mode, proxy_url=proxy_url)
+            if cls.get_response(f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/jacket.jpg').status_code == 404:
+                final_image_sources['poster_source'] =f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/l_l.jpg'
             else:
-                data_poster = SiteUtil.get_image_url(f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/jacket.jpg', image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect='poster', value=data_poster['image_url']))
-            data_landscape = SiteUtil.get_image_url(f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/l_l.jpg', image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect='landscape', value=data_landscape['image_url']))
+                final_image_sources['poster_source'] =f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/jacket.jpg'
+            
+            final_image_sources['landscape_source'] = f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/l_l.jpg'
 
             # tagline
-            entity.tagline = SiteUtil.trans(tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')[0].strip(), do_trans=do_trans)
+            entity.tagline = cls.trans(tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')[0].strip())
 
             # date, year
-            entity.premiered = str(parse(tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]/span[@itemprop="uploadDate"]/text()')[0].strip()).date())
-            entity.year = parse(tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]/span[@itemprop="uploadDate"]/text()')[0].strip()).date().year
+            
+            entity.year = "20" + code[6:8]
+            entity.premiered = f"{entity.year}-{code[2:4]}-{code[4:6]}"
 
             # actor
             entity.actor = []
             for actor in tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()'):
                 entity.actor.append(EntityActor(actor))
 
-
             # director
             # entity.director = []
 
             # tag
             entity.tag = []
-            entity.tag.append('Caribbeancom')
+            entity.tag.append('carib')
 
             # genre
             entity.genre = []
@@ -134,7 +128,7 @@ class SiteCarib(object):
             genrelist = tree.xpath('//li[@class="movie-spec"]//span[@class="spec-content"]/a[@class="spec-item"]/text()')
             if genrelist != []:
                 for item in genrelist:
-                    entity.genre.append(SiteUtil.get_translated_tag('uncen_tags', item)) # 미리 번역된 태그를 포함
+                    entity.genre.append(cls.get_translated_tag('uncen_tags', item)) # 미리 번역된 태그를 포함
                     # entity.genre.append(SiteUtil.trans(item.strip(), do_trans=do_trans).strip())
             
             # title
@@ -145,8 +139,8 @@ class SiteCarib(object):
             # except: pass
 
             # plot
-            entity.plot = SiteUtil.trans(tree.xpath('//p[@itemprop="description"]/text()')[0], do_trans=do_trans)
-            
+            entity.plot = cls.trans(tree.xpath('//p[@itemprop="description"]/text()')[0])
+
             # 팬아트
             # entity.fanart = []
 
@@ -155,8 +149,11 @@ class SiteCarib(object):
 
             # 부가영상 or 예고편
             entity.extras = []
-            entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', f'https://smovie.caribbeancom.com/sample/movies/{code[2:]}/480p.mp4', thumb=f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/l_l.jpg'))
-
+            if cls.config['use_extras']:
+                url = cls.make_video_url(f'https://smovie.caribbeancom.com/sample/movies/{code[2:]}/480p.mp4')
+                img = cls.make_image_url(f'https://www.caribbeancom.com/moviepages/{code[2:]}/images/l_l.jpg')
+                entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', url, thumb=img))
+            cls.finalize_images_for_entity(entity, final_image_sources)
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 

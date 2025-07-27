@@ -1,4 +1,4 @@
-import re
+import re, time
 import traceback
 from lxml import html
 import os 
@@ -8,28 +8,34 @@ from PIL import Image
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
 from ..setup import P, logger, path_data
-from ..site_util_av import SiteUtilAv as SiteUtil
-
+from .site_av_base import SiteAvBase
 
 SITE_BASE_URL = 'https://javdb.com'
 
-class SiteJavdb:
+class SiteJavdb(SiteAvBase):
     site_name = 'javdb'
-    module_char = 'C'
     site_char = 'J'
+    module_char = 'C'
+    default_headers = SiteAvBase.base_default_headers.copy()
+    
+    ################################################
+    # region SEARCH
 
     @classmethod
-    def __search(
-        cls,
-        keyword,
-        do_trans=True,
-        proxy_url=None,
-        image_mode="ff_proxy",
-        manual=False,
-        cf_clearance_cookie_value='',
-        priority_label_setting_str=""
-        ):
+    def search(cls, keyword, do_trans, manual):
+        ret = {}
+        try:
+            data = cls.__search(keyword, do_trans=do_trans, manual=manual)
+        except Exception as exception:
+            logger.exception("검색 결과 처리 중 예외:")
+            ret["ret"] = "exception"; ret["data"] = str(exception)
+        else:
+            ret["ret"] = "success" if data else "no_match"; ret["data"] = data
+        return ret
 
+
+    @classmethod
+    def __search(cls, keyword, do_trans, manual):
         original_keyword = keyword
         temp_keyword = original_keyword.strip().lower()
         temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
@@ -71,13 +77,9 @@ class SiteJavdb:
         logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
 
         custom_cookies_for_search = {'over18': '1'}
-        if cf_clearance_cookie_value:
-            custom_cookies_for_search['cf_clearance'] = cf_clearance_cookie_value
-
-        res_for_search = SiteUtil.get_response_cs(search_url, proxy_url=proxy_url, cookies=custom_cookies_for_search)
+        res_for_search = cls.get_response_cs(search_url, cookies=custom_cookies_for_search)
 
         if res_for_search is None:
-            logger.error(f"JavDB Search: Failed to get response from SiteUtil.get_response_cs for '{keyword_for_url}'. Proxy used: {'Yes' if proxy_url else 'No'}. Check SiteUtil logs for specific error (e.g., 403).")
             return []
 
         html_content_text = res_for_search.text
@@ -115,23 +117,6 @@ class SiteJavdb:
             if no_results_message_xpath:
                 logger.info(f"JavDB Search: 'No videos found' message on page for keyword '{keyword_for_url}'.")
                 return []
-
-            # --- XPath 실패 시 HTML 저장 로직 ---
-            #try:
-            #    safe_keyword_for_filename = keyword_for_url.replace('/', '_').replace('\\', '_').replace(':', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace('<', '_').replace('>', '_').replace('|', '_')
-
-            #    unique_suffix = os.urandom(4).hex() 
-
-            #    debug_filename = f"javdb_xpath_fail_{safe_keyword_for_filename}_{unique_suffix}.html"
-            #    debug_html_path = os.path.join(path_data, 'tmp', debug_filename)
-
-            #    os.makedirs(os.path.join(path_data, 'debug'), exist_ok=True) 
-            #    with open(debug_html_path, 'w', encoding='utf-8') as f:
-            #        f.write(html_content_text)
-            #    logger.info(f"JavDB Search: XPath failed. HTML content for '{keyword_for_url}' saved to: {debug_html_path}")
-            #except Exception as e_save_html:
-            #    logger.error(f"JavDB Search: Failed to save HTML content on XPath failure for '{keyword_for_url}': {e_save_html}")
-            # --- HTML 저장 로직 끝 ---
 
             title_match = re.search(r'<title>(.*?)</title>', html_content_text, re.IGNORECASE | re.DOTALL)
             page_title_from_text = title_match.group(1).strip() if title_match else "N/A"
@@ -207,17 +192,18 @@ class SiteJavdb:
                         # JavDB 날짜 형식 예: "2023-01-15", "15/01/2023" 등 다양할 수 있으므로, 연도만 정확히 추출
                         date_match_year_only = re.search(r'(\d{4})', date_str_candidate) # 4자리 숫자(연도) 찾기
                         if date_match_year_only:
-                            premiered_date_str = date_str_candidate # 참고용 날짜 문자열
+                            premiered_date_str = str(date_str_candidate) # 참고용 날짜 문자열
                             try: item.year = int(date_match_year_only.group(1))
                             except ValueError: pass
                             break # 연도 찾으면 중단
 
                 # 번역 처리 (manual 플래그 및 do_trans에 따라)
                 if manual: 
-                    # image_mode는 logic_jav_censored에서 처리하므로 여기서는 원본 URL 반환
+                    if cls.config['use_proxy']:
+                        item.image_url = cls.make_image_url(item.image_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 elif do_trans and item.title: 
-                    item.title_ko = SiteUtil.trans(item.title, source='ja', target='ko')
+                    item.title_ko = cls.trans(item.title)
                 else: 
                     item.title_ko = item.title
 
@@ -248,21 +234,6 @@ class SiteJavdb:
 
                 item_dict['is_priority_label_site'] = False 
                 item_dict['site_key'] = cls.site_name 
-
-                if item_dict.get('ui_code') and priority_label_setting_str:
-                    label_to_check = ""
-                    if '-' in item_dict['ui_code']:
-                        label_to_check = item_dict['ui_code'].split('-', 1)[0].upper()
-                    else:
-                        match_label_no_hyphen = re.match(r'^([A-Z]+)', item_dict['ui_code'].upper())
-                        if match_label_no_hyphen: label_to_check = match_label_no_hyphen.group(1)
-                        else: label_to_check = item_dict['ui_code'].upper()
-
-                    if label_to_check:
-                        priority_labels_set = {lbl.strip().upper() for lbl in priority_label_setting_str.split(',') if lbl.strip()}
-                        if label_to_check in priority_labels_set:
-                            item_dict['is_priority_label_site'] = True
-                            logger.debug(f"JavDB Search: Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
                 
                 final_search_results_list.append(item_dict)
                 # logger.debug(f"  JavDB Parsed: code={item.code}, score={item.score}, title='{item.title_ko}', year={item.year}, ui_code='{item.ui_code}'")
@@ -279,66 +250,47 @@ class SiteJavdb:
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
                 logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
         return sorted_result
+    
+    # endregion SEARCH
+    ################################################
 
 
+    ################################################
+    # region INFO
+    
     @classmethod
-    def search(cls, keyword, **kwargs):
+    def info(cls, code):
         ret = {}
         try:
-            do_trans_arg = kwargs.get('do_trans', True)
-            proxy_url_arg = kwargs.get('proxy_url', None)
-            image_mode_arg = kwargs.get('image_mode', 'original')
-            manual_arg = kwargs.get('manual', False)
-            cf_clearance_cookie_value_arg = kwargs.get('cf_clearance_cookie_value', '')
-            priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
-            data = cls.__search(keyword,
-                                do_trans=do_trans_arg,
-                                proxy_url=proxy_url_arg,
-                                image_mode=image_mode_arg,
-                                manual=manual_arg,
-                                cf_clearance_cookie_value=cf_clearance_cookie_value_arg,
-                                priority_label_setting_str=priority_label_str_arg)
-        except Exception as exception:
-            logger.exception("검색 결과 처리 중 예외:")
-            ret["ret"] = "exception"; ret["data"] = str(exception)
-        else:
-            ret["ret"] = "success" if data else "no_match"; ret["data"] = data
+            entity_obj = cls.__info(code)
+            
+            if entity_obj:
+                if hasattr(entity_obj, 'ui_code') and entity_obj.ui_code:
+                    try: 
+                        logger.debug(f"JavDB Info: Attempting Shiroutoname correction for {entity_obj.ui_code}")
+                        entity_obj = cls.shiroutoname_info(entity_obj) 
+                    except Exception as e_shirouto: 
+                        logger.exception(f"JavDB Info: Shiroutoname correction error for {entity_obj.ui_code}: {e_shirouto}")
+
+                ret["ret"] = "success"
+                ret["data"] = entity_obj.as_dict()
+            else:
+                ret["ret"] = "error"
+                ret["data"] = f"Failed to get JavDB info for {code} (__info returned None)."
+        except Exception as e:
+            ret["ret"] = "exception"
+            ret["data"] = str(e)
+            logger.exception(f"JavDB info (outer) error for code {code}: {e}")
         return ret
-
-
-    @classmethod
-    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
-        if not ui_code_str or not isinstance(ui_code_str, str): 
-            return ""
-        ui_code_upper = ui_code_str.upper()
-        if '-' in ui_code_upper:
-            return ui_code_upper.split('-', 1)[0]
-        else: 
-            match = re.match(r'^([A-Z]+)', ui_code_upper)
-            if match:
-                return match.group(1)
-            return ui_code_upper
+    
 
     @classmethod
-    def __info(cls, code, **kwargs):
-        do_trans = kwargs.get('do_trans', True)
-        proxy_url = kwargs.get('proxy_url', None)
-        image_mode = kwargs.get('image_mode', 'original')
-        max_arts = kwargs.get('max_arts', 10) 
-        use_image_server = kwargs.get('use_image_server', False)
-        image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
-        image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
-        image_path_segment = kwargs.get('url_prefix_segment', 'jav/db') 
-        user_defined_crop_mode = kwargs.get('crop_mode', None)
-        use_extras_setting = kwargs.get('use_extras', True)
-        cf_clearance_cookie_value = kwargs.get('cf_clearance_cookie', None)
-        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
-        original_keyword = kwargs.get('original_keyword', None)
-        maintain_series_number_labels_str = kwargs.get('maintain_series_number_labels', '')
+    def __info(cls, code):
+       
+        original_keyword = ''
 
         custom_cookies = { 'over18': '1', 'locale': 'en' }
-        if cf_clearance_cookie_value:
-            custom_cookies['cf_clearance'] = cf_clearance_cookie_value
+        custom_cookies['cf_clearance'] = ''
 
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{SITE_BASE_URL}/v/{original_code_for_url}"
@@ -346,7 +298,7 @@ class SiteJavdb:
 
         try:
             logger.debug(f"JavDB Info: Accessing URL: {detail_url} for code {code}")
-            res_info = SiteUtil.get_response_cs(detail_url, proxy_url=proxy_url, cookies=custom_cookies)
+            res_info = cls.get_response_cs(detail_url,  cookies=custom_cookies)
 
             if res_info is None or res_info.status_code != 200:
                 status_code_val = res_info.status_code if res_info else "None"
@@ -374,15 +326,14 @@ class SiteJavdb:
                     base_ui_code = h2_visible_code_node[0].strip().upper()
             
             final_ui_code = base_ui_code
-            maintain_labels_set = {label.strip().upper() for label in maintain_series_number_labels_str.split(',') if label}
 
-            if original_keyword and base_ui_code and maintain_labels_set:
+            if original_keyword and base_ui_code and cls.config['maintain_series_number_labels']:
                 keyword_match = re.match(r'^(\d+)?([A-Z]+)-?(\d+)', original_keyword.upper())
                 javdb_match = re.match(r'^([A-Z]+)-(\d+)', base_ui_code)
                 if keyword_match and javdb_match:
                     kw_prefix, kw_label, kw_num = keyword_match.groups()
                     jb_label, jb_num = javdb_match.groups()
-                    if (kw_prefix and kw_label == jb_label and kw_num.lstrip('0') == jb_num.lstrip('0') and jb_label in maintain_labels_set):
+                    if (kw_prefix and kw_label == jb_label and kw_num.lstrip('0') == jb_num.lstrip('0') and jb_label in cls.config['maintain_series_number_labels']):
                         final_ui_code = f"{kw_prefix}{base_ui_code}"
 
             entity.ui_code = final_ui_code if final_ui_code else original_code_for_url.upper()
@@ -405,7 +356,7 @@ class SiteJavdb:
                         actual_raw_title_text = current_title_node[0].strip()
 
             if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
-                entity.tagline = SiteUtil.trans(actual_raw_title_text, do_trans=do_trans, source='ja', target='ko')
+                entity.tagline = cls.trans(actual_raw_title_text)
             else: 
                 entity.tagline = entity.ui_code
 
@@ -441,15 +392,15 @@ class SiteJavdb:
                         except (ValueError, IndexError): pass
                 elif key == 'director':
                     director_text = value_node.xpath('normalize-space()')
-                    if director_text.lower() not in ['n/a', '暂无', '暫無']: entity.director = SiteUtil.trans(director_text, do_trans=do_trans, source='ja', target='ko')
+                    if director_text.lower() not in ['n/a', '暂无', '暫無']: entity.director = cls.trans(director_text)
                 elif key in ('maker', 'publisher'):
                     studio_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if not entity.studio and studio_text.lower() not in ['n/a', '暂无', '暫無']:
-                        entity.studio = SiteUtil.trans(studio_text.split(',')[0].strip(), do_trans=do_trans, source='ja', target='ko')
+                        entity.studio = cls.trans(studio_text.split(',')[0].strip())
                 elif key == 'series':
                     series_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if series_text.lower() not in ['n/a', '暂无', '暫無']:
-                        series_name = SiteUtil.trans(series_text, do_trans=do_trans, source='ja', target='ko')
+                        series_name = cls.trans(series_text)
                         if series_name not in (entity.tag or []):
                             if entity.tag is None: entity.tag = []
                             entity.tag.append(series_name)
@@ -458,15 +409,16 @@ class SiteJavdb:
                     for genre_name_raw in value_node.xpath('./a/text()'):
                         genre_name = genre_name_raw.strip()
                         if genre_name:
-                            trans_genre = SiteUtil.trans(genre_name, do_trans=do_trans, source='ja', target='ko')
-                            if trans_genre not in entity.genre: entity.genre.append(trans_genre)
+                            trans_genre = cls.trans(genre_name)
+                            if trans_genre not in entity.genre: 
+                                entity.genre.append(trans_genre)
                 elif key == 'actor(s)':
                     if entity.actor is None: entity.actor = []
                     for actor_node in value_node.xpath('./a'):
                         if 'female' in (actor_node.xpath('./following-sibling::strong[1]/@class') or [''])[0]:
                             actor_name = actor_node.xpath('string()').strip()
                             if actor_name and actor_name.lower() not in ['n/a', '暂无', '暫無'] and not any(act.originalname == actor_name for act in entity.actor):
-                                actor_entity = EntityActor(SiteUtil.trans(actor_name, do_trans=do_trans, source='ja', target='ko'))
+                                actor_entity = EntityActor(cls.trans(actor_name))
                                 actor_entity.originalname = actor_name
                                 entity.actor.append(actor_entity)
 
@@ -474,7 +426,7 @@ class SiteJavdb:
                 entity.plot = entity.tagline
 
             # === 3. 이미지 소스 결정 및 관계 처리 ===
-
+            
             pl_url = None
             main_cover_img_src_nodes = tree_info.xpath('//div[@class="column column-video-cover"]//img[@class="video-cover"]/@src')
             if main_cover_img_src_nodes:
@@ -491,77 +443,70 @@ class SiteJavdb:
                         if art_full_url_raw.startswith("//"): arts_urls.append("https:" + art_full_url_raw)
                         else: arts_urls.append(art_full_url_raw)
 
-            valid_pl_url = None
-            if pl_url:
-                is_placeholder = False
-                if use_image_server and image_server_local_path:
-                    placeholder_path = os.path.join(image_server_local_path, 'javdb_no_img.jpg')
-                    if os.path.exists(placeholder_path) and SiteUtil.are_images_visually_same(pl_url, placeholder_path, proxy_url=proxy_url):
-                        is_placeholder = True
-                if not is_placeholder:
-                    valid_pl_url = pl_url
-
-            final_poster_source = None; final_poster_crop_mode = None
-            final_landscape_source = None; arts_urls_for_processing = []
+            valid_pl_url = pl_url
+            
+            final_image_sources = {
+                'poster_source': None,
+                'poster_mode': None,
+                'landscape_source': None,
+                'arts': [],
+            }
 
             if valid_pl_url:
-                final_landscape_source = valid_pl_url
+                final_image_sources['landscape_source'] = valid_pl_url
 
                 forced_crop_mode_for_this_item = None
-                if hasattr(entity, 'ui_code') and entity.ui_code and crop_mode_settings_str:
+                if hasattr(entity, 'ui_code') and entity.ui_code:
                     label_from_ui_code_for_settings = cls.get_label_from_ui_code(entity.ui_code)
                     if label_from_ui_code_for_settings:
-                        for line in crop_mode_settings_str.splitlines():
+                        for line in cls.config['crop_mode']:
                             parts = [x.strip() for x in line.split(":", 1)]
                             if len(parts) == 2 and parts[0].upper() == label_from_ui_code_for_settings and parts[1].lower() in ["r", "l", "c"]:
-                                forced_crop_mode_for_this_item = parts[1].lower(); break
+                                forced_crop_mode_for_this_item = parts[1].lower()
+                                break
 
                 is_vr_content = (entity.tagline or "").upper().startswith(("[VR]", "【VR】"))
 
-                effective_crop_mode_to_try = forced_crop_mode_for_this_item or user_defined_crop_mode
+                effective_crop_mode_to_try = forced_crop_mode_for_this_item
                 if effective_crop_mode_to_try:
-                    final_poster_source, final_poster_crop_mode = valid_pl_url, effective_crop_mode_to_try
-                elif SiteUtil.is_portrait_high_quality_image(valid_pl_url, proxy_url=proxy_url):
-                    final_poster_source = valid_pl_url
-                elif is_vr_content and arts_urls and SiteUtil.is_portrait_high_quality_image(arts_urls[0], proxy_url=proxy_url):
-                    final_poster_source = arts_urls[0]
+                    final_image_sources['poster_source'] = valid_pl_url
+                    final_image_sources['poster_mode'] = f"crop_{effective_crop_mode_to_try}"
+                    
+                elif cls.is_portrait_high_quality_image(valid_pl_url):
+                    final_image_sources['poster_source'] = valid_pl_url
+                elif is_vr_content and arts_urls and cls.is_portrait_high_quality_image(arts_urls[0]):
+                    final_image_sources['poster_source'] = arts_urls[0]
                 else:
-                    processed_source, rec_crop, _ = SiteUtil.get_javdb_poster_from_pl_local(valid_pl_url, entity.ui_code, proxy_url=proxy_url)
+                    processed_source, rec_crop, _ = cls.get_javdb_poster_from_pl_local(valid_pl_url, entity.ui_code)
                     if processed_source:
-                        final_poster_source, final_poster_crop_mode = processed_source, rec_crop
+                        final_image_sources['poster_source'] = valid_pl_url
+                        final_image_sources['poster_mode'] = f"crop_{rec_crop}"
                         if isinstance(processed_source, str) and os.path.basename(processed_source).startswith("javdb_temp_poster_"):
                             temp_poster_file_to_clean = processed_source
 
-            if arts_urls and max_arts > 0:
+            if arts_urls and cls.config['max_arts'] > 0:
                 used_for_thumb = set()
-                if final_landscape_source: used_for_thumb.add(final_landscape_source)
-                if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
-                    used_for_thumb.add(final_poster_source)
-                arts_urls_for_processing = [art for art in arts_urls if art and art not in used_for_thumb][:max_arts]
+                if final_image_sources['landscape_source']: 
+                    used_for_thumb.add(final_image_sources['landscape_source'])
+                if final_image_sources['poster_source'] and isinstance(final_image_sources['poster_source'], str) and final_image_sources['poster_source'].startswith("http"):
+                    used_for_thumb.add(final_image_sources['poster_source'])
+                final_image_sources['arts'] = [art for art in arts_urls if art and art not in used_for_thumb][:cls.config['max_arts']]
 
             # === 4. 최종 후처리 위임 ===
-            final_image_sources = {
-                'poster_source': final_poster_source, 'poster_crop': final_poster_crop_mode,
-                'landscape_source': final_landscape_source, 'arts': arts_urls_for_processing,
-            }
-            image_processing_settings = {
-                'image_mode': image_mode, 'proxy_url': proxy_url, 'max_arts': max_arts, 'ui_code': current_ui_code_for_image,
-                'use_image_server': use_image_server, 'image_server_url': image_server_url,
-                'image_server_local_path': image_server_local_path, 'image_path_segment': image_path_segment,
-            }
-            SiteUtil.finalize_images_for_entity(entity, final_image_sources, image_processing_settings)
+            cls.finalize_images_for_entity(entity, final_image_sources)
 
             # === 5. 예고편 및 Shiroutoname 보정 처리 ===
-            if use_extras_setting:
+            if cls.config['use_extras']:
                 trailer_source_tag = tree_info.xpath('//video[@id="preview-video"]/source/@src')
                 if trailer_source_tag:
                     trailer_url_raw = trailer_source_tag[0].strip()
                     if trailer_url_raw:
                         trailer_url_final = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
+                        trailer_url_final = cls.make_video_url(trailer_url_final)
                         entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", trailer_url_final))
 
             if entity.originaltitle:
-                try: entity = SiteUtil.shiroutoname_info(entity)
+                try: entity = cls.shiroutoname_info(entity)
                 except Exception as e_shirouto: logger.exception(f"JavDB Info: Shiroutoname correction error for {entity.originaltitle}: {e_shirouto}")
 
             logger.info(f"JavDB: __info finished for {code}. UI Code: {entity.ui_code}")
@@ -576,28 +521,105 @@ class SiteJavdb:
                 except Exception as e_remove:
                     logger.error(f"JavDB: Failed to remove temp poster file: {e_remove}")
 
+    # endregion INFO
+    ################################################
+    
+    
+    @classmethod
+    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
+        if not ui_code_str or not isinstance(ui_code_str, str): 
+            return ""
+        ui_code_upper = ui_code_str.upper()
+        if '-' in ui_code_upper:
+            return ui_code_upper.split('-', 1)[0]
+        else: 
+            match = re.match(r'^([A-Z]+)', ui_code_upper)
+            if match:
+                return match.group(1)
+            return ui_code_upper
+
 
     @classmethod
-    def info(cls, code, **kwargs):
-        ret = {}
+    def get_javdb_poster_from_pl_local(cls, pl_url: str, original_code_for_log: str = "unknown", proxy_url: str = None):
+        """
+        JavDB용으로 PL 이미지를 특별 처리하여 포스터로 사용할 임시 파일 경로와 추천 crop_mode를 반환합니다.
+        - PL 이미지의 aspect ratio를 확인합니다.
+        - 1.8 이상 (가로로 매우 김): 오른쪽 절반을 잘라 임시 파일로 저장하고, 추천 crop_mode는 'c' (센터).
+        - 1.8 미만 (일반 가로): 이 경우에는 이미지 처리를 하지 않고, 원본 URL과 crop 'r'을 반환합니다.
+        - 성공 시 (임시 파일 경로 또는 원본 URL, 추천 crop_mode, 원본 PL URL), 실패 시 (None, None, None) 반환.
+        """
         try:
-            entity_obj = cls.__info(code, **kwargs)
-            
-            if entity_obj:
-                if hasattr(entity_obj, 'ui_code') and entity_obj.ui_code:
-                    try: 
-                        logger.debug(f"JavDB Info: Attempting Shiroutoname correction for {entity_obj.ui_code}")
-                        entity_obj = SiteUtil.shiroutoname_info(entity_obj) 
-                    except Exception as e_shirouto: 
-                        logger.exception(f"JavDB Info: Shiroutoname correction error for {entity_obj.ui_code}: {e_shirouto}")
+            # logger.debug(f"JavDB Poster Util: Trying get_javdb_poster_from_pl_local for pl_url='{pl_url}', code='{original_code_for_log}'")
+            if not pl_url:
+                return None, None, None
 
-                ret["ret"] = "success"
-                ret["data"] = entity_obj.as_dict()
-            else:
-                ret["ret"] = "error"
-                ret["data"] = f"Failed to get JavDB info for {code} (__info returned None)."
+            pl_image_original = cls.imopen(pl_url)
+            if pl_image_original is None:
+                logger.debug(f"JavDB Poster Util: Failed to open pl_image_original from '{pl_url}'.")
+                return None, None, None
+            
+            pl_width, pl_height = pl_image_original.size
+            aspect_ratio = pl_width / pl_height if pl_height > 0 else 0
+            # logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height})")
+
+            if aspect_ratio >= 1.8: # 가로로 매우 긴 이미지만 처리
+                logger.debug(f"JavDB Poster Util: PL is very wide (ratio {aspect_ratio:.2f}). Processing right-half.")
+                right_half_box = (pl_width / 2, 0, pl_width, pl_height)
+                try:
+                    right_half_img_obj = pl_image_original.crop(right_half_box)
+                    if right_half_img_obj:
+                        # 임시 파일로 저장
+                        img_format = right_half_img_obj.format if right_half_img_obj.format else pl_image_original.format
+                        if not img_format: img_format = "JPEG"
+                        ext = img_format.lower().replace("jpeg", "jpg")
+                        if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
+                        
+                        temp_filename = f"javdb_temp_poster_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
+                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                        
+                        save_params = {}
+                        if ext in ['jpg', 'webp']: save_params['quality'] = 95
+                        elif ext == 'png': save_params['optimize'] = True
+
+                        img_to_save = right_half_img_obj
+                        if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
+                            img_to_save = img_to_save.convert('RGB')
+                        
+                        img_to_save.save(temp_filepath, **save_params)
+                        logger.debug(f"JavDB Poster Util: Saved processed image to temp file: {temp_filepath}")
+                        
+                        pl_image_original.close() # 원본 이미지 닫기
+                        right_half_img_obj.close() # 잘라낸 이미지 닫기
+                        
+                        return temp_filepath, 'c', pl_url # 임시 파일 경로, 추천 크롭 'c', 원본 pl_url 반환
+                    else:
+                        logger.debug("JavDB Poster Util: Cropping right-half returned None. Using original PL.")
+                except Exception as e_process:
+                    logger.error(f"JavDB Poster Util: Error processing/saving wide image: {e_process}. Using original PL.")
+            
+            # 1.8 미만 비율 또는 처리 실패 시, PIL 객체를 닫고 원본 URL 반환
+            pl_image_original.close()
+            return pl_url, 'r', pl_url
+
         except Exception as e:
-            ret["ret"] = "exception"
-            ret["data"] = str(e)
-            logger.exception(f"JavDB info (outer) error for code {code}: {e}")
-        return ret
+            logger.exception(f"JavDB Poster Util: Error in get_javdb_poster_from_pl_local: {e}")
+            if 'pl_image_original' in locals() and pl_image_original:
+                pl_image_original.close()
+            return None, None, None
+
+    ################################################
+    # region SiteAvBase 메서드 오버라이드
+    
+    @classmethod
+    def set_config(cls, db):
+        super().set_config(db)
+        site = 'javdb'
+        cls.config.update({
+            "crop_mode": db.get_list(f"jav_censored_{cls.site_name}_crop_mode", ","),
+            "maintain_series_number_labels": db.get_list(f"jav_censored_{cls.site_name}_maintain_series_number_labels", ","),
+        })
+        cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
+
+    # endregion SiteAvBase 메서드 오버라이드
+    ################################################

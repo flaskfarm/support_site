@@ -1,34 +1,24 @@
-# -*- coding: utf-8 -*-
 import json
 import re
 import traceback
 import unicodedata
-
-import requests
 from dateutil.parser import parse
-from framework import SystemModelSetting
-from framework.util import Util
 from lxml import html
-from system import SystemLogicTrans
-
 from ..entity_av import EntityAVSearch
-from ..entity_base import (EntityActor, EntityExtra, EntityMovie,
-                           EntityRatings, EntityThumb)
-#########################################################
-from ..plugin import P
-from ..site_util import SiteUtil
+from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityThumb)
+from ..setup import P, logger
+from .site_av_base import SiteAvBase
 
-logger = P.logger
-ModelSetting = P.ModelSetting
+SITE_BASE_URL = 'https://www.heyzo.com'
 
-class SiteHeyzo(object):
+class SiteHeyzo(SiteAvBase):
     site_name = 'heyzo'
-    site_base_url = 'https://www.heyzo.com'
-    module_char = 'E'
     site_char = 'H'
+    module_char = 'E'
+    default_headers = SiteAvBase.base_default_headers.copy()
 
     @classmethod
-    def search(cls, keyword, do_trans=True, proxy_url=None, image_mode='0', manual=False):
+    def search(cls, keyword, do_trans=True, manual=False):
         try:
             ret = {}
             if re.search('(\\d{4})', keyword, re.I) is not None and 'heyzo' in keyword.lower():
@@ -39,15 +29,16 @@ class SiteHeyzo(object):
                 ret['data'] = 'invalid keyword'
                 return ret
 
-            url = f'{cls.site_base_url}/moviepages/{code}/index.html'
+            url = f'{SITE_BASE_URL}/moviepages/{code}/index.html'
+            res = cls.get_response(url)
 
-            if SiteUtil.get_response(url, proxy_url=proxy_url).status_code == 404:
+            if res.status_code == 404:
                 # logger.debug(f'not found: {keyword}')
                 ret['ret'] = 'failed'
                 ret['data'] = 'not found'
                 return ret
 
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
+            tree = html.fromstring(res.text)
             
             ret = {'data' : []}
 
@@ -62,7 +53,7 @@ class SiteHeyzo(object):
                 tmp['year'] = parse(json_data['dateCreated']).date().year
                 tmp['image_url'] = f'https:{json_data["image"]}'
             except:
-                m_tree = SiteUtil.get_tree(url.replace('www.', 'm.'), proxy_url=proxy_url)
+                m_tree = cls.get_tree(url.replace('www.', 'm.'))
                 tmp['title'] = m_tree.xpath('//div[@id="container"]/h1/text()')[0].strip()
                 tmp['year'] = parse(m_tree.xpath('//*[@id="moviedetail"]/div[2]/span/text()')[1].strip()).date().year
                 tmp['image_url'] = f'https://m.heyzo.com/contents/3000/{code}/images/player_thumbnail.jpg'
@@ -73,12 +64,14 @@ class SiteHeyzo(object):
 
             item.image_url = tmp['image_url']
             if manual == True:
-                if image_mode == '3':
-                    image_mode = '0'
-                item.image_url = SiteUtil.process_image_mode(image_mode, item.image_url, proxy_url=proxy_url)
-            
+                try:
+                    if cls.config['use_proxy']:
+                        item.image_url = cls.make_image_url(item.image_url)
+                except Exception as e_img: 
+                    logger.error(f"DMM Search: ImgProcErr (manual):{e_img}")
+
             if do_trans:
-                item.title_ko = SiteUtil.trans(item.title, source='ja', target='ko')
+                item.title_ko = cls.trans(item.title)
             
             item.ui_code = f'HEYZO-{code}'
             
@@ -103,11 +96,11 @@ class SiteHeyzo(object):
 
 
     @classmethod
-    def info(cls, code, do_trans=True, proxy_url=None, image_mode='0'):
+    def info(cls, code):
         try:
             ret = {}
-            url = f'{cls.site_base_url}/moviepages/{code[2:]}/index.html'
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
+            url = f'{SITE_BASE_URL}/moviepages/{code[2:]}/index.html'
+            tree = cls.get_tree(url)
 
             # json이 있는 경우, 없는 경우
             tmp = {}
@@ -126,7 +119,7 @@ class SiteHeyzo(object):
                     tmp['plot'] = tmp['tagline']
 
             except:
-                m_tree = SiteUtil.get_tree(url.replace('www.', 'm.'), proxy_url=proxy_url)
+                m_tree = cls.get_tree(url.replace('www.', 'm.'))
                 tmp['data_poster'] = f'https://m.heyzo.com/contents/3000/{code[2:]}/images/thumbnail.jpg'
                 tmp['data_landscape'] = f'https://m.heyzo.com/contents/3000/{code[2:]}/images/player_thumbnail.jpg'
                 tmp['tagline'] = m_tree.xpath('//div[@id="container"]/h1/text()')[0].strip()
@@ -145,14 +138,19 @@ class SiteHeyzo(object):
             entity.mpaa = u'청소년 관람불가'
 
             # 썸네일
+            # 썸네일
+            final_image_sources = {
+                'poster_source': None,
+                'poster_mode': None,
+                'landscape_source': None,
+                'arts': [],
+            }
             entity.thumb = []
-            data_poster = SiteUtil.get_image_url(tmp['data_poster'], image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect='poster', value=data_poster['image_url']))
-            data_landscape = SiteUtil.get_image_url(tmp['data_landscape'], image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect='landscape', value=data_landscape['image_url']))
+            final_image_sources['poster_source'] = tmp['data_poster']
+            final_image_sources['landscape_source'] = tmp['data_landscape']
 
             # tagline
-            entity.tagline = SiteUtil.trans(tmp['tagline'], do_trans=do_trans)
+            entity.tagline = cls.trans(tmp['tagline'])
 
             # date, year
             entity.premiered = tmp['premiered']
@@ -177,7 +175,7 @@ class SiteHeyzo(object):
             genrelist = tmp['genrelist']
             if genrelist != []:
                 for item in genrelist:
-                    entity.genre.append(SiteUtil.get_translated_tag('uncen_tags', item)) # 미리 번역된 태그를 포함
+                    entity.genre.append(cls.get_translated_tag('uncen_tags', item)) # 미리 번역된 태그를 포함
                     # entity.genre.append(SiteUtil.trans(item.strip(), do_trans=do_trans).strip())
             
             # title
@@ -191,7 +189,7 @@ class SiteHeyzo(object):
             # plot
             # 플롯 없는 경우도 있음
             if tmp['plot'] != '':
-                entity.plot = SiteUtil.trans(tmp['plot'], do_trans=do_trans)
+                entity.plot = cls.trans(tmp['plot'])
             else:
                 entity.plot = ''
             
@@ -204,10 +202,13 @@ class SiteHeyzo(object):
             # 부가영상 or 예고편
             entity.extras = []
             try:
-                entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', f'https://m.heyzo.com/contents/3000/{code[2:]}/sample.mp4', thumb=f'https://m.heyzo.com/contents/3000/{code[2:]}/images/player_thumbnail.jpg'))
+                if cls.config['use_extras']:
+                    video = cls.make_video_url(f'https://m.heyzo.com/contents/3000/{code[2:]}/sample.mp4')
+                    image = cls.make_image_url(f'https://m.heyzo.com/contents/3000/{code[2:]}/images/player_thumbnail.jpg')
+                    entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video, thumb=image))
             except:
                 pass
-
+            cls.finalize_images_for_entity(entity, final_image_sources)
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 

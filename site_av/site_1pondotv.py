@@ -1,33 +1,20 @@
-# -*- coding: utf-8 -*-
-import json
 import re
 import traceback
-
-import requests
-from dateutil.parser import parse
-from framework import SystemModelSetting
-from framework.util import Util
-from lxml import html
-from system import SystemLogicTrans
-
 from ..entity_av import EntityAVSearch
-from ..entity_base import (EntityActor, EntityExtra, EntityMovie,
-                           EntityRatings, EntityThumb)
-#########################################################
-from ..plugin import P
-from ..site_util import SiteUtil
+from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings)
+from ..setup import P, logger
+from .site_av_base import SiteAvBase
 
-logger = P.logger
-ModelSetting = P.ModelSetting
+SITE_BASE_URL = 'https://www.1pondo.tv'
 
-class SitePaco(object):
-    site_name = 'paco'
-    site_base_url = 'https://www.pacopacomama.com'
+class Site1PondoTv(SiteAvBase):
+    site_name = '1pondo'
+    site_char = 'D'
     module_char = 'E'
-    site_char = 'P'
+    default_headers = SiteAvBase.base_default_headers.copy()
 
     @classmethod
-    def search(cls, keyword, do_trans=True, proxy_url=None, image_mode='0', manual=False):
+    def search(cls, keyword, do_trans=True, manual=False):
         try:
             ret = {}
             if re.search('(\\d{6}[_-]\\d+)', keyword, re.I) is not None:
@@ -38,11 +25,10 @@ class SitePaco(object):
                 ret['data'] = 'invalid keyword'
                 return ret
 
-            proxies = {'http': proxy_url, 'https': proxy_url}
-            url = f'{cls.site_base_url}/dyn/phpauto/movie_details/movie_id/{code}.json'
+            url = f'{SITE_BASE_URL}/dyn/phpauto/movie_details/movie_id/{code}.json'
             
             try:
-                response = requests.get(url, proxies=proxies)
+                response = cls.get_response(url)
                 json_data = response.json()
             except:
                 # logger.debug(f'not found: {keyword}')
@@ -59,12 +45,14 @@ class SitePaco(object):
 
             item.image_url = json_data['MovieThumb']
             if manual == True:
-                if image_mode == '3':
-                    image_mode = '0'
-                item.image_url = SiteUtil.process_image_mode(image_mode, item.image_url, proxy_url=proxy_url)
+                try:
+                    if cls.config['use_proxy']:
+                        item.image_url = cls.make_image_url(item.image_url)
+                except Exception as e_img: 
+                    logger.error(f"DMM Search: ImgProcErr (manual):{e_img}")
             
             if do_trans:
-                item.title_ko = SiteUtil.trans(item.title, source='ja', target='ko')
+                item.title_ko = cls.trans(item.title)
             
             item.ui_code = f'1pon-{code}'
             
@@ -89,37 +77,38 @@ class SitePaco(object):
 
 
     @classmethod
-    def info(cls, code, do_trans=True, proxy_url=None, image_mode='0'):
+    def info(cls, code):
         try:
             ret = {}
-            proxies = {'http': proxy_url, 'https': proxy_url}
-            url = f'{cls.site_base_url}/dyn/phpauto/movie_details/movie_id/{code[2:]}.json'
-            json_data = requests.get(url, proxies=proxies).json()
-            
+            url = f'{SITE_BASE_URL}/dyn/phpauto/movie_details/movie_id/{code[2:]}.json'
+            json_data = cls.get_response(url).json()
+
             entity = EntityMovie(cls.site_name, code)
             entity.country = [u'일본']
             entity.mpaa = u'청소년 관람불가'
 
             # 썸네일
-            entity.thumb = []
-            data_poster = SiteUtil.get_image_url(json_data['MovieThumb'], image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect='poster', value=data_poster['image_url']))
-            data_landscape = SiteUtil.get_image_url(json_data['ThumbUltra'], image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect='landscape', value=data_landscape['image_url']))
+            final_image_sources = {
+                'poster_source': json_data['MovieThumb'],
+                'poster_mode': None,
+                'landscape_source': json_data['ThumbUltra'],
+                'arts': [],
+            }
+            cls.finalize_images_for_entity(entity, final_image_sources)
 
             # tagline
-            entity.tagline = SiteUtil.trans(json_data['Title'], do_trans=do_trans)
+            entity.tagline = cls.trans(json_data['Title'])
 
             # date, year
             entity.premiered = json_data['Release']
             entity.year = json_data['Year']
+            if entity.year == None:
+                entity.year = code[6:7] + code[2:3]
 
             # actor
             entity.actor = []
             for actor in json_data['ActressesJa']:
                 entity.actor.append(EntityActor(actor))
-
-
             # director
             # entity.director = []
 
@@ -133,18 +122,18 @@ class SitePaco(object):
             genrelist = json_data['UCNAME']
             if genrelist != []:
                 for item in genrelist:
-                    entity.genre.append(SiteUtil.get_translated_tag('uncen_tags', item)) # 미리 번역된 태그를 포함
-                    # entity.genre.append(SiteUtil.trans(item.strip(), do_trans=do_trans).strip())
+                    entity.genre.append(cls.get_translated_tag('uncen_tags', item)) # 미리 번역된 태그를 포함
             
             # title
             entity.title = entity.originaltitle = entity.sorttitle = f'1pon-{code[2:]}'
 
             # entity.ratings
+            entity.ratings = []
             try: entity.ratings.append(EntityRatings(float(json_data['AvgRating']), name=cls.site_name))
             except: pass
 
             # plot
-            entity.plot = SiteUtil.trans(json_data['Desc'], do_trans=do_trans)
+            entity.plot = cls.trans(json_data['Desc'])
             
             # 팬아트
             # entity.fanart = []
@@ -155,9 +144,12 @@ class SitePaco(object):
             # 부가영상 or 예고편
             entity.extras = []
             try:
-                entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', json_data['SampleFiles'][-1]['URL'], thumb=json_data['ThumbUltra']))
+                if cls.config['use_extras']:
+                    url = cls.make_image_url(json_data['MovieThumb'])
+                    video = cls.make_video_url(json_data['SampleFiles'][-1]['URL'])
+                    entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video, thumb=url))
             except: pass
-
+            cls.finalize_images_for_entity(entity, final_image_sources)
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
 

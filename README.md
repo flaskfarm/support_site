@@ -1,6 +1,9 @@
 ## 공동개발
 
 ## Changelog
+- 1.2.4 (2025.07.11) by soju6jan
+  - jav censored / uncensored.
+<br><br>    
 - 1.2.3 (2025.07.11) by soju6jan
   - jav censored 준비
 <br><br>  

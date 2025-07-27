@@ -7,8 +7,8 @@ from lxml import html
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
 from ..setup import P, logger
-from ..site_util_av import SiteUtilAv as SiteUtil
 from .site_av_base import SiteAvBase
+from ..constants import AV_STUDIO, AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 
 # 상수값. 사용하지 값들 주석처리
 SITE_BASE_URL = "https://www.dmm.co.jp"
@@ -596,17 +596,20 @@ class SiteDmm(SiteAvBase):
                         labels_v = [lb_v.strip() for lb_v in value_node_v_instance.xpath('.//a/text()') if lb_v.strip()]
                         l_name_v = labels_v[0] if labels_v else (value_text_all_v if value_text_all_v != '----' else None)
                         if l_name_v:
-                            entity.studio = SiteUtil.av_studio.get(l_name_v, cls.trans(l_name_v))
+                            entity.studio = AV_STUDIO.get(l_name_v, cls.trans(l_name_v))
 
                     elif "ジャンル" in key_v:
                         entity.genre = []
                         for genre_ja_tag_v in value_node_v_instance.xpath('.//a'):
-                            genre_ja_v = genre_ja_tag_v.text_content().strip();
-                            if not genre_ja_v or "％OFF" in genre_ja_v or genre_ja_v in SiteUtil.av_genre_ignore_ja: continue
-                            if genre_ja_v in SiteUtil.av_genre: entity.genre.append(SiteUtil.av_genre[genre_ja_v])
+                            genre_ja_v = genre_ja_tag_v.text_content().strip()
+                            if not genre_ja_v or "％OFF" in genre_ja_v or genre_ja_v in AV_GENRE_IGNORE_JA:
+                                continue
+                            if genre_ja_v in AV_GENRE: 
+                                entity.genre.append(AV_GENRE[genre_ja_v])
                             else:
                                 genre_ko_v = cls.trans(genre_ja_v).replace(" ", "")
-                                if genre_ko_v not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_ko_v)
+                                if genre_ko_v not in AV_GENRE_IGNORE_KO: 
+                                    entity.genre.append(genre_ko_v)
 
                 rating_text_node = tree.xpath('//p[contains(@class, "d-review__average")]/strong/text()')
                 if rating_text_node:
@@ -715,17 +718,19 @@ class SiteDmm(SiteAvBase):
                         if labels_dvd: l_name_dvd = labels_dvd[0]
                         elif value_text_all_dvd != '----': l_name_dvd = value_text_all_dvd
                         if l_name_dvd:
-                            entity.studio = SiteUtil.av_studio.get(l_name_dvd, cls.trans(l_name_dvd))
+                            entity.studio = AV_STUDIO.get(l_name_dvd, cls.trans(l_name_dvd))
                     elif "ジャンル" in key_dvd:
                         if entity.genre is None: entity.genre = []
                         for genre_ja_tag_dvd in value_node_dvd.xpath('.//a'):
                             genre_ja_dvd = genre_ja_tag_dvd.text_content().strip()
-                            if not genre_ja_dvd or "％OFF" in genre_ja_dvd or genre_ja_dvd in SiteUtil.av_genre_ignore_ja: continue
-                            if genre_ja_dvd in SiteUtil.av_genre: 
-                                if SiteUtil.av_genre[genre_ja_dvd] not in entity.genre: entity.genre.append(SiteUtil.av_genre[genre_ja_dvd])
+                            if not genre_ja_dvd or "％OFF" in genre_ja_dvd or genre_ja_dvd in AV_GENRE_IGNORE_JA: 
+                                continue
+                            if genre_ja_dvd in AV_GENRE:
+                                if AV_GENRE[genre_ja_dvd] not in entity.genre: 
+                                    entity.genre.append(AV_GENRE[genre_ja_dvd])
                             else:
                                 genre_ko_dvd = cls.trans(genre_ja_dvd).replace(" ", "")
-                                if genre_ko_dvd not in SiteUtil.av_genre_ignore_ko and genre_ko_dvd not in entity.genre : entity.genre.append(genre_ko_dvd)
+                                if genre_ko_dvd not in AV_GENRE_IGNORE_KO and genre_ko_dvd not in entity.genre : entity.genre.append(genre_ko_dvd)
 
                     # 출시일 관련 정보 수집
                     elif "商品発売日" in key_dvd: premiered_shouhin_dvd = value_text_all_dvd.replace("/", "-")
@@ -848,9 +853,14 @@ class SiteDmm(SiteAvBase):
                 else:
                     poster_candidates = ([pl_url] if pl_url else []) + specific_candidates_on_page
                     for candidate in poster_candidates:
-                        if SiteUtil.is_portrait_high_quality_image(candidate, proxy_url=cls.config['proxy_url']) and \
-                           SiteUtil.is_hq_poster(ps_url_from_search_cache, candidate, proxy_url=cls.config['proxy_url'], 
-                                                sm_source_info=ps_url_from_search_cache, lg_source_info=candidate):
+                        _1 = cls.is_portrait_high_quality_image(candidate)
+                        _2 = cls.is_hq_poster(
+                            ps_url_from_search_cache,
+                            candidate, 
+                            sm_source_info=ps_url_from_search_cache,
+                            lg_source_info=candidate
+                        )
+                        if _1 and _2:
                             final_image_sources['poster_source'] = candidate
                             break
                     if final_image_sources['poster_source'] is None and pl_url:
@@ -871,7 +881,7 @@ class SiteDmm(SiteAvBase):
 
                     if final_image_sources['poster_source'] is None:
                         for candidate in poster_candidates:
-                            crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, candidate, proxy_url=cls.config['proxy_url'])
+                            crop_pos = cls.has_hq_poster(ps_url_from_search_cache, candidate)
                             if crop_pos:
                                 final_image_sources['poster_source'] = candidate
                                 final_image_sources['poster_mode'] = f"crop_{crop_pos}"
@@ -929,9 +939,6 @@ class SiteDmm(SiteAvBase):
             
         logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {ui_code_for_image}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
         return entity
-
-    
-
 
     
     # 이미지 url 얻기
@@ -1159,6 +1166,7 @@ class SiteDmm(SiteAvBase):
         
         except Exception as e_trailer_main: 
             logger.exception(f"DMM ({entity.content_type}): Main trailer processing error: {e_trailer_main}")
+
 
     @classmethod
     def _get_dmm_video_trailer_from_args_json(cls, cid_part, detail_url_for_referer,  current_content_type_for_log="video"):
@@ -1468,7 +1476,6 @@ class SiteDmm(SiteAvBase):
         session_cookies = cls.session.cookies
         domain_checks = ['.dmm.co.jp', '.dmm.com']
         if any('age_check_done' in session_cookies.get_dict(domain=d) and session_cookies.get_dict(domain=d)['age_check_done'] == '1' for d in domain_checks):
-            #logger.debug("Age verification cookie found in SiteUtil.session.")
             cls.config['age_verified'] = True
             return cls.config['age_verified']
         #logger.debug("Attempting DMM age verification via confirmation GET...")
@@ -1511,21 +1518,19 @@ class SiteDmm(SiteAvBase):
     def set_config(cls, db):
         super().set_config(db)
         cls.config.update({
-            "use_proxy": db.get_bool('jav_censored_dmm_use_proxy'),
-            "proxy_url": db.get('jav_censored_dmm_proxy_url'),
             "dmm_parser_rules": {
-                "type0_rules": db.get_list("jav_censored_dmm_parser_type0_rules", "\n"),
-                "type1_labels": db.get_list("jav_censored_dmm_parser_type1_labels", ","),
-                "type2_labels": db.get_list("jav_censored_dmm_parser_type2_labels", ","),
-                "type3_labels": db.get_list("jav_censored_dmm_parser_type3_labels", ","),
-                "type4_labels": db.get_list("jav_censored_dmm_parser_type4_labels", ","),
+                "type0_rules": db.get_list(f"jav_censored_{cls.site_name}_parser_type0_rules", "\n"),
+                "type1_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type1_labels", ","),
+                "type2_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type2_labels", ","),
+                "type3_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type3_labels", ","),
+                "type4_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type4_labels", ","),
             },
             # 포스터 예외처리1. 설정된 레이블은 저화질 썸네일을 포스터로 사용
-            "ps_force_labels_list": set(db.get_list("jav_censored_dmm_small_image_to_poster", ",")),
+            "ps_force_labels_list": set(db.get_list(f"jav_censored_{cls.site_name}_small_image_to_poster", ",")),
             # 포스터 예외처리2. 가로 이미지 크롭이 필요한 경우 그 위치를 수동 지정
-            "crop_mode": db.get_list("jav_censored_dmm_crop_mode", ","),
+            "crop_mode": db.get_list(f"jav_censored_{cls.site_name}_crop_mode", ","),
             # 지정 레이블 최우선 검색
-            "priority_labels": db.get_list("jav_censored_dmm_priority_search_labels", ","),
+            "priority_labels": db.get_list(f"jav_censored_{cls.site_name}_priority_search_labels", ","),
 
             # 설정이 바뀌면 
             "age_verified": False,  # 나이 인증 여부

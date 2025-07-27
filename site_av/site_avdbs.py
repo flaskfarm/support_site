@@ -7,7 +7,6 @@ from urllib.parse import urljoin, urlencode
 import time
 
 from ..setup import P, logger
-from ..site_util_av import SiteUtilAv as SiteUtil
 from .site_av_base import SiteAvBase
 
 # DiscordUtil 제거
