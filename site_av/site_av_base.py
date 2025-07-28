@@ -34,7 +34,7 @@ except ImportError:
 try:
     from dateutil.parser import parse
 except ImportError:
-    os.system("pip install dateutil")
+    os.system("pip install dateutils")
     from dateutil.parser import parse
 
 
