@@ -31,6 +31,13 @@ except ImportError:
     os.system("pip install cloudscraper")
     import cloudscraper
 
+try:
+    from dateutil.parser import parse
+except ImportError:
+    os.system("pip install dateutil")
+    from dateutil.parser import parse
+
+
 class SiteAvBase:
     site_name = None
     site_char = None

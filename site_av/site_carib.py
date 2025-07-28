@@ -1,7 +1,6 @@
 import re
 import traceback
 from lxml import html
-from dateutil.parser import parse
 from ..entity_av import EntityAVSearch
 from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityThumb)
 from ..setup import P, logger
