@@ -151,7 +151,7 @@ class SiteAvBase:
         if mode:
             param["mode"] = mode
 
-        if cls.module_char == 'C':
+        if cls.module_char != 'E':
             url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{urlencode(param)}"
         else:
             url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image_un?{urlencode(param)}"
