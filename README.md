@@ -1,11 +1,14 @@
 ## 공동개발
 
 ## Changelog
-- 1.2.6 (2025.07.27) by soju6jan
-  - jav censored / uncensored.
+- 1.2.7 (2025.07.30) by soju6jan   
+  CachedSession 사용시 db파일 경로 지정
 <br><br>    
-- 1.2.3 (2025.07.11) by soju6jan
-  - jav censored 준비
+- 1.2.6 (2025.07.27) by soju6jan   
+  jav censored / uncensored.
+<br><br>    
+- 1.2.3 (2025.07.11) by soju6jan   
+  jav censored 준비
 <br><br>  
 - 1.1.46 (2025.06.29)
     - Flaskfarm 로그 보안 적용 수정

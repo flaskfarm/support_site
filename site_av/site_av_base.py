@@ -69,7 +69,7 @@ class SiteAvBase:
             try:
                 from requests_cache import CachedSession
                 session = CachedSession(
-                    P.package_name,
+                    os.path.join(path_data, 'db', 'av_cache'),
                     use_temp=True,
                     expire_after=timedelta(hours=6),
                 )
@@ -587,6 +587,7 @@ class SiteAvBase:
             local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
 
             save_format = cls.MetadataSetting.get('jav_censored_image_server_save_format')
+            rewrite = cls.MetadataSetting.get_bool('jav_censored_image_server_rewrite')
 
             code = entity.ui_code.lower()
             CODE = code.upper()
@@ -607,13 +608,21 @@ class SiteAvBase:
                 "landscape": [f"{code}_pl_user.jpg", f"{code}_pl.jpg"],
             }
             for aspect, filenames in data.items():
-                for filename in filenames:
+                save = True
+                for idx, filename in enumerate(filenames):
                     filepath = os.path.join(target_folder, filename)
                     url = f"{server_url}/{target_folder.replace(local_path, '').strip('/')}/{filename}"
-                    if os.path.exists(filepath):
+                    if idx == 0 and os.path.exists(filepath):
                         entity.thumb.append(EntityThumb(aspect=aspect, value=url))
+                        save = False
                         break
-                else:
+                    elif idx == 1 and os.path.exists(filepath):
+                        if rewrite:
+                            os.remove(filepath)
+                        else:
+                            entity.thumb.append(EntityThumb(aspect=aspect, value=url))
+                            save = False
+                if save:
                     os.makedirs(os.path.dirname(filepath), exist_ok=True)
                     if aspect == "poster":
                         response = cls.jav_image(image_sources['poster_source'], mode=image_sources.get('poster_mode', ''))
@@ -631,8 +640,11 @@ class SiteAvBase:
                 filepath = os.path.join(target_folder, filename)
                 url = f"{server_url}/{target_folder.replace(local_path, '').strip('/')}/{filename}"
                 if os.path.exists(filepath):
-                    entity.fanart.append(url)
-                    continue
+                    if rewrite:
+                        os.remove(filepath)
+                    else:
+                        entity.fanart.append(url)
+                        continue
                 os.makedirs(os.path.dirname(filepath), exist_ok=True)
                 response = cls.jav_image(art_url)
                 response_bytes = BytesIO(response.data)

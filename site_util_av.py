@@ -38,7 +38,7 @@ class SiteUtilAv:
             from requests_cache import CachedSession
 
             session = CachedSession(
-                P.package_name,
+                os.path.join(path_data, 'db', 'av_cache'),
                 use_temp=True,
                 expire_after=timedelta(hours=6),
             )
