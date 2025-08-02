@@ -57,11 +57,6 @@ class SiteDmm(SiteAvBase):
         if not cls._ensure_age_verified(): return []
 
         original_keyword = keyword
-        keyword_for_url = ""
-
-        # 재시도 로직을 위한 변수
-        label_part_for_retry = ""
-        num_part_for_retry = ""
 
         # --- 1. 초기 정제 (입력된 keyword 기준) ---
         temp_keyword = original_keyword.strip().lower()
@@ -72,7 +67,9 @@ class SiteDmm(SiteAvBase):
         keyword_processed_parts_for_score = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
         keyword_processed_parts_for_score = [part for part in keyword_processed_parts_for_score if part]
 
-        keyword_for_url = cls.__get_keyword_for_url(temp_keyword, is_retry)
+        # `__get_keyword_for_url`로부터 keyword와 재시도용 파트를 모두 받음
+        keyword_for_url, label_part_for_retry, num_part_for_retry = cls.__get_keyword_for_url(temp_keyword, is_retry)
+
         if is_retry:
             logger.debug(f"DMM Search [RETRY]: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
         else:
@@ -1414,19 +1411,26 @@ class SiteDmm(SiteAvBase):
     # 검색용 키워드 반환
     @classmethod
     def __get_keyword_for_url(cls, temp_keyword, is_retry):
+        # 재시도에 필요한 부분을 담을 변수 초기화
+        label_part_for_retry = ""
+        num_part_for_retry = ""
+        keyword_for_url = ""
+
         # --- 2. "ID 계열" 품번 특별 처리 (DMM 검색 형식으로 변환) ---
         match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
         if match_id_prefix:
             label_series = match_id_prefix.group(1) 
-            num_part = match_id_prefix.group(2)     
-            return label_series + "id" + num_part.zfill(5) 
+            num_part = match_id_prefix.group(2)
+            keyword_for_url = label_series + "id" + num_part.zfill(5)
+            return keyword_for_url, "", ""
         
         match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
         if match_series_id_prefix:
-            label_series = match_series_id_prefix.group(1) 
-            num_part = match_series_id_prefix.group(2)      
-            return label_series + "id" + num_part.zfill(5)
-        
+            label_series = match_series_id_prefix.group(1)
+            num_part = match_series_id_prefix.group(2)
+            keyword_for_url = label_series + "id" + num_part.zfill(5)
+            return keyword_for_url, "", ""
+
         # --- 3. ID 계열이 아닌 일반 품번 처리 (DMM 검색 형식으로 변환) ---
         temp_parts_for_url_gen = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
         temp_parts_for_url_gen = [part for part in temp_parts_for_url_gen if part]
@@ -1451,7 +1455,7 @@ class SiteDmm(SiteAvBase):
         else: # 0개 또는 3개 이상 파트 (일반적이지 않음)
             keyword_for_url = "".join(temp_parts_for_url_gen) # 일단 모두 합침
 
-        return keyword_for_url
+        return keyword_for_url, label_part_for_retry, num_part_for_retry
 
 
 
