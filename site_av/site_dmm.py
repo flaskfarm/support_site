@@ -558,6 +558,10 @@ class SiteDmm(SiteAvBase):
                     logger.error(f"DMM API: 'ppvContent' is null in API response for {code}.")
                     return None
 
+                if content.get('contentType') == 'VR':
+                    entity.content_type = 'vr'
+                    logger.debug(f"DMM Info (API): Content type updated to 'vr' for {code}")
+
                 entity.tagline = cls.trans(content.get('title'))
                 entity.plot = cls.trans(content.get('description'))
                 
@@ -738,9 +742,9 @@ class SiteDmm(SiteAvBase):
 
         # === 4. 예고편(Extras) 처리 ===
         if cls.config['use_extras']:
-            # API 방식은 detail_url이 없으므로 referer용 URL을 직접 지정
-            trailer_referer = detail_url if tree is not None else (FANZA_AV_URL + f"content/?id={cid_part}")
-            cls.process_extras(entity, tree, trailer_referer)
+            # process_extras를 호출할 때 api_data를 직접 전달
+            # process_extras 내부에서 예고편 존재 여부를 판단함
+            cls.process_extras(entity, tree, detail_url, api_data)
             
         logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
         return entity
@@ -881,7 +885,7 @@ class SiteDmm(SiteAvBase):
     # region 예고편처리
 
     @classmethod
-    def process_extras(cls, entity, tree, detail_url):
+    def process_extras(cls, entity, tree, detail_url, api_data=None):
         entity.extras = []
         trailer_title_for_extra = entity.tagline if entity.tagline else entity.ui_code
         trailer_url_final = None
@@ -890,15 +894,26 @@ class SiteDmm(SiteAvBase):
             cid_part = code[len(cls.module_char)+len(cls.site_char):]
             detail_url_for_referer = detail_url
 
-            if entity.content_type == 'vr':
-                trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
-                if not trailer_url_final:
-                    trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url_for_referer)
+            # API로 정보를 가져온 경우 (videoa/vr)
+            if api_data:
+                content = api_data.get('ppvContent', {})
+                sample_movie = content.get('sampleMovie', {})
 
-            elif entity.content_type == 'videoa':
-                trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
+                if not sample_movie:
+                    logger.debug(f"DMM Trailer: No 'sampleMovie' info in API data for {code}. Skipping trailer search.")
+                elif sample_movie.get('has2d'):
+                    # 2D 예고편이 있으면, html5_player 방식만 시도
+                    logger.debug("DMM Trailer: API indicates a 2D trailer is available. Using html5_player method.")
+                    trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
+                elif sample_movie.get('hasVr'):
+                    # 2D 예고편은 없고 VR 예고편만 있으면, VR 전용 방식만 시도
+                    logger.debug("DMM Trailer: API indicates only a VR trailer is available. Using VR method.")
+                    trailer_url_final = cls._get_dmm_vr_trailer(cid_part, detail_url_for_referer)
+                else:
+                    logger.debug(f"DMM Trailer: 'has2d' and 'hasVr' are both false for {code}. Skipping.")
 
-            elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
+            # HTML로 정보를 가져온 경우 (dvd/bluray)
+            elif tree is not None:
                 onclick_trailer = tree.xpath('//a[@id="sample-video1"]/@onclick | //a[contains(@onclick,"gaEventVideoStart")]/@onclick')
                 if onclick_trailer:
                     match_json = re.search(r"gaEventVideoStart\s*\(\s*'(\{.*?\})'\s*,\s*'(\{.*?\})'\s*\)", onclick_trailer[0])
@@ -912,6 +927,7 @@ class SiteDmm(SiteAvBase):
                             logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}.")
             
             if trailer_url_final:
+                logger.debug(f"DMM Trailer: Found URL for {code}: {trailer_url_final}")
                 url = cls.make_video_url(trailer_url_final)
                 if url:
                     entity.extras.append(EntityExtra("trailer", trailer_title_for_extra, "mp4", url))
@@ -965,20 +981,20 @@ class SiteDmm(SiteAvBase):
         return trailer_url, trailer_title_from_json
 
     @classmethod
-    def _get_dmm_vr_trailer_fallback(cls, cid_part, detail_url_for_referer):
+    def _get_dmm_vr_trailer(cls, cid_part, detail_url_for_referer):
         trailer_url = None
         try:
             vr_player_page_url = f"{SITE_BASE_URL}/digital/-/vr-sample-player/=/cid={cid_part}/"
-            logger.debug(f"DMM VR Trailer Fallback: Accessing player page: {vr_player_page_url}")
+            logger.debug(f"DMM VR Trailer: Accessing player page: {vr_player_page_url}")
             vr_player_html = cls.get_text(vr_player_page_url, headers=cls.get_request_headers(referer=detail_url_for_referer))
             if vr_player_html:
                 match_js_var = re.search(r'var\s+sampleUrl\s*=\s*["\']([^"\']+)["\']', vr_player_html)
                 if match_js_var:
                     trailer_url_raw = match_js_var.group(1)
                     trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
-                    logger.debug(f"DMM VR Trailer Fallback: Found sampleUrl: {trailer_url}")
+                    # logger.debug(f"DMM VR Trailer: Found sampleUrl: {trailer_url}")
         except Exception as e_fallback:
-            logger.exception(f"DMM VR Trailer Fallback: Exception for CID {cid_part}: {e_fallback}")
+            logger.exception(f"DMM VR Trailer: Exception for CID {cid_part}: {e_fallback}")
         return trailer_url
     
     # endregion 예고편처리
