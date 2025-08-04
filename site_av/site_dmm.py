@@ -613,61 +613,128 @@ class SiteDmm(SiteAvBase):
                 info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
                 table_rows_dvd = tree.xpath(info_table_xpath_dvd)
                 premiered_shouhin_dvd, premiered_hatsubai_dvd, premiered_haishin_dvd = None, None, None   
-                for row_dvd in table_rows_dvd: 
-                    tds_dvd = row_dvd.xpath("./td") 
-                    if len(tds_dvd) != 2: continue
+
+                if not table_rows_dvd:
+                    logger.warning(f"DMM ({entity.content_type}): No <tr> tags found in the info table using XPath: {info_table_xpath_dvd}")
+
+                for row_dvd in table_rows_dvd:
+                    tds_dvd = row_dvd.xpath("./td")
+                    if len(tds_dvd) != 2:
+                        continue
+
                     key_dvd = tds_dvd[0].text_content().strip().replace("：", "")
                     value_node_dvd = tds_dvd[1]
                     value_text_all_dvd = value_node_dvd.text_content().strip()
-                    if value_text_all_dvd == "----" or not value_text_all_dvd: continue
+
+                    if value_text_all_dvd == "----" or not value_text_all_dvd:
+                        continue
+
                     if "品番" in key_dvd:
-                        parsed_ui_code_page, _, _ = cls._parse_ui_code_from_cid(value_text_all_dvd, entity.content_type)
-                        entity.ui_code = parsed_ui_code_page
-                        ui_code_for_image = parsed_ui_code_page.lower()
-                        entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
-                        identifier_parsed = True
-                        parsed_label = parsed_ui_code_page.split('-')[0] if '-' in parsed_ui_code_page else parsed_ui_code_page
-                        if parsed_label and parsed_label not in entity.tag: entity.tag.append(parsed_label)
+
+                        if value_text_all_dvd:
+                            logger.debug(f"DMM Info: Parsed '品番' value from page: '{key_dvd}' for {code}.")
+
+                            parsed_ui_code_page, _, _ = cls._parse_ui_code_from_cid(value_text_all_dvd, entity.content_type)
+                            entity.ui_code = parsed_ui_code_page
+
+                            ui_code_for_image = parsed_ui_code_page.lower()
+                            entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
+                            identifier_parsed = True
+                            # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
+
+                            parsed_label = parsed_ui_code_page.split('-')[0] if '-' in parsed_ui_code_page else parsed_ui_code_page
+                            if entity.tag is None: entity.tag = []
+                            if parsed_label and parsed_label not in entity.tag:
+                                entity.tag.append(parsed_label)
+
                     elif "収録時間" in key_dvd: 
-                        m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd); entity.runtime = int(m_rt_dvd.group(1)) if m_rt_dvd else None
+                        m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd)
+                        if m_rt_dvd: entity.runtime = int(m_rt_dvd.group(1))
                     elif "出演者" in key_dvd:
                         actors_dvd = [a.strip() for a in value_node_dvd.xpath('.//a/text()') if a.strip()]
                         if actors_dvd: entity.actor = [EntityActor(name) for name in actors_dvd]
                         elif value_text_all_dvd != '----': entity.actor = [EntityActor(n.strip()) for n in value_text_all_dvd.split('/') if n.strip()]
                     elif "監督" in key_dvd:
-                        directors_dvd = [d.strip() for d in value_node_dvd.xpath('.//a/text()') if d.strip()]; entity.director = directors_dvd[0] if directors_dvd else (value_text_all_dvd if value_text_all_dvd != '----' else None)
+                        directors_dvd = [d.strip() for d in value_node_dvd.xpath('.//a/text()') if d.strip()]
+                        if directors_dvd: entity.director = directors_dvd[0] 
+                        elif value_text_all_dvd != '----': entity.director = value_text_all_dvd
                     elif "シリーズ" in key_dvd:
-                        series_dvd = [s.strip() for s in value_node_dvd.xpath('.//a/text()') if s.strip()]; s_name_dvd = series_dvd[0] if series_dvd else (value_text_all_dvd if value_text_all_dvd != '----' else None)
-                        if s_name_dvd and cls.trans(s_name_dvd) not in entity.tag: entity.tag.append(cls.trans(s_name_dvd))
-                    elif "メーカー" in key_dvd and entity.studio is None:
-                        makers_dvd = [mk.strip() for mk in value_node_dvd.xpath('.//a/text()') if mk.strip()]; m_name_dvd = makers_dvd[0] if makers_dvd else (value_text_all_dvd if value_text_all_dvd != '----' else None)
-                        if m_name_dvd: entity.studio = cls.trans(m_name_dvd)
+                        if entity.tag is None: entity.tag = []
+                        series_dvd = [s.strip() for s in value_node_dvd.xpath('.//a/text()') if s.strip()]
+                        s_name_dvd = None
+                        if series_dvd: s_name_dvd = series_dvd[0]
+                        elif value_text_all_dvd != '----': s_name_dvd = value_text_all_dvd
+                        if s_name_dvd:
+                            trans_s_name_dvd = cls.trans(s_name_dvd)
+                            if trans_s_name_dvd not in entity.tag: entity.tag.append(trans_s_name_dvd)
+                    elif "メーカー" in key_dvd:
+                        if entity.studio is None: 
+                            makers_dvd = [mk.strip() for mk in value_node_dvd.xpath('.//a/text()') if mk.strip()]
+                            m_name_dvd = None
+                            if makers_dvd: m_name_dvd = makers_dvd[0]
+                            elif value_text_all_dvd != '----': m_name_dvd = value_text_all_dvd
+                            if m_name_dvd: entity.studio = cls.trans(m_name_dvd)
                     elif "レーベル" in key_dvd:
-                        labels_dvd = [lb.strip() for lb in value_node_dvd.xpath('.//a/text()') if lb.strip()]; l_name_dvd = labels_dvd[0] if labels_dvd else (value_text_all_dvd if value_text_all_dvd != '----' else None)
-                        if l_name_dvd: entity.studio = AV_STUDIO.get(l_name_dvd, cls.trans(l_name_dvd))
+                        labels_dvd = [lb.strip() for lb in value_node_dvd.xpath('.//a/text()') if lb.strip()]
+                        l_name_dvd = None
+                        if labels_dvd: l_name_dvd = labels_dvd[0]
+                        elif value_text_all_dvd != '----': l_name_dvd = value_text_all_dvd
+                        if l_name_dvd:
+                            entity.studio = AV_STUDIO.get(l_name_dvd, cls.trans(l_name_dvd))
                     elif "ジャンル" in key_dvd:
-                        entity.genre = [];
-                        for g_tag in value_node_dvd.xpath('.//a'):
-                            g_ja = g_tag.text_content().strip()
-                            if not g_ja or "％OFF" in g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
-                            if g_ja in AV_GENRE and AV_GENRE[g_ja] not in entity.genre: entity.genre.append(AV_GENRE[g_ja])
+                        if entity.genre is None: entity.genre = []
+                        for genre_ja_tag_dvd in value_node_dvd.xpath('.//a'):
+                            genre_ja_dvd = genre_ja_tag_dvd.text_content().strip()
+                            if not genre_ja_dvd or "％OFF" in genre_ja_dvd or genre_ja_dvd in AV_GENRE_IGNORE_JA: 
+                                continue
+                            if genre_ja_dvd in AV_GENRE:
+                                if AV_GENRE[genre_ja_dvd] not in entity.genre: 
+                                    entity.genre.append(AV_GENRE[genre_ja_dvd])
                             else:
-                                g_ko = cls.trans(g_ja).replace(" ", "");
-                                if g_ko not in AV_GENRE_IGNORE_KO and g_ko not in entity.genre : entity.genre.append(g_ko)
+                                genre_ko_dvd = cls.trans(genre_ja_dvd).replace(" ", "")
+                                if genre_ko_dvd not in AV_GENRE_IGNORE_KO and genre_ko_dvd not in entity.genre : entity.genre.append(genre_ko_dvd)
+
+                    # 출시일 관련 정보 수집
                     elif "商品発売日" in key_dvd: premiered_shouhin_dvd = value_text_all_dvd.replace("/", "-")
                     elif "発売日" in key_dvd: premiered_hatsubai_dvd = value_text_all_dvd.replace("/", "-")
                     elif "配信開始日" in key_dvd: premiered_haishin_dvd = value_text_all_dvd.replace("/", "-")
-                rating_node = tree.xpath('//p[contains(@class, "dcd-review__average")]/strong/text()')
-                if rating_node:
+
+                # 평점 추출
+                rating_text_node_dvd_specific = tree.xpath('//p[contains(@class, "dcd-review__average")]/strong/text()')
+                if rating_text_node_dvd_specific:
+                    rating_text = rating_text_node_dvd_specific[0].strip()
                     try:
-                        rate = float(re.search(r'([\d\.]+)', rating_node[0]).group(1))
-                        if 0 <= rate <= 5: entity.ratings.append(EntityRatings(rate, max=5, name="dmm"))
-                    except (ValueError, IndexError): pass
+                        rate_val = float(rating_text)
+                        if 0 <= rate_val <= 5: 
+                            if not entity.ratings: entity.ratings.append(EntityRatings(rate_val, max=5, name="dmm"))
+                    except ValueError:
+                        rating_match = re.search(r'([\d\.]+)\s*点?', rating_text)
+                        if rating_match:
+                            try:
+                                rate_val = float(rating_match.group(1))
+                                if 0 <= rate_val <= 5: 
+                                    if not entity.ratings: entity.ratings.append(EntityRatings(rate_val, max=5, name="dmm"))
+                            except ValueError:
+                                logger.warning(f"DMM ({entity.content_type}): Rating conversion error (after regex): {rating_text}")
+                else:
+                    logger.debug(f"DMM ({entity.content_type}): DVD/BR specific rating element (dcd-review__average) not found.")
+
+                # 출시일 최종 결정
                 entity.premiered = premiered_shouhin_dvd or premiered_hatsubai_dvd or premiered_haishin_dvd
-                if entity.premiered: entity.year = int(entity.premiered[:4])
-                plot_nodes = tree.xpath('//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()')
-                if plot_nodes: entity.plot = cls.trans("\n".join(p.strip() for p in plot_nodes if p.strip()).split("※")[0].strip())
-            
+                if entity.premiered: 
+                    try: entity.year = int(entity.premiered[:4])
+                    except ValueError: logger.warning(f"DMM ({entity.content_type}): Year parse error from '{entity.premiered}'")
+                else:
+                    logger.warning(f"DMM ({entity.content_type}): Premiered date not found for {code}.")
+
+                plot_xpath_dvd_specific = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()'
+                plot_nodes_dvd_specific = tree.xpath(plot_xpath_dvd_specific)
+                if plot_nodes_dvd_specific:
+                    plot_text = "\n".join([p.strip() for p in plot_nodes_dvd_specific if p.strip()]).split("※")[0].strip()
+                    if plot_text: entity.plot = cls.trans(plot_text)
+                else: 
+                    logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
+
             if not identifier_parsed:
                 logger.error(f"DMM ({entity.content_type}): CRITICAL - Identifier parse failed for {code} after all attempts.")
                 ui_code_for_image = code[2:].upper().replace("_","-")
@@ -678,40 +745,84 @@ class SiteDmm(SiteAvBase):
             logger.exception(f"DMM Meta parsing error for {code}: {e_meta}")
             return None
 
-        # === 3. 이미지 소스 결정 및 관계 처리 (공통 로직) ===
+        # === 3. 이미지 소스 결정 및 관계 처리 (DMM 고유 로직) ===
         try:
-            raw_image_urls = cls.__img_urls(tree=tree, content_type=entity.content_type, api_data=api_data)
+            # --- 3a. 원본 이미지 URL 파싱 ---
+            logger.debug(f"DMM Info: PS url from cache: {ps_url_from_search_cache}")
+
+
+            now_printing_path = None
+            #if use_image_server and image_server_local_path:
+            #    now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
+            #    if not os.path.exists(now_printing_path): now_printing_path = None
+
+            raw_image_urls = cls.__img_urls(
+                tree, 
+                content_type=entity.content_type, 
+                now_printing_path=now_printing_path
+            )
             pl_url = raw_image_urls.get('pl')
             specific_candidates_on_page = raw_image_urls.get('specific_poster_candidates', []) 
             other_arts_on_page = raw_image_urls.get('arts', [])
-            
-            final_image_sources = { 'poster_source': None, 'poster_mode': None, 'landscape_source': None, 'arts': [] }
-            if pl_url: final_image_sources['landscape_source'] = pl_url
 
-            apply_ps_to_poster_for_this_item, forced_crop_mode_for_this_item = False, None
+            # --- 3b. 최종 소스로 사용할 변수 초기화 ---
+            #final_poster_source = None
+            #final_poster_crop_mode = None
+            #final_landscape_source = None
+            #arts_urls_for_processing = []
+            final_image_sources = {
+                'poster_source': None,
+                'poster_mode': None,
+                'landscape_source': None,
+                'arts': [],
+            }
+
+            
+            # --- 3c. 랜드스케이프 소스 결정 ---
+            if pl_url:
+                final_image_sources['landscape_source'] = pl_url
+
+            # --- 3d. 포스터 소스 결정 (DMM 고유의 모든 규칙 적용) ---
+            apply_ps_to_poster_for_this_item = False
+            forced_crop_mode_for_this_item = None
             if hasattr(entity, 'ui_code') and entity.ui_code:
                 label_from_ui_code = cls.get_label_from_ui_code(entity.ui_code)
                 if label_from_ui_code:
-                    if cls.config.get('ps_force_labels_list') and label_from_ui_code in cls.config['ps_force_labels_list']:
-                        apply_ps_to_poster_for_this_item = True
-                    if cls.config.get('crop_mode'):
+                    if cls.config['ps_force_labels_list']:
+                        
+                        if label_from_ui_code in cls.config['ps_force_labels_list']:
+                            apply_ps_to_poster_for_this_item = True
+                    if cls.config['crop_mode']:
                         for line in cls.config['crop_mode']:
                             parts = [x.strip() for x in line.split(":", 1)]
                             if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in ["r", "l", "c"]:
                                 forced_crop_mode_for_this_item = parts[1].lower()
                                 break
             
+            # 사용자 설정에 의한 crop 모드 적용
             if forced_crop_mode_for_this_item and pl_url:
-                final_image_sources['poster_source'] = pl_url; final_image_sources['poster_mode'] = f"crop_{forced_crop_mode_for_this_item}"
+                final_image_sources['poster_source'] = pl_url
+                final_image_sources['poster_mode'] = f"crop_{forced_crop_mode_for_this_item}"
+
             elif ps_url_from_search_cache:
+                # 사용자 설정. 포스터예외처리
                 if apply_ps_to_poster_for_this_item:
                     final_image_sources['poster_source'] = ps_url_from_search_cache
                 else:
                     poster_candidates = ([pl_url] if pl_url else []) + specific_candidates_on_page
                     for candidate in poster_candidates:
-                        if cls.is_portrait_high_quality_image(candidate) and cls.is_hq_poster(ps_url_from_search_cache, candidate, sm_source_info=ps_url_from_search_cache, lg_source_info=candidate):
-                            final_image_sources['poster_source'] = candidate; break
+                        _1 = cls.is_portrait_high_quality_image(candidate)
+                        _2 = cls.is_hq_poster(
+                            ps_url_from_search_cache,
+                            candidate, 
+                            sm_source_info=ps_url_from_search_cache,
+                            lg_source_info=candidate
+                        )
+                        if _1 and _2:
+                            final_image_sources['poster_source'] = candidate
+                            break
                     if final_image_sources['poster_source'] is None and pl_url:
+                        # by soju. 여길 왜 타는가.. sone-042
                         try:
                             pl_img_obj = cls.imopen(pl_url)
                             if pl_img_obj:
@@ -720,30 +831,68 @@ class SiteDmm(SiteAvBase):
                                     final_poster_source = pl_img_obj.crop((w - 380, 0, w, h))
                                     final_image_sources['poster_source'] = pl_url
                                     final_image_sources['poster_mode'] = "mode_1"
+                        except Exception as e_crop:
+                            logger.error(f"DMM: Error during fixed-size crop: {e_crop}")
+                        finally:
+                            if pl_img_obj:
                                 pl_img_obj.close()
-                        except Exception as e_crop: logger.error(f"DMM: Error during fixed-size crop: {e_crop}")
+
                     if final_image_sources['poster_source'] is None:
                         for candidate in poster_candidates:
                             crop_pos = cls.has_hq_poster(ps_url_from_search_cache, candidate)
                             if crop_pos:
-                                final_image_sources['poster_source'] = candidate; final_image_sources['poster_mode'] = f"crop_{crop_pos}"; break
+                                final_image_sources['poster_source'] = candidate
+                                final_image_sources['poster_mode'] = f"crop_{crop_pos}"
+                                break
+
                     if final_image_sources['poster_source'] is None:
                         final_image_sources['poster_source'] = ps_url_from_search_cache
             else:
                 logger.warning(f"[{cls.site_name} Info] No PS url found. Poster cannot be determined by PS-based logic.")
             
+
+            # --- 3e. 최종 팬아트 목록 결정 (아트 처리 및 변수 처리) ---
             if other_arts_on_page and cls.config['max_arts'] > 0:
                 used_for_thumb = {url for url in [final_image_sources['poster_source'], final_image_sources['landscape_source']] if isinstance(url, str)}
                 final_image_sources['arts'] = [art for art in other_arts_on_page if art and art not in used_for_thumb][:cls.config['max_arts']]
-            
+
+            logger.debug(f"DMM (Decision Phase): Final Poster='{str(final_image_sources['poster_source'])[:100]}...', Landscape='{final_image_sources['landscape_source']}', Fanarts to process({len(final_image_sources['arts'])})")
+
+            # by soju.
+            # final_image_sources를 만드는 것까지만 각 사이트에서 수행한다.
+            # info에 포함해서 리턴하고 
+            # 메타데이터에서
+            #  - ff이용일경우 url 조합해서 리턴
+            #  - discord, image_server 이용일 경우는 개별 사이트 jav_image를 다시 호출해서
+            #    호출해서 이미지 객체를 받은 다음 처리
+
+            # === 4. 최종 후처리 위임 ===
+            """
+            final_image_sources = {
+                'poster_source': final_poster_source,
+                'poster_crop': final_poster_crop_mode,
+                'landscape_source': final_landscape_source,
+                'arts': arts_urls_for_processing,
+            }
+            image_processing_settings = {
+                'image_mode': image_mode,
+                'proxy_url': proxy_url,
+                'max_arts': max_arts,
+                'ui_code': ui_code_for_image,
+                'use_image_server': use_image_server,
+                'image_server_url': image_server_url,
+                'image_server_local_path': image_server_local_path,
+                'image_path_segment': image_path_segment,
+            }
+            """
             cls.finalize_images_for_entity(entity, final_image_sources)
+            
         except Exception as e:
             logger.exception(f"DMM ({entity.content_type}): Error during image processing for {code}: {e}")
 
-        # === 4. 예고편(Extras) 처리 ===
+        # === 5. 예고편(Extras) 처리 ===
+
         if cls.config['use_extras']:
-            # process_extras를 호출할 때 api_data를 직접 전달
-            # process_extras 내부에서 예고편 존재 여부를 판단함
             cls.process_extras(entity, tree, detail_url, api_data)
             
         logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
