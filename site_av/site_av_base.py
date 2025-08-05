@@ -1013,7 +1013,7 @@ class SiteAvBase:
                 # logger.debug(f"MGS Special Local: Processing candidate source: {obj_name}")
                 # 중앙 크롭 시도
                 with img_obj_to_crop:
-                    with cls.imcrop(img_obj_to_crop, position='c') as center_cropped_candidate_obj:
+                    with SiteUtilAv.imcrop(img_obj_to_crop, position='c') as center_cropped_candidate_obj:
 
                         if center_cropped_candidate_obj:
                             # logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
