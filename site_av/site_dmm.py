@@ -473,41 +473,7 @@ class SiteDmm(SiteAvBase):
             return None
 
         cid_part = code[len(cls.module_char)+len(cls.site_char):]
-        detail_url = None
-
-        if current_content_type == 'videoa' or current_content_type == 'vr':
-            detail_url = SITE_BASE_URL + f"/digital/videoa/-/detail/=/cid={cid_part}/"
-        elif current_content_type == 'dvd' or current_content_type == 'bluray':
-            detail_url = SITE_BASE_URL + f"/mono/dvd/-/detail/=/cid={cid_part}/"
-        else: 
-            logger.error(f"DMM Info: Invalid current_content_type '{current_content_type}'. Code: {code}")
-            return None 
-
-        referer = FANZA_AV_URL if current_content_type in ['videoa', 'vr'] else (SITE_BASE_URL + "/mono/dvd/")
-        headers = cls.get_request_headers(referer=referer)
-        tree = None
-        try:
-            logger.info(f"DMM INFO URL: {detail_url}")
-            tree = cls.get_tree(detail_url, headers=headers, timeout=30, verify=False)
-            if tree is None: 
-                logger.error(f"DMM Info ({current_content_type}): Failed to get page tree for {code}. URL: {detail_url}")
-                if (content_type_from_cache == 'unknown' or content_type_from_cache == 'videoa') and current_content_type == 'videoa':
-                    logger.debug(f"DMM Info: Retrying with DVD path for {code} as videoa failed.")
-                    current_content_type = 'dvd' 
-                    detail_url = SITE_BASE_URL + f"/mono/dvd/-/detail/=/cid={cid_part}/"
-                    referer = SITE_BASE_URL + "/mono/dvd/"
-                    headers = cls.get_request_headers(referer=referer)
-                    tree = cls.get_tree(detail_url, headers=headers, timeout=30, verify=False)
-                    if tree is None: 
-                        logger.error(f"DMM Info (DVD Retry): Failed to get page tree for {code}."); return None
-                else: 
-                    return None 
-            if "年齢認証" in (tree.xpath('//title/text()')[0] if tree.xpath('//title/text()') else ""):
-                logger.error(f"DMM Info ({current_content_type}): Age page received for {code}."); return None
-        except Exception as e_gt_info_dmm: 
-            logger.exception(f"DMM Info ({current_content_type}): Exc getting detail page: {e_gt_info_dmm}"); 
-            return None
-
+        
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]
         entity.mpaa = "청소년 관람불가"
@@ -518,152 +484,151 @@ class SiteDmm(SiteAvBase):
         entity.tag = []
         ui_code_for_image = ""
         entity.content_type = current_content_type
+        
+        tree = None
+        detail_url = None
+        api_data = None
+
+        # === 1. 타입별 데이터 소스 분기 ===
+        if entity.content_type == 'videoa' or entity.content_type == 'vr':
+            # --- 새로운 방식: videoa/vr은 GraphQL API 호출 ---
+            logger.debug(f"DMM Info (API): Getting info for {code} (type: {entity.content_type})")
+
+            try:
+                # --- 사전 작업: 브라우저의 API 호출 순서 모방 ---
+                api_url = "https://api.video.dmm.co.jp/graphql"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+                    'Accept': 'application/graphql-response+json, application/graphql+json, application/json, text/event-stream, multipart/mixed',
+                    'Content-Type': 'application/json',
+                    'fanza-device': 'BROWSER',
+                    'Origin': 'https://video.dmm.co.jp',
+                    'Referer': f'https://video.dmm.co.jp/av/content/?id={cid_part}',
+                    'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'same-site',
+                }
+
+                # 1. IP 정보 확인 API 호출
+                payload_root = {"operationName":"Root","query":"query Root {\n  ipInfo {\n    countryCode\n    accessStatus\n    __typename\n  }\n}","variables":{}}
+                cls.get_response(api_url, method='POST', headers=headers, json=payload_root)
+                logger.debug("DMM Info (API): Step 1/3 'Root' API call completed.")
+
+                # 2. 점검 상태 확인 API 호출
+                payload_maintenance = {"operationName":"Maintenance","query":"query Maintenance {\n  maintenance(service: PPV) {\n    description\n    startAt\n    endAt\n    __typename\n  }\n}","variables":{}}
+                cls.get_response(api_url, method='POST', headers=headers, json=payload_maintenance)
+                logger.debug("DMM Info (API): Step 2/3 'Maintenance' API call completed.")
+
+                # 3. 본편 데이터 요청 API 호출
+                query_content = "query ContentPageData($id: ID!, $isLoggedIn: Boolean!, $isAmateur: Boolean!, $isAnime: Boolean!, $isAv: Boolean!, $isCinema: Boolean!, $isSP: Boolean!) {\n  ppvContent(id: $id) {\n    ...ContentData\n    __typename\n  }\n  reviewSummary(contentId: $id) {\n    ...ReviewSummary\n    __typename\n  }\n  ...basketCountFragment\n}\nfragment ContentData on PPVContent {\n  id\n  floor\n  title\n  isExclusiveDelivery\n  releaseStatus\n  description\n  notices\n  isNoIndex\n  isAllowForeign\n  announcements {\n    body\n    __typename\n  }\n  featureArticles {\n    link {\n      url\n      text\n      __typename\n    }\n    __typename\n  }\n  packageImage {\n    largeUrl\n    mediumUrl\n    __typename\n  }\n  sampleImages {\n    number\n    imageUrl\n    largeImageUrl\n    __typename\n  }\n  products {\n    ...ProductData\n    __typename\n  }\n  mostPopularContentImage {\n    ... on ContentSampleImage {\n      __typename\n      largeImageUrl\n      imageUrl\n    }\n    ... on PackageImage {\n      __typename\n      largeUrl\n      mediumUrl\n    }\n    __typename\n  }\n  priceSummary {\n    lowestSalePrice\n    lowestPrice\n    campaign {\n      title\n      id\n      endAt\n      __typename\n    }\n    __typename\n  }\n  weeklyRanking: ranking(term: Weekly)\n  monthlyRanking: ranking(term: Monthly)\n  wishlistCount\n  sample2DMovie {\n    fileID\n    __typename\n  }\n  sampleMovie {\n    has2d\n    hasVr\n    __typename\n  }\n  ...AmateurAdditionalContentData @include(if: $isAmateur)\n  ...AnimeAdditionalContentData @include(if: $isAnime)\n  ...AvAdditionalContentData @include(if: $isAv)\n  ...CinemaAdditionalContentData @include(if: $isCinema)\n  __typename\n}\nfragment ProductData on PPVProduct {\n  id\n  priority\n  deliveryUnit {\n    id\n    priority\n    streamMaxQualityGroup\n    downloadMaxQualityGroup\n    __typename\n  }\n  priceInclusiveTax\n  sale {\n    priceInclusiveTax\n    __typename\n  }\n  expireDays\n  utilization @include(if: $isLoggedIn) {\n    isTVODRentalPlayable\n    status\n    __typename\n  }\n  licenseType\n  shopName\n  availableCoupon {\n    name\n    expirationPolicy {\n      ... on ProductCouponExpirationAt {\n        expirationAt\n        __typename\n      }\n      ... on ProductCouponExpirationDay {\n        expirationDays\n        __typename\n      }\n      __typename\n    }\n    expirationAt\n    discountedPrice\n    minPayment\n    destinationUrl\n    __typename\n  }\n  __typename\n}\nfragment AmateurAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  amateurActress {\n    id\n    name\n    imageUrl\n    age\n    waist\n    bust\n    bustCup\n    height\n    hip\n    relatedContents {\n      id\n      title\n      __typename\n    }\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment PlayableInfo on PlayableInfo {\n  playableDevices {\n    deviceDeliveryUnits {\n      id\n      deviceDeliveryQualities {\n        isDownloadable\n        isStreamable\n        __typename\n      }\n      __typename\n    }\n    device\n    name\n    priority\n    __typename\n  }\n  deviceGroups {\n    id\n    devices {\n      deviceDeliveryUnits {\n        deviceDeliveryQualities {\n          isStreamable\n          isDownloadable\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n  vrViewingType\n  __typename\n}\nfragment AnimeAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment AvAdditionalContentData on PPVContent {\n  deliveryStartDate\n  makerReleasedAt\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    isBookmarked @include(if: $isLoggedIn)\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  contentType\n  relatedWords\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment CinemaAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  authors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment ReviewSummary on ReviewSummary {\n  average\n  total\n  withCommentTotal\n  distributions {\n    total\n    withCommentTotal\n    rating\n    __typename\n  }\n  __typename\n}\nfragment basketCountFragment on Query {\n  basketCount: legacyBasket @include(if: $isSP) {\n    total\n    __typename\n  }\n  __typename\n}"
+                payload_content = {"operationName":"ContentPageData", "query":query_content, "variables":{"id":cid_part,"isAmateur":False,"isAnime":False,"isAv":True,"isCinema":False,"isLoggedIn":False,"isSP":False}}
+                res = cls.get_response(api_url, method='POST', headers=headers, json=payload_content)
+                logger.debug("DMM Info (API): Step 3/3 'ContentPageData' API call completed.")
+
+                if res.status_code != 200:
+                    logger.error(f"DMM API Error: Status {res.status_code} for {code} on ContentPageData call."); return None
+                data = res.json()
+                if 'errors' in data or not data.get('data', {}).get('ppvContent'):
+                    logger.error(f"DMM API Error: Invalid JSON for {code} on ContentPageData call. Response: {data}"); return None
+                api_data = data['data']
+            except Exception as e:
+                logger.exception(f"DMM API call sequence failed for {code}: {e}"); return None
+
+        elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
+            # --- 기존 방식: dvd/bluray는 HTML 페이지 파싱 ---
+            logger.debug(f"DMM Info (HTML): Getting info for {code} (type: {entity.content_type})")
+            detail_url = SITE_BASE_URL + f"/mono/dvd/-/detail/=/cid={cid_part}/"
+            referer = SITE_BASE_URL + "/mono/dvd/"
+            headers = cls.get_request_headers(referer=referer)
+            try:
+                logger.info(f"DMM INFO URL: {detail_url}")
+                tree = cls.get_tree(detail_url, headers=headers, timeout=30, verify=False)
+                if tree is None: 
+                    logger.error(f"DMM Info (DVD): Failed to get page tree for {code}."); return None
+            except Exception as e_gt_info_dmm: 
+                logger.exception(f"DMM Info (DVD): Exc getting detail page: {e_gt_info_dmm}"); return None
 
         # === 2. 전체 메타데이터 파싱 ===
         identifier_parsed = False
-        is_vr_actual = False  # 상세페이지에서 VR 여부 최종 확인
         try:
-            #logger.debug(f"DMM Info (Parsing as {entity.content_type}): Metadata for {code}...")
+            if api_data:
+                # --- 새로운 방식: JSON에서 데이터 매핑 ---
+                content = api_data.get('ppvContent')
+                review = api_data.get('reviewSummary', {})
 
-            # --- DMM 타입별 메타데이터 파싱 로직 ---
-            if entity.content_type == 'videoa' or entity.content_type == 'vr':
-                # videoa/vr 파싱
-                raw_title_text_v = ""
-                try:
-                    title_node_v = tree.xpath('//h1[@id="title"]')
-                    if title_node_v:
-                        raw_title_text_v = title_node_v[0].text_content().strip()
-                        if raw_title_text_v.startswith("【VR】"): is_vr_actual = True; entity.content_type = 'vr' # VR 타입 최종 확정
-                        entity.tagline = cls.trans(raw_title_text_v)
-                    else: logger.warning(f"DMM ({entity.content_type}): Could not find h1#title.")
-                except Exception as e_title_parse_v: 
-                    logger.warning(f"DMM ({entity.content_type}): Error parsing title: {e_title_parse_v}")
+                if not content:
+                    logger.error(f"DMM API: 'ppvContent' is null in API response for {code}.")
+                    return None
 
-                info_table_xpath_v = '//table[contains(@class, "mg-b20")]//tr'
+                if content.get('contentType') == 'VR':
+                    entity.content_type = 'vr'
+                    logger.debug(f"DMM Info (API): Content type updated to 'vr' for {code}")
 
-                tags_v = tree.xpath(info_table_xpath_v)
-                premiered_shouhin_v = None; premiered_haishin_v = None
-                for tag_v in tags_v:
-                    key_node_v = tag_v.xpath('./td[@class="nw"]/text()')
-                    value_node_list_v = tag_v.xpath('./td[not(@class="nw")]')
-                    if not key_node_v or not value_node_list_v: continue
-                    key_v = key_node_v[0].strip().replace("：", "")
-                    value_node_v_instance = value_node_list_v[0]; value_text_all_v = value_node_v_instance.text_content().strip()
-                    if value_text_all_v == "----" or not value_text_all_v: continue
+                entity.tagline = cls.trans(content.get('title'))
+                entity.plot = cls.trans(content.get('description'))
+                
+                parsed_ui_code, _, _ = cls._parse_ui_code_from_cid(content.get('makerContentId', cid_part), entity.content_type)
+                entity.ui_code = parsed_ui_code
+                ui_code_for_image = entity.ui_code.lower()
+                entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
+                identifier_parsed = True
 
-                    if "品番" in key_v:
-                        if value_text_all_v:
-                            logger.debug(f"DMM Info: Parsed '品番' value from page: '{key_v}' for {code}.")
+                if content.get('deliveryStartDate'):
+                    entity.premiered = content['deliveryStartDate'].split('T')[0]
+                    entity.year = int(entity.premiered[:4])
+                if content.get('duration'):
+                    entity.runtime = content['duration'] // 60
+                if review and review.get('average'):
+                    entity.ratings.append(EntityRatings(review['average'], max=5, name="dmm"))
+                if content.get('actresses'):
+                    entity.actor = [EntityActor(actress['name']) for actress in content['actresses']]
+                if content.get('directors'):
+                    entity.director = content['directors'][0]['name']
 
-                            parsed_ui_code_page, _, _ = cls._parse_ui_code_from_cid(value_text_all_v, entity.content_type)
-                            entity.ui_code = parsed_ui_code_page
+                if content.get('label') and content.get('label').get('name'):
+                    entity.studio = AV_STUDIO.get(content['label']['name'], cls.trans(content['label']['name']))
+                elif content.get('maker') and content.get('maker').get('name'):
+                    entity.studio = cls.trans(content['maker']['name'])
 
-                            ui_code_for_image = parsed_ui_code_page.lower()
-                            entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
-                            identifier_parsed = True
-                            # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
+                if content.get('series') and content.get('series').get('name'):
+                    entity.tag.append(cls.trans(content['series']['name']))
 
-                            parsed_label = parsed_ui_code_page.split('-')[0] if '-' in parsed_ui_code_page else parsed_ui_code_page
-                            if entity.tag is None: entity.tag = []
-                            if parsed_label and parsed_label not in entity.tag:
-                                entity.tag.append(parsed_label)
+                parsed_label = entity.ui_code.split('-')[0] if '-' in entity.ui_code else entity.ui_code
+                if parsed_label not in entity.tag:
+                    entity.tag.append(parsed_label)
+                entity.genre = []
+                if content.get('genres'):
+                    for g_item in content['genres']:
+                        g_ja = g_item['name']
+                        if not g_ja or "％OFF" in g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
+                        if g_ja in AV_GENRE: 
+                            entity.genre.append(AV_GENRE[g_ja])
+                        else:
+                            g_ko = cls.trans(g_ja).replace(" ", "")
+                            if g_ko not in AV_GENRE_IGNORE_KO: 
+                                entity.genre.append(g_ko)
 
-                    elif "配信開始日" in key_v:
-                        premiered_haishin_v = value_text_all_v.replace("/", "-")
-                    elif "収録時間" in key_v: 
-                        m_rt_v = re.search(r"(\d+)",value_text_all_v); entity.runtime = int(m_rt_v.group(1)) if m_rt_v else None
-                    elif "出演者" in key_v:
-                        actors_v = [a_v.strip() for a_v in value_node_v_instance.xpath('.//a/text()') if a_v.strip()]
-                        if actors_v: entity.actor = [EntityActor(name_v) for name_v in actors_v]
-                        elif value_text_all_v != '----': entity.actor = [EntityActor(n_v.strip()) for n_v in value_text_all_v.split('/') if n_v.strip()]
-                    elif "監督" in key_v:
-                        directors_v = [d_v.strip() for d_v in value_node_v_instance.xpath('.//a/text()') if d_v.strip()]
-                        entity.director = directors_v[0] if directors_v else (value_text_all_v if value_text_all_v != '----' else None)
-                    elif "シリーズ" in key_v:
-                        if entity.tag is None: entity.tag = []
-                        series_v = [s_v.strip() for s_v in value_node_v_instance.xpath('.//a/text()') if s_v.strip()]
-                        s_name_v = series_v[0] if series_v else (value_text_all_v if value_text_all_v != '----' else None)
-                        if s_name_v and cls.trans(s_name_v) not in entity.tag: entity.tag.append(cls.trans(s_name_v))
-                    elif "メーカー" in key_v:
-                        if entity.studio is None: # 스튜디오 정보 없으면 제작사로 채움
-                            makers_v = [mk_v.strip() for mk_v in value_node_v_instance.xpath('.//a/text()') if mk_v.strip()]
-                            m_name_v = makers_v[0] if makers_v else (value_text_all_v if value_text_all_v != '----' else None)
-                            if m_name_v: entity.studio = cls.trans(m_name_v)
-                    elif "レーベル" in key_v: # 레이블은 스튜디오로 사용 (제작사보다 우선)
-                        labels_v = [lb_v.strip() for lb_v in value_node_v_instance.xpath('.//a/text()') if lb_v.strip()]
-                        l_name_v = labels_v[0] if labels_v else (value_text_all_v if value_text_all_v != '----' else None)
-                        if l_name_v:
-                            entity.studio = AV_STUDIO.get(l_name_v, cls.trans(l_name_v))
-
-                    elif "ジャンル" in key_v:
-                        entity.genre = []
-                        for genre_ja_tag_v in value_node_v_instance.xpath('.//a'):
-                            genre_ja_v = genre_ja_tag_v.text_content().strip()
-                            if not genre_ja_v or "％OFF" in genre_ja_v or genre_ja_v in AV_GENRE_IGNORE_JA:
-                                continue
-                            if genre_ja_v in AV_GENRE: 
-                                entity.genre.append(AV_GENRE[genre_ja_v])
-                            else:
-                                genre_ko_v = cls.trans(genre_ja_v).replace(" ", "")
-                                if genre_ko_v not in AV_GENRE_IGNORE_KO: 
-                                    entity.genre.append(genre_ko_v)
-
-                rating_text_node = tree.xpath('//p[contains(@class, "d-review__average")]/strong/text()')
-                if rating_text_node:
-                    rating_text = rating_text_node[0].strip()
-                    rating_match_text = re.search(r'([\d\.]+)\s*点', rating_text)
-                    if rating_match_text:
-                        try:
-                            rate_val_text = float(rating_match_text.group(1))
-                            if 0 <= rate_val_text <= 5:
-                                # entity.ratings는 이미 []로 초기화되었으므로 바로 append
-                                entity.ratings.append(EntityRatings(rate_val_text, max=5, name="dmm"))
-                        except ValueError:
-                            logger.warning(f"DMM ({entity.content_type}): Text-based rating conversion error: {rating_text}")
-                else:
-                    logger.debug(f"DMM ({entity.content_type}): Text-based rating element (d-review__average) not found.")
-
-                # videoa/vr 출시일: 상품일 > 배신일 순
-                entity.premiered = premiered_shouhin_v or premiered_haishin_v 
-                if entity.premiered: entity.year = int(entity.premiered[:4]) if len(entity.premiered) >=4 else None
-                else: logger.warning(f"DMM ({entity.content_type}): Premiered date not found for {code}.")
-
-                # videoa/vr 줄거리
-                plot_xpath_v_meta_info = '//div[@class="mg-b20 lh4"]/text()'
-                plot_nodes_v_meta_info = tree.xpath(plot_xpath_v_meta_info)
-                if plot_nodes_v_meta_info:
-                    plot_text_v_meta_info = "\n".join([p_v_info.strip() for p_v_info in plot_nodes_v_meta_info if p_v_info.strip()]).split("※")[0].strip()
-                    if plot_text_v_meta_info: entity.plot = cls.trans(plot_text_v_meta_info)
-                else: logger.warning(f"DMM ({entity.content_type}): Plot not found for {code}.")
-
-            elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
+            elif tree is not None:
+                # --- 기존 방식: HTML에서 데이터 파싱 (dvd/bluray) ---
                 title_node_dvd = tree.xpath('//h1[@id="title"]')
-                if title_node_dvd: 
-                    entity.tagline = cls.trans(title_node_dvd[0].text_content().strip())
-
+                if title_node_dvd: entity.tagline = cls.trans(title_node_dvd[0].text_content().strip())
                 info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
                 table_rows_dvd = tree.xpath(info_table_xpath_dvd)
-
-                premiered_shouhin_dvd = None 
-                premiered_hatsubai_dvd = None  
-                premiered_haishin_dvd = None   
+                premiered_shouhin_dvd, premiered_hatsubai_dvd, premiered_haishin_dvd = None, None, None   
 
                 if not table_rows_dvd:
                     logger.warning(f"DMM ({entity.content_type}): No <tr> tags found in the info table using XPath: {info_table_xpath_dvd}")
 
-                for row_dvd in table_rows_dvd: 
-                    tds_dvd = row_dvd.xpath("./td") 
-                    if len(tds_dvd) != 2: 
+                for row_dvd in table_rows_dvd:
+                    tds_dvd = row_dvd.xpath("./td")
+                    if len(tds_dvd) != 2:
                         continue
 
                     key_dvd = tds_dvd[0].text_content().strip().replace("：", "")
                     value_node_dvd = tds_dvd[1]
                     value_text_all_dvd = value_node_dvd.text_content().strip()
 
-                    if value_text_all_dvd == "----" or not value_text_all_dvd: 
+                    if value_text_all_dvd == "----" or not value_text_all_dvd:
                         continue
 
-                    # --- 테이블 내부 항목 파싱 (videoa/vr 로직을 여기에 적용) ---
                     if "品番" in key_dvd:
 
                         if value_text_all_dvd:
@@ -773,16 +738,12 @@ class SiteDmm(SiteAvBase):
             if not identifier_parsed:
                 logger.error(f"DMM ({entity.content_type}): CRITICAL - Identifier parse failed for {code} after all attempts.")
                 ui_code_for_image = code[2:].upper().replace("_","-")
-                entity.title=entity.originaltitle=entity.sorttitle=ui_code_for_image
-                entity.ui_code=ui_code_for_image
-            if not entity.tagline and entity.title: 
-                entity.tagline = entity.title
-            if not entity.plot and entity.tagline: 
-                entity.plot = entity.tagline
-        except Exception as e_meta_dmm_main_detail_full:
-            logger.exception(f"DMM ({entity.content_type}): Meta parsing error for {code}: {e_meta_dmm_main_detail_full}")
-            if not ui_code_for_image: 
-                return None
+                entity.title=entity.originaltitle=entity.sorttitle=ui_code_for_image; entity.ui_code=ui_code_for_image
+            if not entity.tagline and entity.title: entity.tagline = entity.title
+            if not entity.plot and entity.tagline: entity.plot = entity.tagline
+        except Exception as e_meta:
+            logger.exception(f"DMM Meta parsing error for {code}: {e_meta}")
+            return None
 
         # === 3. 이미지 소스 결정 및 관계 처리 (DMM 고유 로직) ===
         try:
@@ -932,99 +893,47 @@ class SiteDmm(SiteAvBase):
         # === 5. 예고편(Extras) 처리 ===
 
         if cls.config['use_extras']:
-            cls.process_extras(entity, tree, detail_url)
+            cls.process_extras(entity, tree, detail_url, api_data)
             
-        logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {ui_code_for_image}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
+        logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
         return entity
 
     
     # 이미지 url 얻기
     @classmethod
-    def __img_urls(cls, tree, content_type='unknown', now_printing_path=None):
-        #logger.debug(f"DMM __img_urls: Extracting raw image URLs for type: {content_type}")
+    def __img_urls(cls, tree=None, content_type='unknown', now_printing_path=None, api_data=None):
         img_urls_dict = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
 
+        if api_data:
+            # --- 새로운 방식: videoa/vr은 API JSON에서 이미지 URL 추출 ---
+            try:
+                content = api_data['ppvContent']
+                package_image = content.get('packageImage', {})
+                img_urls_dict['pl'] = package_image.get('largeUrl') # landscape (pl.jpg)
+                
+                arts = []
+                if content.get('sampleImages'):
+                    for sample in content['sampleImages']:
+                        if sample.get('largeImageUrl'):
+                            arts.append(sample['largeImageUrl'])
+                img_urls_dict['arts'] = arts
+                
+                if arts:
+                    img_urls_dict['specific_poster_candidates'].append(arts[0])
+                    if len(arts) > 1 and arts[-1] != arts[0]:
+                        img_urls_dict['specific_poster_candidates'].append(arts[-1])
+                return img_urls_dict
+            except Exception as e:
+                logger.error(f"DMM __img_urls (API): Failed to parse image URLs from JSON: {e}")
+                return img_urls_dict
+
+        # --- 기존 방식: dvd/bluray는 HTML(tree)에서 이미지 URL 추출 ---
+        if tree is None:
+            logger.warning("DMM __img_urls (HTML): Tree object is None, cannot parse images.")
+            return img_urls_dict
+
         try:
-            if content_type == 'videoa' or content_type == 'vr':
-                sample_image_links = tree.xpath('//div[@id="sample-image-block"]//a[.//img]')
-                if not sample_image_links: # a 태그가 없는 경우 img src 직접 사용
-                    all_img_tags_src = tree.xpath('//div[@id="sample-image-block"]//img/@src')
-                    if not all_img_tags_src: return img_urls_dict # 이미지조차 없으면 반환
-
-                    # 첫 번째 이미지를 PL로, 나머지를 Art로
-                    if all_img_tags_src:
-                        pl_candidate_url = urljoin(SITE_BASE_URL, all_img_tags_src[0].strip())
-                        # 플레이스홀더 검사
-                        if not (now_printing_path and cls.are_images_visually_same(pl_candidate_url, now_printing_path)):
-                            img_urls_dict['pl'] = pl_candidate_url
-
-                        temp_arts_from_img_tags = []
-                        for src in all_img_tags_src[1:]:
-                            art_url = urljoin(SITE_BASE_URL, src.strip())
-                            if art_url != img_urls_dict.get('pl') and art_url not in temp_arts_from_img_tags:
-                                # 플레이스홀더 검사
-                                if not (now_printing_path and cls.are_images_visually_same(art_url, now_printing_path)):
-                                    temp_arts_from_img_tags.append(art_url)
-                        img_urls_dict['arts'] = temp_arts_from_img_tags
-                        # specific_poster_candidates는 arts 기반으로 생성
-                        if img_urls_dict['arts']:
-                            img_urls_dict['specific_poster_candidates'].append(img_urls_dict['arts'][0])
-                            if len(img_urls_dict['arts']) > 1 and img_urls_dict['arts'][-1] != img_urls_dict['arts'][0]:
-                                img_urls_dict['specific_poster_candidates'].append(img_urls_dict['arts'][-1])
-                    return img_urls_dict
-
-                # a 태그가 있는 경우 (href 우선, 없으면 img src)
-                temp_arts_list_for_processing = [] # 모든 유효한 이미지 URL (순서 유지, 중복 없음)
-                seen_urls_in_videoa_vr = set() # 빠른 중복 체크용
-
-                for a_tag in sample_image_links:
-                    final_image_url = None
-                    href = a_tag.attrib.get("href", "").strip()
-                    img_src_list = a_tag.xpath('.//img/@src') # img 태그는 항상 있다고 가정
-                    img_src = img_src_list[0].strip() if img_src_list else ""
-
-                    # href가 이미지 URL 형태이면 href 우선
-                    if href and re.search(r'\.(jpg|jpeg|png|webp)$', href, re.IGNORECASE):
-                        final_image_url = urljoin(SITE_BASE_URL, href)
-                    elif img_src and re.search(r'\.(jpg|jpeg|png|webp)$', img_src, re.IGNORECASE): # 아니면 img_src 사용
-                        final_image_url = urljoin(SITE_BASE_URL, img_src)
-
-                    if final_image_url and final_image_url not in seen_urls_in_videoa_vr:
-                        # 플레이스홀더 검사
-                        if not (now_printing_path and cls.are_images_visually_same(final_image_url, now_printing_path)):
-                            temp_arts_list_for_processing.append(final_image_url)
-                            seen_urls_in_videoa_vr.add(final_image_url)
-
-                # PL 결정 (파일명 기반 또는 첫 번째 이미지)
-                processed_pl_v = None
-                for url_idx, url_item in enumerate(temp_arts_list_for_processing):
-                    filename = url_item.split('/')[-1].lower()
-                    is_pl_type = filename.endswith("pl.jpg") or filename.endswith("jp-0.jpg") # jp-0.jpg는 Video A 메인 이미지일 수 있음
-                    if is_pl_type:
-                        processed_pl_v = url_item
-                        # PL로 선택된 이미지는 temp_arts_list_for_processing에서 제거 (또는 아래 arts 리스트 만들 때 제외)
-                        # temp_arts_list_for_processing.pop(url_idx) # 제거 시 인덱스 문제 주의
-                        break
-                if not processed_pl_v and temp_arts_list_for_processing: # PL 못찾았으면 첫번째를 PL로
-                    processed_pl_v = temp_arts_list_for_processing[0]
-
-                img_urls_dict['pl'] = processed_pl_v if processed_pl_v else ""
-
-                # Arts 및 Specific Candidates 결정 (순서 유지, 중복 없음)
-                remaining_arts_v = []
-                if temp_arts_list_for_processing:
-                    for url_item_art in temp_arts_list_for_processing:
-                        if url_item_art != processed_pl_v: # PL로 사용된 URL 제외
-                            if url_item_art not in remaining_arts_v: # 이미 추가된 Art가 아니면
-                                remaining_arts_v.append(url_item_art)
-                img_urls_dict['arts'] = remaining_arts_v
-
-                if remaining_arts_v: # PL 제외된 아트 목록에서 specific 후보 추출
-                    img_urls_dict['specific_poster_candidates'].append(remaining_arts_v[0])
-                    if len(remaining_arts_v) > 1 and remaining_arts_v[-1] != remaining_arts_v[0]:
-                        img_urls_dict['specific_poster_candidates'].append(remaining_arts_v[-1])
-
-            elif content_type == 'dvd' or content_type == 'bluray':
+            if content_type == 'dvd' or content_type == 'bluray':
                 # --- DVD/Blu-ray 타입 이미지 추출 로직 ---
                 temp_pl_dvd = ""
                 temp_arts_list_dvd = []
@@ -1125,7 +1034,7 @@ class SiteDmm(SiteAvBase):
     # region 예고편처리
 
     @classmethod
-    def process_extras(cls, entity, tree, detail_url):
+    def process_extras(cls, entity, tree, detail_url, api_data=None):
         entity.extras = []
         trailer_title_for_extra = entity.tagline if entity.tagline else entity.ui_code
         trailer_url_final = None
@@ -1134,16 +1043,26 @@ class SiteDmm(SiteAvBase):
             cid_part = code[len(cls.module_char)+len(cls.site_char):]
             detail_url_for_referer = detail_url
 
-            if entity.content_type == 'vr':
-                trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
-                # title_from_json은 사용하지 않음
-                if not trailer_url_final:
-                    trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url_for_referer)
+            # API로 정보를 가져온 경우 (videoa/vr)
+            if api_data:
+                content = api_data.get('ppvContent', {})
+                sample_movie = content.get('sampleMovie', {})
 
-            elif entity.content_type == 'videoa':
-                trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
+                if not sample_movie:
+                    logger.debug(f"DMM Trailer: No 'sampleMovie' info in API data for {code}. Skipping trailer search.")
+                elif sample_movie.get('has2d'):
+                    # 2D 예고편이 있으면, html5_player 방식만 시도
+                    logger.debug("DMM Trailer: API indicates a 2D trailer is available. Using html5_player method.")
+                    trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
+                elif sample_movie.get('hasVr'):
+                    # 2D 예고편은 없고 VR 예고편만 있으면, VR 전용 방식만 시도
+                    logger.debug("DMM Trailer: API indicates only a VR trailer is available. Using VR method.")
+                    trailer_url_final = cls._get_dmm_vr_trailer(cid_part, detail_url_for_referer)
+                else:
+                    logger.debug(f"DMM Trailer: 'has2d' and 'hasVr' are both false for {code}. Skipping.")
 
-            elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
+            # HTML로 정보를 가져온 경우 (dvd/bluray)
+            elif tree is not None:
                 onclick_trailer = tree.xpath('//a[@id="sample-video1"]/@onclick | //a[contains(@onclick,"gaEventVideoStart")]/@onclick')
                 if onclick_trailer:
                     match_json = re.search(r"gaEventVideoStart\s*\(\s*'(\{.*?\})'\s*,\s*'(\{.*?\})'\s*\)", onclick_trailer[0])
@@ -1157,6 +1076,7 @@ class SiteDmm(SiteAvBase):
                             logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}.")
             
             if trailer_url_final:
+                logger.debug(f"DMM Trailer: Found URL for {code}: {trailer_url_final}")
                 url = cls.make_video_url(trailer_url_final)
                 if url:
                     entity.extras.append(EntityExtra("trailer", trailer_title_for_extra, "mp4", url))
@@ -1168,80 +1088,62 @@ class SiteDmm(SiteAvBase):
     @classmethod
     def _get_dmm_video_trailer_from_args_json(cls, cid_part, detail_url_for_referer,  current_content_type_for_log="video"):
         """
-        DMM의 videoa 및 새로운 VR 타입 예고편 추출 헬퍼.
-        AJAX -> iframe -> args JSON 파싱하여 (trailer_url, trailer_title) 반환.
-        실패 시 (None, None) 반환.
+        DMM의 videoa 및 VR 타입 예고편 추출 헬퍼.
+        html5_player 페이지에 직접 접속하여 'args' 변수에서 JSON 데이터를 파싱합니다.
+        성공 시 (trailer_url, trailer_title) 반환, 실패 시 (None, None) 반환.
         """
         trailer_url = None
-        trailer_title_from_json = None # JSON에서 가져온 제목
+        trailer_title_from_json = None
 
         try:
-            ajax_url = urljoin(SITE_BASE_URL, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
-            #logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing AJAX URL: {ajax_url}")
+            player_page_url = f"https://www.dmm.co.jp/service/digitalapi/-/html5_player/=/cid={cid_part}"
+            logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing player page: {player_page_url}")
 
-            ajax_headers = cls.get_request_headers(referer=detail_url_for_referer)
-            ajax_headers.update({'Accept': 'text/html, */*; q=0.01', 'X-Requested-With': 'XMLHttpRequest'})
+            player_page_text = cls.get_text(player_page_url, headers=cls.get_request_headers(referer=detail_url_for_referer))
+            
+            if player_page_text:
+                match = re.search(r'const\s+args\s*=\s*(\{.*?\});', player_page_text, re.DOTALL)
+                if match:
+                    json_str = match.group(1)
+                    try:
+                        trailer_data = json.loads(json_str)
+                        
+                        if trailer_data.get('bitrates'):
+                            highest_quality_video = trailer_data['bitrates'][0]
+                            if highest_quality_video.get('src'):
+                                trailer_url_raw = highest_quality_video['src']
+                                trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith('//') else trailer_url_raw
+                        
+                        if trailer_data.get('title'):
+                            trailer_title_from_json = trailer_data['title']
 
-            ajax_res = cls.get_response(ajax_url, headers=ajax_headers)
-
-            if ajax_res and ajax_res.status_code == 200 and ajax_res.text.strip():
-                iframe_tree = html.fromstring(ajax_res.text)
-                iframe_srcs = iframe_tree.xpath("//iframe/@src")
-
-                if iframe_srcs:
-                    iframe_url = urljoin(ajax_url, iframe_srcs[0])
-                    #logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing iframe URL: {iframe_url}")
-                    iframe_text = cls.get_text(iframe_url, headers=cls.get_request_headers(referer=ajax_url))
-
-                    if iframe_text:
-                        match_args_json = re.search(r'(?:const|var|let)?\s*args\s*=\s*(\{.*?\});', iframe_text, re.DOTALL)
-                        if match_args_json:
-                            json_data_str = match_args_json.group(1)
-                            try:
-                                data_json = json.loads(json_data_str)
-                                bitrates = sorted(data_json.get("bitrates",[]), key=lambda k: isinstance(k.get("bitrate"), int) and k.get("bitrate", 0), reverse=True) # bitrate가 숫자인 경우에만 정렬, 아니면 순서대로
-
-                                if bitrates and isinstance(bitrates[0], dict) and bitrates[0].get("src"):
-                                    trailer_url_raw = bitrates[0]["src"]
-                                    trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
-                                elif data_json.get("src"): # bitrates 없고 최상위 src
-                                    trailer_url_raw = data_json.get("src")
-                                    trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
-
-                                if data_json.get("title") and data_json.get("title").strip():
-                                    trailer_title_from_json = data_json.get("title").strip()
-
-                            except json.JSONDecodeError as e_json:
-                                logger.error(f"DMM Trailer Helper ({current_content_type_for_log}): JSONDecodeError - {e_json}. Data: {json_data_str[:200]}...")
-                        else:
-                            logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): 'args' JSON not found in iframe for CID: {cid_part}")
-                    else:
-                        logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): Failed to get iframe content for CID: {cid_part}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"DMM Trailer Helper ({current_content_type_for_log}): Failed to parse JSON. Error: {e}")
                 else:
-                    logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): No iframe in AJAX response for CID: {cid_part}")
+                    logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): Could not find 'const args' in player page.")
             else:
-                status_code = ajax_res.status_code if ajax_res else "None"
-                logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): AJAX request failed for CID: {cid_part}. Status: {status_code}")
+                logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): Failed to get content from player page.")
+        
         except Exception as e_helper:
             logger.exception(f"DMM Trailer Helper ({current_content_type_for_log}): Exception for CID {cid_part}: {e_helper}")
 
         return trailer_url, trailer_title_from_json
 
     @classmethod
-    def _get_dmm_vr_trailer_fallback(cls, cid_part, detail_url_for_referer):
+    def _get_dmm_vr_trailer(cls, cid_part, detail_url_for_referer):
         trailer_url = None
         try:
             vr_player_page_url = f"{SITE_BASE_URL}/digital/-/vr-sample-player/=/cid={cid_part}/"
-            logger.debug(f"DMM VR Trailer Fallback: Accessing player page: {vr_player_page_url}")
+            logger.debug(f"DMM VR Trailer: Accessing player page: {vr_player_page_url}")
             vr_player_html = cls.get_text(vr_player_page_url, headers=cls.get_request_headers(referer=detail_url_for_referer))
             if vr_player_html:
                 match_js_var = re.search(r'var\s+sampleUrl\s*=\s*["\']([^"\']+)["\']', vr_player_html)
                 if match_js_var:
                     trailer_url_raw = match_js_var.group(1)
                     trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
-                    logger.debug(f"DMM VR Trailer Fallback: Found sampleUrl: {trailer_url}")
+                    # logger.debug(f"DMM VR Trailer: Found sampleUrl: {trailer_url}")
         except Exception as e_fallback:
-            logger.exception(f"DMM VR Trailer Fallback: Exception for CID {cid_part}: {e_fallback}")
+            logger.exception(f"DMM VR Trailer: Exception for CID {cid_part}: {e_fallback}")
         return trailer_url
     
     # endregion 예고편처리
@@ -1389,7 +1291,7 @@ class SiteDmm(SiteAvBase):
 
         # 6. 최종 값 조합
         score_label_part = final_label_part.lower()
-        label_ui_part = final_label_part.upper()
+        label_ui_part = final_label_part.upper().strip('-') # 후행 하이픈 제거
         label_num_raw_for_score = final_num_part
         num_stripped = final_num_part.lstrip('0') or "0"
         label_num_ui_final = num_stripped.zfill(3)
