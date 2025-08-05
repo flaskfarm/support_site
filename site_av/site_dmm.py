@@ -562,26 +562,49 @@ class SiteDmm(SiteAvBase):
                     entity.content_type = 'vr'
                     logger.debug(f"DMM Info (API): Content type updated to 'vr' for {code}")
 
-                entity.tagline = cls.trans(content.get('title'))
-                entity.plot = cls.trans(content.get('description'))
-                
-                parsed_ui_code, _, _ = cls._parse_ui_code_from_cid(content.get('makerContentId', cid_part), entity.content_type)
+                title_val = content.get('title')
+                if title_val: entity.tagline = cls.trans(title_val)
+                plot_val = content.get('description')
+                if plot_val: entity.plot = cls.trans(plot_val)
+
+                id_to_parse = content.get('makerContentId') or cid_part
+                parsed_ui_code, _, _ = cls._parse_ui_code_from_cid(id_to_parse, entity.content_type)
                 entity.ui_code = parsed_ui_code
                 ui_code_for_image = entity.ui_code.lower()
                 entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
                 identifier_parsed = True
 
-                if content.get('deliveryStartDate'):
-                    entity.premiered = content['deliveryStartDate'].split('T')[0]
-                    entity.year = int(entity.premiered[:4])
-                if content.get('duration'):
-                    entity.runtime = content['duration'] // 60
-                if review and review.get('average'):
-                    entity.ratings.append(EntityRatings(review['average'], max=5, name="dmm"))
-                if content.get('actresses'):
-                    entity.actor = [EntityActor(actress['name']) for actress in content['actresses']]
-                if content.get('directors'):
-                    entity.director = content['directors'][0]['name']
+                premiered_val = content.get('deliveryStartDate')
+                if premiered_val and isinstance(premiered_val, str):
+                    try:
+                        entity.premiered = premiered_val.split('T')[0]
+                        entity.year = int(entity.premiered[:4])
+                    except (ValueError, IndexError):
+                        logger.warning(f"DMM API: Could not parse year from premiered date: {premiered_val}")
+
+                duration_val = content.get('duration')
+                if isinstance(duration_val, int):
+                    entity.runtime = duration_val // 60
+
+                if review:
+                    rating_val = review.get('average')
+                    if rating_val is not None:
+                        try:
+                            entity.ratings.append(EntityRatings(float(rating_val), max=5, name="dmm"))
+                        except (ValueError, TypeError):
+                            logger.warning(f"DMM API: Could not parse rating value: {rating_val}")
+
+                actresses_list = content.get('actresses')
+                if actresses_list:
+                    actors = []
+                    for actress in actresses_list:
+                        if isinstance(actress, dict) and actress.get('name'):
+                            actors.append(EntityActor(actress['name']))
+                    entity.actor = actors
+
+                directors_list = content.get('directors')
+                if directors_list and isinstance(directors_list[0], dict) and directors_list[0].get('name'):
+                    entity.director = directors_list[0]['name']
 
                 if content.get('label') and content.get('label').get('name'):
                     entity.studio = AV_STUDIO.get(content['label']['name'], cls.trans(content['label']['name']))
@@ -594,11 +617,15 @@ class SiteDmm(SiteAvBase):
                 parsed_label = entity.ui_code.split('-')[0] if '-' in entity.ui_code else entity.ui_code
                 if parsed_label not in entity.tag:
                     entity.tag.append(parsed_label)
-                entity.genre = []
-                if content.get('genres'):
-                    for g_item in content['genres']:
+
+                genres_list = content.get('genres')
+                if genres_list:
+                    entity.genre = []
+                    for g_item in genres_list:
+                        if not (isinstance(g_item, dict) and g_item.get('name')):
+                            continue
                         g_ja = g_item['name']
-                        if not g_ja or "％OFF" in g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
+                        if "％OFF" in g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
                         if g_ja in AV_GENRE: 
                             entity.genre.append(AV_GENRE[g_ja])
                         else:
@@ -750,7 +777,6 @@ class SiteDmm(SiteAvBase):
             # --- 3a. 원본 이미지 URL 파싱 ---
             logger.debug(f"DMM Info: PS url from cache: {ps_url_from_search_cache}")
 
-
             now_printing_path = None
             #if use_image_server and image_server_local_path:
             #    now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
@@ -759,17 +785,14 @@ class SiteDmm(SiteAvBase):
             raw_image_urls = cls.__img_urls(
                 tree, 
                 content_type=entity.content_type, 
-                now_printing_path=now_printing_path
+                now_printing_path=now_printing_path,
+                api_data=api_data
             )
             pl_url = raw_image_urls.get('pl')
             specific_candidates_on_page = raw_image_urls.get('specific_poster_candidates', []) 
             other_arts_on_page = raw_image_urls.get('arts', [])
 
             # --- 3b. 최종 소스로 사용할 변수 초기화 ---
-            #final_poster_source = None
-            #final_poster_crop_mode = None
-            #final_landscape_source = None
-            #arts_urls_for_processing = []
             final_image_sources = {
                 'poster_source': None,
                 'poster_mode': None,
@@ -777,7 +800,6 @@ class SiteDmm(SiteAvBase):
                 'arts': [],
             }
 
-            
             # --- 3c. 랜드스케이프 소스 결정 ---
             if pl_url:
                 final_image_sources['landscape_source'] = pl_url
