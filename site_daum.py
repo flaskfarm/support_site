@@ -1,3 +1,4 @@
+import re
 import urllib.parse
 from datetime import datetime
 from http.cookies import SimpleCookie
@@ -230,26 +231,57 @@ class SiteDaum(object):
                 entity.series = sorted(entity.series, key=lambda k: (int(k['year']), int(k['code'][2:])))
 
             # 동명프로그램
-            entity.equal_name = []
-            similar_elements = root.xpath('//strong[@class="screen_out" and contains(text(), "동명프로그램")]/following-sibling::div')
-            if similar_elements:
-                # 한 개 이상일 경우는?
-                equal_program = {}
-                e_div = similar_elements[0]
-                e_a = e_div.xpath('.//div[@class="item-title"]//a')
-                query = dict(urllib.parse.parse_qsl(e_a[0].attrib['href']))
-                if e_a:
-                    equal_program['title'] = e_a[0].text.strip()
-                    equal_program['code'] = f'{cls.module_char}{cls.site_char}{query.get("spId", "").strip()}'
-                e_dd = e_div.xpath('.//dd[@class="program"]')
-                if e_dd:
-                    studio_and_year = e_dd[0].xpath('string()')
-                    sy = [t.strip() for t in studio_and_year.split(',')]
-                    equal_program['studio'] = sy[0]
-                    if len(sy) > 1:
-                        year = sy[1][:4]
-                        equal_program['year'] = int(year) if year.isdigit() else 1900
-                entity.equal_name.append(equal_program)
+            def get_year_and_studio(element: lxml.html.HtmlElement) -> tuple[int | None, str | None]:
+                year = studio = None
+                combined_text = element.xpath("string()")
+                studio_year = [t.strip() for t in combined_text.split(",")]
+                if len(studio_year) > 1:
+                    year = re.sub("\D", "", studio_year[1])
+                    year = int(year) if year else 1900
+                    studio = studio_year[0]
+                return year, studio
+
+            def zip_similar(titles: list[str], codes: list[str], years: list[int | None], studios: list[str | None]) -> list[dict]:
+                keys = ("title", "code", "year", "studio")
+                zipped = zip(titles, codes, years, studios)
+                return [dict(zip(keys, item)) for item in zipped if item[0] and item[1]]
+
+            try:
+                similar_titles, similar_codes, similar_years, similar_studios = [], [], [], []
+                if similar_elements := root.xpath('//strong[@class="screen_out" and contains(text(), "동명프로그램")]/following-sibling::div'):
+                    for element in similar_elements[0].xpath(".//div[@class='item-title']//a"):
+                        code = title = None
+                        query = dict(urllib.parse.parse_qsl(element.attrib["href"]))
+                        code = query.get("spId")
+                        if query.get("q"):
+                            title = urllib.parse.unquote(query.get("q"))
+                        elif element.text:
+                            title = element.text.strip()
+                        similar_codes.append(f'{cls.module_char}{cls.site_char}{code}' if code else None)
+                        similar_titles.append(title)
+                    for element in similar_elements[0].xpath(".//dd[@class='program']"):
+                        year, studio = get_year_and_studio(element)
+                        similar_years.append(year)
+                        similar_studios.append(studio)
+                elif root.xpath("//*[@id='tvpBoxAddition']//*[contains(text(), '동명프로그램')]"):
+                    # 트리거 등의 동명프로그램
+                    for element in root.xpath("//*[@id='tvpBoxAddition']//div[@class='item-thumb']//a"):
+                        code = title = None
+                        query = dict(urllib.parse.parse_qsl(element.attrib["href"]))
+                        code = query.get("spId")
+                        if query.get("q"):
+                            title = urllib.parse.unquote(query.get("q"))
+                        elif img_list := element.xpath(".//img"):
+                            title = img_list[0].attrib["alt"]
+                        similar_codes.append(f'{cls.module_char}{cls.site_char}{code}' if code else None)
+                        similar_titles.append(title)
+                    for element in root.xpath("//*[@id='tvpBoxAddition']//dd[@class='program']"):
+                        year, studio = get_year_and_studio(element)
+                        similar_years.append(year)
+                        similar_studios.append(studio)
+                entity.equal_name = zip_similar(similar_titles, similar_codes, similar_years, similar_studios)
+            except Exception as e:
+                logger.exception(f"{entity=}")
 
             #logger.debug(entity)
 
