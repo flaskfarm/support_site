@@ -48,7 +48,7 @@ class SiteJavbus(SiteAvBase):
         logger.debug(f"JavBus Search: original='{original_keyword}', url_kw='{keyword_for_url}'")
 
         url = f"{SITE_BASE_URL}/search/{keyword_for_url}"
-        tree = cls._get_javbus_page_tree(url)
+        tree = cls.get_tree(url)
         if tree is None:
             return []
 
@@ -158,7 +158,7 @@ class SiteJavbus(SiteAvBase):
             # === 1. 페이지 로딩 및 기본 Entity 생성 ===
             original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
             url = f"{SITE_BASE_URL}/{original_code_for_url}"
-            tree = cls._get_javbus_page_tree(url)
+            tree = cls.get_tree(url)
 
             if tree is None or not tree.xpath("//div[@class='container']//div[@class='row movie']"):
                 logger.error(f"JavBus __info: Failed to get valid detail page for {code}. URL: {url}")
@@ -258,76 +258,21 @@ class SiteJavbus(SiteAvBase):
                 if label not in entity.tag:
                     entity.tag.append(label)
 
-            # === 3. 이미지 소스 결정 및 관계 처리 ===
-            final_image_sources = {
-                'poster_source': None,
-                'poster_mode': None,
-                'landscape_source': None,
-                'arts': [],
-            }
-
-            img_urls_from_page = cls.__img_urls(tree)
-            pl_url = img_urls_from_page.get('pl')
-            all_arts_from_page = img_urls_from_page.get('arts', [])
-
-            cached_data = cls._ps_url_cache.get(code, {})
-            ps_url_from_search_cache = cached_data.get('ps')
-            ps_url_inferred_from_page = img_urls_from_page.get('ps')
-            ps_url = ps_url_from_search_cache or ps_url_inferred_from_page
-
-
-            if pl_url: 
-                final_image_sources['landscape_source'] = pl_url
-
-            apply_ps_to_poster_for_this_item = False
-            forced_crop_mode_for_this_item = None
-            if hasattr(entity, 'ui_code') and entity.ui_code:
-                label = entity.ui_code.split('-',1)[0].upper()
-                if label in cls.config['ps_force_labels_set']: 
-                    apply_ps_to_poster_for_this_item = True
-                if cls.config['crop_mode']:
-                    for line in cls.config['crop_mode']:
-                        parts = [x.strip() for x in line.split(":", 1) if x.strip()]
-                        if len(parts) == 2 and parts[0].upper() == label and parts[1].lower() in "rlc":
-                            forced_crop_mode_for_this_item = parts[1].lower()
-                            break
-
-            if forced_crop_mode_for_this_item and pl_url:
-                final_image_sources['poster_source'] = pl_url
-                final_image_sources['poster_mode'] = f"crop_{forced_crop_mode_for_this_item}"
-            elif ps_url:
-                if apply_ps_to_poster_for_this_item:
-                    final_image_sources['poster_source'] = ps_url
-                else:
-                    poster_candidates = ([pl_url] if pl_url else []) + (all_arts_from_page[:1] + all_arts_from_page[-1:] if all_arts_from_page else [])
-                    for candidate in poster_candidates:
-                        _1 = cls.is_portrait_high_quality_image(candidate)
-                        _2 = cls.is_hq_poster(ps_url, candidate, sm_source_info=ps_url, lg_source_info=candidate)
-                        if _1 and _2:
-                            final_image_sources['poster_source'] = candidate
-                            break
-                    if final_image_sources['poster_source'] is None:
-                        for candidate in poster_candidates:
-                            crop_pos = cls.has_hq_poster(ps_url, candidate)
-                            if crop_pos:
-                                final_image_sources['poster_source'] = candidate
-                                final_image_sources['poster_crop'] = f"crop_{crop_pos}"
-                                break
-                    if final_image_sources['poster_source'] is None: 
-                        final_image_sources['poster_source'] = ps_url
-            elif pl_url:
-                final_image_sources['poster_source'] = pl_url
-                final_image_sources['poster_mode'] = f"crop_r"  
-
-            if all_arts_from_page and cls.config['max_arts'] > 0:
-                used = {final_image_sources['landscape_source'], final_image_sources['poster_source'] if isinstance(final_image_sources['poster_source'], str) else None}
-                final_image_sources['arts'] = [art for art in all_arts_from_page if art and art not in used][:cls.config['max_arts']]
-
-            # === 4. 최종 후처리 위임 ===
+            # === 3. 이미지 처리 위임 ===
             
-            cls.finalize_images_for_entity(entity, final_image_sources)
+            # 3-1. PS URL은 검색 캐시 또는 페이지에서 직접 유추하여 가져옴
+            ps_url_from_search_cache = cls._ps_url_cache.get(code, {}).get('ps')
+            
+            # 3-2. 원본 이미지 URL 목록 수집
+            raw_image_urls = cls.__img_urls(tree)
+            
+            # 검색 캐시에 PS가 없었다면, 페이지에서 유추한 PS를 사용
+            ps_url_to_use = ps_url_from_search_cache or raw_image_urls.get('ps')
 
-            # === 5. Shiroutoname 보정 처리 ===
+            # 3-3. 공통 처리 함수에 모든 것을 위임
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_to_use)
+
+            # === 4. Shiroutoname 보정 처리 ===
             if entity.ui_code:
                 try: 
                     entity = cls.shiroutoname_info(entity)
@@ -356,67 +301,69 @@ class SiteJavbus(SiteAvBase):
 
     @classmethod
     def __img_urls(cls, tree):
-        img_urls = {'ps': "", 'pl': "", 'arts': []}
         if tree is None:
-            logger.warning("JavBus __img_urls: Input tree is None. Cannot extract image URLs.")
-            return img_urls
+            return {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
 
-        pl_nodes = tree.xpath('//a[@class="bigImage"]/img/@src')
-        pl = pl_nodes[0] if pl_nodes else ""
-        if pl: pl = cls.__fix_url(pl)
-        else: logger.warning("JavBus __img_urls: PL 이미지 URL을 얻을 수 없음")
-
-        ps = ""
-        if pl:
-            try:
-                filename = pl.split("/")[-1].replace("_b.", ".")
-                ps = cls.__fix_url(f"/pics/thumb/{filename}")
-            except Exception as e_ps_infer: logger.warning(f"JavBus __img_urls: ps URL 유추 실패: {e_ps_infer}")
-
-        arts = []
         try:
-            for href_art in tree.xpath('//*[@id="sample-waterfall"]/a/@href'):
-                arts.append(cls.__fix_url(href_art))
-        except Exception as e_arts_extract: logger.warning(f"JavBus __img_urls: arts URL 추출 실패: {e_arts_extract}")
+            # 1. PL (큰 포스터) URL 수집
+            pl_nodes = tree.xpath('//a[@class="bigImage"]/img/@src')
+            pl_url = cls.__fix_url(pl_nodes[0]) if pl_nodes else ""
 
-        img_urls["ps"] = ps
-        img_urls["pl"] = pl
-        img_urls["arts"] = list(dict.fromkeys(arts))
-        return img_urls
+            # 2. PS (작은 포스터) URL 유추
+            ps_url = ""
+            if pl_url:
+                try:
+                    filename = pl_url.split("/")[-1].replace("_b.", ".")
+                    ps_url = cls.__fix_url(f"/pics/thumb/{filename}")
+                except Exception: pass
+
+            # 3. Arts (샘플 이미지) URL 수집
+            all_sample_images = []
+            for href_art in tree.xpath('//*[@id="sample-waterfall"]/a/@href'):
+                all_sample_images.append(cls.__fix_url(href_art))
+            all_sample_images = list(dict.fromkeys(all_sample_images))
+            
+            # 4. 역할에 맞게 데이터 분류 및 정제
+            thumb_candidates = set()
+            if pl_url:
+                thumb_candidates.add(pl_url)
+            
+            # Javbus는 PL 외에 명확한 포스터 후보가 없으므로 specific_poster_candidates는 비워둠
+            specific_poster_candidates = []
+
+            # 순수 팬아트 목록 생성
+            pure_arts = [art for art in all_sample_images if art and art not in thumb_candidates]
+
+            # 5. 최종 결과 반환
+            ret = {
+                "ps": ps_url,
+                "pl": pl_url,
+                "specific_poster_candidates": specific_poster_candidates,
+                "arts": pure_arts
+            }
+            logger.debug(f"JavBus __img_urls collected: PS='{ret['ps']}', PL='{ret['pl']}', SpecificCandidates={len(ret['specific_poster_candidates'])}, PureArts={len(ret['arts'])}")
+            return ret
+        except Exception as e:
+            logger.exception(f"JavBus __img_urls: Error extracting URLs: {e}")
+            return {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
 
 
     @classmethod
-    def _get_javbus_page_tree(cls, page_url: str, cf_clearance_cookie: str = None) -> Union[html.HtmlElement, None]:
-        javbus_cookies = {'age': 'verified', 'age_check_done': '1', 'ckcy': '1', 'dv': '1', 'existmag': 'mag'}
-        if cf_clearance_cookie:
-            javbus_cookies['cf_clearance'] = cf_clearance_cookie
-            # logger.debug(f"SiteJavbus._get_javbus_page_tree: Using cf_clearance cookie for URL: {page_url}")
-
-        try:
-            res = cls.get_response_cs(page_url, cookies=javbus_cookies, allow_redirects=True)
-
-            if res is None or res.status_code != 200:
-                status_code = res.status_code if res else "None"
-                logger.warning(f"SiteJavbus._get_javbus_page_tree: Failed to get page or status not 200 for URL='{page_url}'. Status: {status_code}. Falling back to .get_response if configured.")
-
-                # Cloudscraper 실패 시, .get_response로 fallback
-                # logger.debug(f"SiteJavbus._get_javbus_page_tree: Attempting fallback with .get_response for URL='{page_url}'")
-                res_fallback = cls.get_response(page_url,  cookies=javbus_cookies, verify=False)
-                if res_fallback and res_fallback.status_code == 200:
-                #     logger.debug(f"SiteJavbus._get_javbus_page_tree: Fallback request successful for URL='{page_url}'.")
-                    return html.fromstring(res_fallback.text)
-                else:
-                    status_code_fallback = res_fallback.status_code if res_fallback else "None"
-                    logger.error(f"SiteJavbus._get_javbus_page_tree: Fallback request also failed for URL='{page_url}'. Status: {status_code_fallback}.")
-                    return None
-                # return None # get_response_cs 실패 시 여기서 None 반환 (fallback 사용 안 할 경우)
-
-            # logger.debug(f"SiteJavbus._get_javbus_page_tree: Successfully fetched page for URL='{page_url}'. Status: {res.status_code}")
-            return html.fromstring(res.text)
+    def get_response(cls, url, **kwargs):
+        """
+        Javbus는 Cloudflare 보호가 적용되므로, 모든 요청(페이지, 이미지 등)에 대해
+        부모 클래스의 get_response_cs(cloudscraper)를 사용하도록 오버라이드합니다.
+        """
+        # _get_javbus_page_tree에 있던 쿠키들을 여기에 통합
+        if 'cookies' not in kwargs:
+            kwargs['cookies'] = {}
+        kwargs['cookies'].update({'age': 'verified', 'age_check_done': '1', 'ckcy': '1', 'dv': '1', 'existmag': 'mag'})
         
-        except Exception as e:
-            logger.exception(f"SiteJavbus._get_javbus_page_tree: Exception while getting or parsing page for URL='{page_url}': {e}")
-            return None
+        # Cloudscraper의 delay 기본값이 너무 길 수 있으므로, 
+        # Javbus 요청에 대해서만 짧은 delay를 적용하기 위해 새 인스턴스를 생성할 수도 있음.
+        # 여기서는 기본 인스턴스를 사용.
+        
+        return super().get_response_cs(url, **kwargs)
 
 
     ################################################
@@ -432,6 +379,45 @@ class SiteJavbus(SiteAvBase):
         })
         cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
         cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config['ps_force_labels_list'] if lbl.strip()}
-    
+
+
+    @classmethod
+    def get_response(cls, url, **kwargs):
+        """
+        Javbus는 모든 요청에 Cloudflare 보호가 적용되므로, 
+        get_response를 오버라이드하여 항상 cloudscraper를 사용하도록 강제하고,
+        이 모듈의 프록시 설정을 명시적으로 전달합니다.
+        """
+        # Javbus에 필요한 기본 쿠키를 kwargs에 추가
+        if 'cookies' not in kwargs:
+            kwargs['cookies'] = {}
+        kwargs['cookies'].update({'age': 'verified', 'age_check_done': '1', 'ckcy': '1', 'dv': '1', 'existmag': 'mag'})
+
+        # cls.config가 유효한지 확인하고, 프록시 설정을 kwargs에 직접 추가
+        if cls.config and cls.config.get('use_proxy'):
+            proxies = {
+                "http": cls.config.get('proxy_url'),
+                "https": cls.config.get('proxy_url')
+            }
+            # get_response_cs는 proxies를 kwargs로 받지 않으므로, 
+            # cloudscraper 인스턴스에 직접 설정하거나, get_response_cs를 수정해야 함.
+            # get_response_cs를 수정하는 것이 더 깔끔함.
+            kwargs['proxies'] = proxies # kwargs를 통해 전달
+
+        logger.debug(f"Javbus: Using cloudscraper (get_response_cs) for URL: {url} with kwargs: {kwargs}")
+        return super().get_response_cs(url, **kwargs)
+
+
+    @classmethod
+    def jav_image(cls, url, mode=None):
+        """
+        [이미지 요청용] jav_image 요청도 Cloudflare를 통과해야 하므로,
+        get_response 대신 get_response_cs를 사용하는 default_jav_image_cs를 호출하도록 오버라이드.
+        """
+        logger.debug(f"Javbus: Using overridden jav_image (cloudscraper) for URL: {url}")
+        # SiteAvBase에 default_jav_image_cs 헬퍼를 만들거나, 여기서 로직을 직접 구현
+        return cls.default_jav_image_cs(url, mode)
+
+
     # endregion SiteAvBase 메서드 오버라이드
     ################################################

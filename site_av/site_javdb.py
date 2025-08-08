@@ -286,7 +286,6 @@ class SiteJavdb(SiteAvBase):
 
     @classmethod
     def __info(cls, code):
-       
         original_keyword = ''
 
         custom_cookies = { 'over18': '1', 'locale': 'en' }
@@ -295,6 +294,9 @@ class SiteJavdb(SiteAvBase):
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{SITE_BASE_URL}/v/{original_code_for_url}"
         temp_poster_file_to_clean = None
+
+        tree = None
+        entity = None
 
         try:
             logger.debug(f"JavDB Info: Accessing URL: {detail_url} for code {code}")
@@ -308,8 +310,8 @@ class SiteJavdb(SiteAvBase):
                 return None
 
             html_info_text = res_info.text
-            tree_info = html.fromstring(html_info_text)
-            if tree_info is None:
+            tree = html.fromstring(html_info_text)
+            if tree is None:
                 logger.warning(f"JavDB Info: Failed to parse detail page HTML for {code}.")
                 return None
 
@@ -318,10 +320,10 @@ class SiteJavdb(SiteAvBase):
             entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
 
             # === 2. 메타데이터 파싱 ===
-            id_panel_block = tree_info.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()')
+            id_panel_block = tree.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()')
             base_ui_code = id_panel_block[0].strip().upper() if id_panel_block else ""
             if not base_ui_code:
-                h2_visible_code_node = tree_info.xpath('//h2[@class="title is-4"]/strong[1]/text()')
+                h2_visible_code_node = tree.xpath('//h2[@class="title is-4"]/strong[1]/text()')
                 if h2_visible_code_node:
                     base_ui_code = h2_visible_code_node[0].strip().upper()
             
@@ -344,10 +346,10 @@ class SiteJavdb(SiteAvBase):
                 entity.tag.append(current_ui_code_for_image.split('-',1)[0].upper())
 
             actual_raw_title_text = ""
-            h2_title_node = tree_info.xpath('//h2[@class="title is-4"]')
+            h2_title_node = tree.xpath('//h2[@class="title is-4"]')
             if h2_title_node:
                 full_h2_text = h2_title_node[0].text_content().strip()
-                visible_code_in_h2 = tree_info.xpath('string(//h2[@class="title is-4"]/strong[1])').strip().upper()
+                visible_code_in_h2 = tree.xpath('string(//h2[@class="title is-4"]/strong[1])').strip().upper()
                 if visible_code_in_h2 and full_h2_text.startswith(visible_code_in_h2):
                     actual_raw_title_text = full_h2_text[len(visible_code_in_h2):].strip()
                 else:
@@ -366,7 +368,7 @@ class SiteJavdb(SiteAvBase):
                 '發行': 'publisher', 'publisher': 'publisher', '系列': 'series', 'series': 'series', '評分': 'rating', 
                 'rating': 'rating', '類別': 'tags', 'tags': 'tags', '演員': 'actor(s)', 'actor(s)': 'actor(s)'
             }
-            panel_blocks = tree_info.xpath('//nav[contains(@class, "movie-panel-info")]/div[contains(@class,"panel-block")]')
+            panel_blocks = tree.xpath('//nav[contains(@class, "movie-panel-info")]/div[contains(@class,"panel-block")]')
             for block in panel_blocks:
                 strong_tag_list = block.xpath('./strong/text()')
                 if not strong_tag_list: continue
@@ -425,79 +427,16 @@ class SiteJavdb(SiteAvBase):
             if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
                 entity.plot = entity.tagline
 
-            # === 3. 이미지 소스 결정 및 관계 처리 ===
+            # === 3. 이미지 처리 위임 ===
+            # JavDB는 PS가 없으므로 ps_url_from_cache는 항상 None
+            ps_url_from_search_cache = None
+            raw_image_urls = cls.__img_urls(tree)
             
-            pl_url = None
-            main_cover_img_src_nodes = tree_info.xpath('//div[@class="column column-video-cover"]//img[@class="video-cover"]/@src')
-            if main_cover_img_src_nodes:
-                pl_url_raw = main_cover_img_src_nodes[0].strip()
-                if pl_url_raw.startswith("//"): pl_url = "https:" + pl_url_raw
-                else: pl_url = pl_url_raw
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
 
-            arts_urls = [] 
-            sample_image_container = tree_info.xpath('//div[contains(@class, "preview-images")]')
-            if sample_image_container:
-                for art_link_raw in sample_image_container[0].xpath('./a[@class="tile-item"]/@href'):
-                    art_full_url_raw = art_link_raw.strip()
-                    if art_full_url_raw:
-                        if art_full_url_raw.startswith("//"): arts_urls.append("https:" + art_full_url_raw)
-                        else: arts_urls.append(art_full_url_raw)
-
-            valid_pl_url = pl_url
-            
-            final_image_sources = {
-                'poster_source': None,
-                'poster_mode': None,
-                'landscape_source': None,
-                'arts': [],
-            }
-
-            if valid_pl_url:
-                final_image_sources['landscape_source'] = valid_pl_url
-
-                forced_crop_mode_for_this_item = None
-                if hasattr(entity, 'ui_code') and entity.ui_code:
-                    label_from_ui_code_for_settings = cls.get_label_from_ui_code(entity.ui_code)
-                    if label_from_ui_code_for_settings:
-                        for line in cls.config['crop_mode']:
-                            parts = [x.strip() for x in line.split(":", 1)]
-                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code_for_settings and parts[1].lower() in ["r", "l", "c"]:
-                                forced_crop_mode_for_this_item = parts[1].lower()
-                                break
-
-                is_vr_content = (entity.tagline or "").upper().startswith(("[VR]", "【VR】"))
-
-                effective_crop_mode_to_try = forced_crop_mode_for_this_item
-                if effective_crop_mode_to_try:
-                    final_image_sources['poster_source'] = valid_pl_url
-                    final_image_sources['poster_mode'] = f"crop_{effective_crop_mode_to_try}"
-                    
-                elif cls.is_portrait_high_quality_image(valid_pl_url):
-                    final_image_sources['poster_source'] = valid_pl_url
-                elif is_vr_content and arts_urls and cls.is_portrait_high_quality_image(arts_urls[0]):
-                    final_image_sources['poster_source'] = arts_urls[0]
-                else:
-                    processed_source, rec_crop, _ = cls.get_javdb_poster_from_pl_local(valid_pl_url, entity.ui_code)
-                    if processed_source:
-                        final_image_sources['poster_source'] = valid_pl_url
-                        final_image_sources['poster_mode'] = f"crop_{rec_crop}"
-                        if isinstance(processed_source, str) and os.path.basename(processed_source).startswith("javdb_temp_poster_"):
-                            temp_poster_file_to_clean = processed_source
-
-            if arts_urls and cls.config['max_arts'] > 0:
-                used_for_thumb = set()
-                if final_image_sources['landscape_source']: 
-                    used_for_thumb.add(final_image_sources['landscape_source'])
-                if final_image_sources['poster_source'] and isinstance(final_image_sources['poster_source'], str) and final_image_sources['poster_source'].startswith("http"):
-                    used_for_thumb.add(final_image_sources['poster_source'])
-                final_image_sources['arts'] = [art for art in arts_urls if art and art not in used_for_thumb][:cls.config['max_arts']]
-
-            # === 4. 최종 후처리 위임 ===
-            cls.finalize_images_for_entity(entity, final_image_sources)
-
-            # === 5. 예고편 및 Shiroutoname 보정 처리 ===
+            # === 4. 예고편 및 Shiroutoname 보정 처리 ===
             if cls.config['use_extras']:
-                trailer_source_tag = tree_info.xpath('//video[@id="preview-video"]/source/@src')
+                trailer_source_tag = tree.xpath('//video[@id="preview-video"]/source/@src')
                 if trailer_source_tag:
                     trailer_url_raw = trailer_source_tag[0].strip()
                     if trailer_url_raw:
@@ -521,6 +460,32 @@ class SiteJavdb(SiteAvBase):
                 except Exception as e_remove:
                     logger.error(f"JavDB: Failed to remove temp poster file: {e_remove}")
 
+
+    @classmethod
+    def __img_urls(cls, tree):
+        ret = {'ps': None, 'pl': None, 'arts': [], 'specific_poster_candidates': []}
+        try:
+            # PL (메인 커버)
+            pl_nodes = tree.xpath('//div[@class="column column-video-cover"]//img[@class="video-cover"]/@src')
+            if pl_nodes:
+                pl_url = pl_nodes[0].strip()
+                ret['pl'] = "https:" + pl_url if pl_url.startswith("//") else pl_url
+            
+            # Arts (샘플 이미지)
+            arts_nodes = tree.xpath('//div[contains(@class, "preview-images")]/a[@class="tile-item"]/@href')
+            arts_urls = ["https:" + href if href.startswith("//") else href for href in arts_nodes]
+            ret['arts'] = list(dict.fromkeys(arts_urls))
+            
+            # specific_poster_candidates
+            # JavDB는 VR 콘텐츠의 경우 첫 번째 샘플 이미지가 포스터일 수 있음
+            if ret['arts']:
+                ret['specific_poster_candidates'].append(ret['arts'][0])
+        except Exception as e:
+            logger.error(f"JavDB __img_urls Error: {e}")
+            
+        return ret
+
+
     # endregion INFO
     ################################################
     
@@ -539,74 +504,6 @@ class SiteJavdb(SiteAvBase):
             return ui_code_upper
 
 
-    @classmethod
-    def get_javdb_poster_from_pl_local(cls, pl_url: str, original_code_for_log: str = "unknown", proxy_url: str = None):
-        """
-        JavDB용으로 PL 이미지를 특별 처리하여 포스터로 사용할 임시 파일 경로와 추천 crop_mode를 반환합니다.
-        - PL 이미지의 aspect ratio를 확인합니다.
-        - 1.8 이상 (가로로 매우 김): 오른쪽 절반을 잘라 임시 파일로 저장하고, 추천 crop_mode는 'c' (센터).
-        - 1.8 미만 (일반 가로): 이 경우에는 이미지 처리를 하지 않고, 원본 URL과 crop 'r'을 반환합니다.
-        - 성공 시 (임시 파일 경로 또는 원본 URL, 추천 crop_mode, 원본 PL URL), 실패 시 (None, None, None) 반환.
-        """
-        try:
-            # logger.debug(f"JavDB Poster Util: Trying get_javdb_poster_from_pl_local for pl_url='{pl_url}', code='{original_code_for_log}'")
-            if not pl_url:
-                return None, None, None
-
-            pl_image_original = cls.imopen(pl_url)
-            if pl_image_original is None:
-                logger.debug(f"JavDB Poster Util: Failed to open pl_image_original from '{pl_url}'.")
-                return None, None, None
-            
-            pl_width, pl_height = pl_image_original.size
-            aspect_ratio = pl_width / pl_height if pl_height > 0 else 0
-            # logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height})")
-
-            if aspect_ratio >= 1.8: # 가로로 매우 긴 이미지만 처리
-                logger.debug(f"JavDB Poster Util: PL is very wide (ratio {aspect_ratio:.2f}). Processing right-half.")
-                right_half_box = (pl_width / 2, 0, pl_width, pl_height)
-                try:
-                    right_half_img_obj = pl_image_original.crop(right_half_box)
-                    if right_half_img_obj:
-                        # 임시 파일로 저장
-                        img_format = right_half_img_obj.format if right_half_img_obj.format else pl_image_original.format
-                        if not img_format: img_format = "JPEG"
-                        ext = img_format.lower().replace("jpeg", "jpg")
-                        if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
-                        
-                        temp_filename = f"javdb_temp_poster_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
-                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                        
-                        save_params = {}
-                        if ext in ['jpg', 'webp']: save_params['quality'] = 95
-                        elif ext == 'png': save_params['optimize'] = True
-
-                        img_to_save = right_half_img_obj
-                        if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
-                            img_to_save = img_to_save.convert('RGB')
-                        
-                        img_to_save.save(temp_filepath, **save_params)
-                        logger.debug(f"JavDB Poster Util: Saved processed image to temp file: {temp_filepath}")
-                        
-                        pl_image_original.close() # 원본 이미지 닫기
-                        right_half_img_obj.close() # 잘라낸 이미지 닫기
-                        
-                        return temp_filepath, 'c', pl_url # 임시 파일 경로, 추천 크롭 'c', 원본 pl_url 반환
-                    else:
-                        logger.debug("JavDB Poster Util: Cropping right-half returned None. Using original PL.")
-                except Exception as e_process:
-                    logger.error(f"JavDB Poster Util: Error processing/saving wide image: {e_process}. Using original PL.")
-            
-            # 1.8 미만 비율 또는 처리 실패 시, PIL 객체를 닫고 원본 URL 반환
-            pl_image_original.close()
-            return pl_url, 'r', pl_url
-
-        except Exception as e:
-            logger.exception(f"JavDB Poster Util: Error in get_javdb_poster_from_pl_local: {e}")
-            if 'pl_image_original' in locals() and pl_image_original:
-                pl_image_original.close()
-            return None, None, None
 
     ################################################
     # region SiteAvBase 메서드 오버라이드
@@ -620,6 +517,7 @@ class SiteJavdb(SiteAvBase):
             "maintain_series_number_labels": db.get_list(f"jav_censored_{cls.site_name}_maintain_series_number_labels", ","),
         })
         cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
+
 
     # endregion SiteAvBase 메서드 오버라이드
     ################################################

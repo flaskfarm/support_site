@@ -16,6 +16,7 @@ class SiteJav321(SiteAvBase):
     site_name = "jav321"
     site_char = "T"
     module_char = "C"
+
     default_headers = SiteAvBase.base_default_headers.copy()
     default_headers.update({'Referer': SITE_BASE_URL + '/'})
     _ps_url_cache = {} 
@@ -300,132 +301,16 @@ class SiteJav321(SiteAvBase):
             if not entity.tagline and entity.title: entity.tagline = entity.title
             if not entity.plot and entity.tagline: entity.plot = entity.tagline 
             
-            # === 3. 이미지 소스 결정 및 관계 처리 ===
-            
-            # --- 3a. 원본 이미지 URL 파싱 ---
-            img_urls_from_page = cls.__img_urls(tree)
-            ps_from_detail_page = img_urls_from_page.get('ps')
-            pl_from_detail_page = img_urls_from_page.get('pl')
-            all_arts_from_page = img_urls_from_page.get('arts', [])
-            
-            # 로컬파일로 저장하는 로직이 없다.
-            # 항상 none과 비교하는가???????????
-
-            # --- 플레이스홀더 이미지 경로 설정 ---
-            now_printing_path = None
-            #if use_image_server and image_server_local_path:
-            #    now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
-            #    if not os.path.exists(now_printing_path):
-            #        now_printing_path = None
-
-            # --- 플레이스홀더를 제외한 유효한 이미지 후보군 생성 ---
+            # === 3. 이미지 처리 위임 ===
             ps_url_from_search_cache = cls._ps_url_cache.get(code)
-
-            valid_ps_candidate = None
-
-            if ps_from_detail_page and not (now_printing_path and cls.are_images_visually_same(ps_from_detail_page, now_printing_path)):
-                valid_ps_candidate = ps_from_detail_page
-            elif ps_url_from_search_cache and not (now_printing_path and cls.re_images_visually_same(ps_url_from_search_cache, now_printing_path)):
-                valid_ps_candidate = ps_url_from_search_cache
             
-            valid_pl_candidate = None
-            if pl_from_detail_page and not (now_printing_path and cls.are_images_visually_same(pl_from_detail_page, now_printing_path)):
-                valid_pl_candidate = pl_from_detail_page
-
-            # --- 3b. 최종 소스로 사용할 변수 초기화 ---
-            final_image_sources = {
-                'poster_source': None,
-                'poster_mode': None,
-                'landscape_source': None,
-                'arts': [],
-            }
+            # 3-1. 원본 이미지 URL 목록 수집
+            raw_image_urls = cls.__img_urls(tree)
             
-            # --- 3c. 랜드스케이프 소스 결정 ---
-            if valid_pl_candidate:
-                final_image_sources['landscape_source'] = valid_pl_candidate
+            # 3-2. 공통 처리 함수에 모든 것을 위임하고, 업데이트된 entity를 받음
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
 
-            # --- 3d. 포스터 소스 결정 ---
-            apply_ps_to_poster_for_this_item = False
-            forced_crop_mode_for_this_item = None
-            if hasattr(entity, 'ui_code') and entity.ui_code:
-                label_from_ui_code = cls.get_label_from_ui_code(entity.ui_code)
-                if label_from_ui_code:
-                    if cls.config['ps_force_labels_set'] and ps_from_detail_page:
-                        if label_from_ui_code in cls.config['ps_force_labels_set']: 
-                            apply_ps_to_poster_for_this_item = True
-                    if cls.config['crop_mode']:
-                        for line in cls.config['crop_mode']:
-                            parts = [x.strip() for x in line.split(":", 1)]
-                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in ["r", "l", "c"]:
-                                forced_crop_mode_for_this_item = parts[1].lower(); 
-                                break
-            
-            if forced_crop_mode_for_this_item and valid_pl_candidate:
-                final_image_sources['poster_source'] = valid_pl_candidate
-                final_image_sources['poster_mode'] = f"crop_{forced_crop_mode_for_this_item}"
-            elif valid_ps_candidate:
-                if apply_ps_to_poster_for_this_item:
-                    final_image_sources['poster_source'] = valid_ps_candidate
-                else:
-                    # 플레이스홀더 제외한 아트만 후보로 사용
-                    specific_arts = [art for art in all_arts_from_page if art and not (now_printing_path and cls.are_images_visually_same(art, now_printing_path))]
-                    poster_candidates = ([valid_pl_candidate] if valid_pl_candidate else []) + specific_arts
-                    
-                    for candidate in poster_candidates:
-                        tmp1 = cls.is_portrait_high_quality_image(
-                            candidate
-                        )
-                        tmpe2 = cls.is_hq_poster(
-                            valid_ps_candidate, 
-                            candidate, 
-                            sm_source_info=valid_ps_candidate, 
-                            lg_source_info=candidate
-                        )
-                        if tmp1 and tmpe2:
-                            final_image_sources['poster_source'] = candidate
-                            break
-                    if final_image_sources['poster_source'] is None and valid_pl_candidate:
-                        _temp_filepath, _, _ = cls.get_mgs_half_pl_poster_info_local(
-                            valid_ps_candidate, 
-                            valid_pl_candidate, 
-                            do_save=False
-                        )
-                        if _temp_filepath:
-                            mgs_special_poster_filepath = _temp_filepath
-                            final_image_sources['poster_source'] = valid_pl_candidate
-                            final_image_sources['poster_mode'] = f"mgs_half_{_temp_filepath[-5]}"
-                            
-
-                    if final_image_sources['poster_source'] is None:
-                        for candidate in poster_candidates:
-                            crop_pos = cls.has_hq_poster(valid_ps_candidate, candidate)
-                            if crop_pos:
-                                final_image_sources['poster_source'] = candidate
-                                final_image_sources['poster_mode'] = f"crop_{crop_pos}"
-                                break
-                    if final_image_sources['poster_source'] is None:
-                        final_image_sources['poster_source'] = valid_ps_candidate
-
-            # --- 3e. 최종 팬아트 목록 결정 ---
-            if all_arts_from_page and cls.config['max_arts'] > 0:
-                used_for_thumb = set()
-                if final_image_sources['landscape_source']: 
-                    used_for_thumb.add(final_image_sources['landscape_source'])
-                if final_image_sources['poster_source'] and isinstance(final_image_sources['poster_source'], str): 
-                    used_for_thumb.add(final_image_sources['poster_source'])
-                if mgs_special_poster_filepath and valid_pl_candidate: used_for_thumb.add(valid_pl_candidate)
-                
-                # 플레이스홀더 제외 로직 포함
-                final_image_sources['args'] = [
-                    art for art in all_arts_from_page 
-                    if art and art not in used_for_thumb and not (now_printing_path and cls.are_images_visually_same(art, now_printing_path))
-                ][:cls.config['max_arts']]
-
-
-            # === 4. 최종 후처리 위임 ===
-            cls.finalize_images_for_entity(entity, final_image_sources)
-            
-            # === 5. 예고편 및 Shiroutoname 보정 처리 ===
+            # === 4. 예고편 및 Shiroutoname 보정 처리 ===
             if cls.config['use_extras']:
                 try: 
                     trailer_xpath = '//*[@id="vjs_sample_player"]/source/@src'
@@ -460,71 +345,58 @@ class SiteJav321(SiteAvBase):
 
     @classmethod
     def __img_urls(cls, tree):
-        img_urls = {'ps': "", 'pl': "", 'arts': []}
-        
         try:
-            # 1. PS 이미지 추출 (src 우선, 없으면 onerror)
-            ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img'
-            ps_img_node = tree.xpath(ps_xpath)
+            # 1. 페이지에서 원본 URL 수집
+            raw_ps_url, raw_pl_url = "", ""
+            ps_img_node = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img')
             if ps_img_node:
-                src_val = ps_img_node[0].attrib.get('src')
-                onerror_val = ps_img_node[0].attrib.get('onerror')
-                
-                url_candidate_ps = None
-                if src_val and src_val.strip(): # src 값 우선
-                    url_candidate_ps = cls._process_jav321_url_from_attribute(src_val)
-                if not url_candidate_ps and onerror_val: # src 없거나 처리 실패 시 onerror
-                    url_candidate_ps = cls._process_jav321_url_from_attribute(onerror_val)
-                
-                if url_candidate_ps: 
-                    img_urls['ps'] = url_candidate_ps
-                    logger.debug(f"Jav321 ImgUrls: PS URL='{img_urls['ps']}' (From src: {bool(src_val and src_val.strip() and img_urls['ps'] == cls._process_jav321_url_from_attribute(src_val))})")
-                else: logger.warning(f"Jav321 ImgUrls: PS URL not found.")
-            else: logger.warning(f"Jav321 ImgUrls: PS tag not found.")
+                raw_ps_url = ps_img_node[0].attrib.get('src') or ps_img_node[0].attrib.get('onerror', '')
 
-            # 2. PL 이미지 추출 (사이드바 첫번째, src 우선)
-            pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img'
-            pl_img_node = tree.xpath(pl_xpath)
+            pl_img_node = tree.xpath('/html/body/div[2]/div[2]/div[1]/p/a/img')
             if pl_img_node:
-                src_val = pl_img_node[0].attrib.get('src')
-                onerror_val = pl_img_node[0].attrib.get('onerror')
-                
-                url_candidate_pl = None
-                if src_val and src_val.strip():
-                    url_candidate_pl = cls._process_jav321_url_from_attribute(src_val)
-                if not url_candidate_pl and onerror_val:
-                    url_candidate_pl = cls._process_jav321_url_from_attribute(onerror_val)
+                raw_pl_url = pl_img_node[0].attrib.get('src') or pl_img_node[0].attrib.get('onerror', '')
 
-                if url_candidate_pl:
-                    img_urls['pl'] = url_candidate_pl
-                    logger.debug(f"Jav321 ImgUrls: PL URL='{img_urls['pl']}' (From src: {bool(src_val and src_val.strip() and img_urls['pl'] == cls._process_jav321_url_from_attribute(src_val))})")
-                else: logger.warning(f"Jav321 ImgUrls: PL (sidebar first) URL not found.")
-            else: logger.warning(f"Jav321 ImgUrls: PL (sidebar first) tag not found.")
+            raw_sample_images = []
+            arts_img_nodes = tree.xpath('/html/body/div[2]/div[2]/div[position()>1]//a[contains(@href, "/snapshot/")]/img')
+            for img_node in arts_img_nodes:
+                raw_sample_images.append(img_node.attrib.get('src') or img_node.attrib.get('onerror', ''))
 
-            # 3. Arts 이미지 추출 (사이드바 두 번째 이후, src 우선)
-            arts_xpath = '/html/body/div[2]/div[2]/div[position()>1]//a[contains(@href, "/snapshot/")]/img'
-            arts_img_nodes = tree.xpath(arts_xpath)
-            temp_arts_list = []
-            if arts_img_nodes:
-                for img_node in arts_img_nodes:
-                    src_val = img_node.attrib.get('src')
-                    onerror_val = img_node.attrib.get('onerror')
-                    
-                    url_candidate_art = None
-                    if src_val and src_val.strip():
-                        url_candidate_art = cls._process_jav321_url_from_attribute(src_val)
-                    if not url_candidate_art and onerror_val:
-                        url_candidate_art = cls._process_jav321_url_from_attribute(onerror_val)
-                    
-                    if url_candidate_art: temp_arts_list.append(url_candidate_art)
-            
-            img_urls['arts'] = list(dict.fromkeys(temp_arts_list)) # 중복 제거
-            
+            # 2. 모든 URL에 _process_jav321_url_from_attribute 적용
+            ps_url = cls._process_jav321_url_from_attribute(raw_ps_url)
+            pl_url = cls._process_jav321_url_from_attribute(raw_pl_url)
+            all_sample_images = [cls._process_jav321_url_from_attribute(url) for url in raw_sample_images if url]
+            all_sample_images = list(dict.fromkeys(all_sample_images))
+
+            # 3. 역할에 맞게 데이터 분류 (중복 제거 포함)
+            thumb_candidates = set()
+            if pl_url: thumb_candidates.add(pl_url)
+
+            specific_poster_candidates = []
+            if all_sample_images:
+                first_art = all_sample_images[0]
+                specific_poster_candidates.append(first_art)
+                thumb_candidates.add(first_art)
+                if len(all_sample_images) > 1 and all_sample_images[-1] != first_art:
+                    last_art = all_sample_images[-1]
+                    specific_poster_candidates.append(last_art)
+                    thumb_candidates.add(last_art)
+
+            pure_arts = [art for art in all_sample_images if art and art not in thumb_candidates]
+
+            # 4. 최종 결과 반환
+            ret = {
+                "ps": ps_url, "pl": pl_url,
+                "specific_poster_candidates": specific_poster_candidates,
+                "arts": pure_arts
+            }
+            logger.debug(f"Jav321 __img_urls collected: PS='{ret['ps']}', PL='{ret['pl']}', ...")
+            return ret
+
         except Exception as e_img_extract:
             logger.exception(f"Jav321 ImgUrls: Error extracting image URLs: {e_img_extract}")
-        
-        logger.debug(f"Jav321 ImgUrls Final: PS='{img_urls['ps']}', PL='{img_urls['pl']}', Arts({len(img_urls['arts'])})='{img_urls['arts'][:3]}...'")
-        return img_urls
+            return {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
+
+
 
     # endregion INFO
     ################################################
@@ -632,35 +504,47 @@ class SiteJav321(SiteAvBase):
     @classmethod
     def _process_jav321_url_from_attribute(cls, url_attribute_value):
         """
-        img 태그의 src 또는 onerror 속성값에서 Jav321 관련 URL을 추출하고 처리합니다.
-        onerror의 경우 "this.src='...'" 패턴을 파싱합니다.
-        반환값은 소문자화, https 변환된 URL이거나, 유효하지 않으면 None입니다.
+        img 태그 속성값에서 URL을 추출하고, 중복 슬래시(//)를 보존하여 반환합니다.
         """
         if not url_attribute_value:
-            return None
+            return "" # None 대신 빈 문자열 반환하여 타입 일관성 유지
         
         raw_url = ""
-        if "this.src='" in url_attribute_value: # onerror 형태
+        if "this.src='" in url_attribute_value:
             url_match = re.search(r"this\.src='([^']+)'", url_attribute_value)
             if url_match:
                 raw_url = url_match.group(1).strip()
-        else: # src 형태 (또는 onerror가 아니지만 URL일 수 있는 경우)
+        else:
             raw_url = url_attribute_value.strip()
 
         if not raw_url:
-            return None
+            return ""
 
-        # jav321.com 또는 pics.dmm.co.jp 등의 유효한 도메인인지 체크 (선택적)
-        # if not ("jav321.com" in raw_url or "pics.dmm.co.jp" in raw_url):
-        #     logger.debug(f"Jav321 URL Process: Skipping non-target domain URL: {raw_url}")
-        #     return None
-
-        processed_url = raw_url.lower()
-        if processed_url.startswith("http://"):
-            processed_url = "https://" + processed_url[len("http://"):]
-        # //netloc//path 형태의 더블 슬래시는 .lower()나 replace에 의해 변경되지 않음.
+        # 프로토콜 보장
+        if raw_url.startswith("//"):
+            raw_url = "https:" + raw_url
         
+        # <<-- START: 중복 슬래시 보존 로직 -->>
+        # requests나 urlparse를 사용하면 //가 /로 합쳐지므로, 단순 문자열 처리로만 구성한다.
+        # 예: http://.../path//subpath -> http://.../path//subpath (유지)
+        # 예: http://...//path/subpath -> http://...//path/subpath (유지)
+        # 이미 올바른 형식이므로 특별한 처리가 필요 없음.
+        # 단, pics.dmm.co.jp/digital... 형태의 URL이 //를 필요로 한다면 명시적 처리가 필요.
+        # 로그를 보면 PL URL에 //가 있으므로, 해당 패턴에 대해서만 보장해준다.
+        if 'pics.dmm.co.jp/digital/video' in raw_url:
+            # http(s)://pics.dmm.co.jp/digital/video -> http(s)://pics.dmm.co.jp//digital/video
+            processed_url = raw_url.replace(
+                'pics.dmm.co.jp/digital/video', 
+                'pics.dmm.co.jp//digital/video'
+            )
+            # 만약 이미 //가 있다면 중복되지 않도록 방지
+            processed_url = processed_url.replace('//digital//video', '//digital/video')
+        else:
+            processed_url = raw_url
+        # <<-- END: 중복 슬래시 보존 로직 -->>
+
         return processed_url
+
 
     # endregion UTILITY METHODS
     ################################################
@@ -685,12 +569,6 @@ class SiteJav321(SiteAvBase):
         cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
         cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config['ps_force_labels_list'] if lbl.strip()}
 
-    
-    @classmethod
-    def jav_image(cls, url, mode=None):
-        if mode and mode.startswith("mgs_half"):
-            return cls.pil_to_response(cls.get_mgs_half_pl_poster(url, int(mode[-1])))
-        return super().default_jav_image(url, mode)
 
     # endregion SiteAvBase 메서드 오버라이드
     ################################################

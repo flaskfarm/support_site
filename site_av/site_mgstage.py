@@ -196,7 +196,6 @@ class SiteMgstage(SiteAvBase):
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"; entity.tag = []
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
 
-        ui_code_for_image = ""
         mgs_special_poster_filepath = None
 
         try:
@@ -231,7 +230,6 @@ class SiteMgstage(SiteAvBase):
                         else:
                             final_ui_code = official_code
                     
-                    ui_code_for_image = final_ui_code.lower()
                     entity.ui_code = final_ui_code
                     entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
                     label_for_tag = official_code.split('-', 1)[0]
@@ -287,158 +285,83 @@ class SiteMgstage(SiteAvBase):
                         votes = int(rating_match.group("vote"))
                         entity.ratings = [EntityRatings(rating_val, max=5, name=cls.site_name, votes=votes)]
                     except Exception: pass
-            
-            if not ui_code_for_image:
+
+            if not entity.ui_code:
                 logger.error(f"MGStage ({cls.module_char}): CRITICAL - Failed to parse identifier for {code}.")
                 return None
+        except Exception as e_meta:
+            logger.exception(f"MGStage ({cls.module_char}): Meta parsing error for {code}: {e_meta}")
+            return None
 
-            # === 3. 이미지 소스 결정 및 관계 처리 ===
-            
-            # --- 3a. 원본 이미지 URL 파싱 ---
-            img_urls_from_page = cls.__img_urls(tree)
-            pl_url = img_urls_from_page.get('pl')
-            all_arts = img_urls_from_page.get('arts', [])
-            
-            # --- 3b. 최종 소스로 사용할 변수 초기화 ---
-            final_image_sources = {
-                'poster_source': None,
-                'poster_mode': None,
-                'landscape_source': None,
-                'arts': [],
-            }
+        # 3. 이미지 처리: 모든 이미지 관련 로직을 공통 메서드에 위임
+        try:
+            # 3-1. 원본 이미지 URL 목록 수집
+            raw_image_urls = cls.__img_urls(tree)
 
-            # --- 3c. 랜드스케이프 소스 결정 ---
-            if pl_url:
-                final_image_sources['landscape_source'] = pl_url
-
-            # --- 3d. 포스터 소스 결정 ---
-            apply_ps_to_poster_for_this_item = False
-            forced_crop_mode_for_this_item = None
-            if hasattr(entity, 'ui_code') and entity.ui_code:
-                label_from_ui_code = cls.get_label_from_ui_code(entity.ui_code)
-                if label_from_ui_code:
-                    if cls.config['ps_force_labels_set']:
-                        ps_force_labels_set = {lbl.strip().upper() for lbl in cls.config['ps_force_labels_set'].split(',') if lbl.strip()}
-                        if label_from_ui_code in ps_force_labels_set:
-                            apply_ps_to_poster_for_this_item = True
-                    if cls.config['crop_mode']:
-                        for line in cls.config['crop_mode']:
-                            parts = [x.strip() for x in line.split(":", 1)]
-                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in ["r", "l", "c"]:
-                                forced_crop_mode_for_this_item = parts[1].lower(); break
-            
-            if forced_crop_mode_for_this_item and pl_url:
-                final_image_sources['poster_source'] = pl_url
-                final_image_sources['poster_mode'] =  f"crop_{forced_crop_mode_for_this_item}"
-            elif ps_url_from_search_cache:
-                if apply_ps_to_poster_for_this_item:
-                    final_image_sources['poster_source'] = ps_url_from_search_cache
-                else:
-                    specific_arts_candidates = []
-                    if all_arts:
-                        if all_arts[0]: specific_arts_candidates.append(all_arts[0])
-                        if len(all_arts) > 1 and all_arts[-1] != all_arts[0]: specific_arts_candidates.append(all_arts[-1])
-                    
-                    poster_candidates = ([pl_url] if pl_url else []) + specific_arts_candidates
-                    for candidate in poster_candidates:
-                        _1 = cls.is_portrait_high_quality_image(candidate)
-                        _2 = cls.is_hq_poster(
-                            ps_url_from_search_cache,
-                            candidate,
-                            sm_source_info=ps_url_from_search_cache,
-                            lg_source_info=candidate
-                        )
-                        if _1 and _2:
-                            final_image_sources['poster_source'] = candidate
-                            break
-                    if final_image_sources['poster_source'] is None and pl_url:
-                        temp_filepath, _, _ = cls.get_mgs_half_pl_poster_info_local(ps_url_from_search_cache, pl_url)
-                        if temp_filepath and os.path.exists(temp_filepath):
-                            mgs_special_poster_filepath = temp_filepath
-                            final_image_sources['poster_source'] = mgs_special_poster_filepath
-                    if final_image_sources['poster_source'] is None:
-                        for candidate in poster_candidates:
-                            crop_pos = cls.has_hq_poster(ps_url_from_search_cache, candidate)
-                            if crop_pos:
-                                final_image_sources['poster_source'] = candidate
-                                final_image_sources['poster_mode'] = f"crop_{crop_pos}"
-                                
-                                break
-
-                    if final_image_sources['poster_source'] is None:
-                        final_image_sources['poster_source'] = ps_url_from_search_cache
-            else:
-                logger.warning(f"[{cls.site_name} Info] No PS url found. Poster cannot be determined.")
-
-            # --- 3e. 최종 팬아트 목록 결정 (아트 처리 및 변수 처리) ---
-            if all_arts and cls.config['max_arts'] > 0:
-                used_for_thumb = set()
-                if final_image_sources['landscape_source']:
-                    used_for_thumb.add(final_image_sources['landscape_source'])
-                if final_image_sources['poster_source'] and isinstance(final_image_sources['poster_source'], str): used_for_thumb.add(final_image_sources['poster_source'])
-                if mgs_special_poster_filepath and pl_url: used_for_thumb.add(pl_url)
-                final_image_sources['arts'] = [art for art in all_arts if art and art not in used_for_thumb][:cls.config['max_arts']]
-
-            logger.debug(f"MGStage (Decision Phase): Final Poster='{str(final_image_sources['poster_source'])[:100]}...', Landscape='{final_image_sources['landscape_source']}', Fanarts to process({len(final_image_sources['arts'])})")
-
-            # === 4. 최종 후처리 위임 ===
-            
-
-            cls.finalize_images_for_entity(entity, final_image_sources)
-
-            # === 5. 예고편 및 Shiroutoname 보정 처리 ===
-            if cls.config['use_extras']:
-                try:
-                    trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
-                    if trailer_sample_btn:
-                        pid_trailer = trailer_sample_btn[0].split("/")[-1]
-                        api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
-                        api_headers_trailer = cls.default_headers.copy(); api_headers_trailer['Referer'] = url 
-                        api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
-                        res_json_trailer = cls.get_response(api_url_trailer, headers=api_headers_trailer).json()
-                        if res_json_trailer and res_json_trailer.get("url"):
-                            trailer_base = res_json_trailer["url"].split(".ism")[0]; 
-                            trailer_final_url = trailer_base + ".mp4"
-                            trailer_final_url = cls.make_video_url(trailer_final_url)
-                            trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
-                            entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
-                except Exception as e_trailer_proc_dvd:
-                    logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
-
-            if entity.originaltitle:
-                try: 
-                    entity = cls.shiroutoname_info(entity)
-                except Exception as e_shirouto_proc: 
-                    logger.exception(f"MGStage (Ama): Shiroutoname error: {e_shirouto_proc}")
-            
-            logger.info(f"MGStage ({cls.module_char}): __info finished for {code}. UI Code: {ui_code_for_image}")
-            return entity
-
-        except Exception as e:
-            logger.exception(f"MGStage ({cls.module_char}): Major error during info processing for {code}: {e}")
-            return None # 예외 발생 시 None 반환
+            # 3-2. 공통 처리 함수에 모든 것을 위임하고, 업데이트된 entity를 받음
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
         
-        finally:
-            # === 6. 임시 파일 정리 ===
-            if mgs_special_poster_filepath and os.path.exists(mgs_special_poster_filepath):
-                try:
-                    os.remove(mgs_special_poster_filepath)
-                    logger.debug(f"MGStage ({cls.module_char}): Removed MGS-style temp poster file: {mgs_special_poster_filepath}")
-                except Exception as e_remove_temp:
-                    logger.error(f"MGStage ({cls.module_char}): Failed to remove MGS-style temp poster file {mgs_special_poster_filepath}: {e_remove_temp}")
+        except Exception as e:
+            logger.exception(f"MGStage ({cls.module_char}): Error during image processing delegation for {code}: {e}")
+
+
+        # 4. 예고편 및 Shiroutoname 보정 처리
+        if cls.config['use_extras']:
+            try:
+                trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
+                if trailer_sample_btn:
+                    pid_trailer = trailer_sample_btn[0].split("/")[-1]
+                    api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
+                    api_headers_trailer = cls.default_headers.copy(); api_headers_trailer['Referer'] = url 
+                    api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
+                    res_json_trailer = cls.get_response(api_url_trailer, headers=api_headers_trailer).json()
+                    if res_json_trailer and res_json_trailer.get("url"):
+                        trailer_base = res_json_trailer["url"].split(".ism")[0]; 
+                        trailer_final_url = trailer_base + ".mp4"
+                        trailer_final_url = cls.make_video_url(trailer_final_url)
+                        trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
+                        entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
+            except Exception as e_trailer_proc_dvd:
+                logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
+
+        if entity.originaltitle:
+            try: 
+                entity = cls.shiroutoname_info(entity)
+            except Exception as e_shirouto_proc: 
+                logger.exception(f"MGStage (Ama): Shiroutoname error: {e_shirouto_proc}")
+            
+        logger.info(f"MGStage ({cls.module_char}): __info finished for {code}. UI Code: {entity.ui_code}")
+        return entity
 
 
     @classmethod
     def __img_urls(cls, tree):
-        pl = tree.xpath('//*[@id="package"]/a/@href')
-        pl = pl[0] if pl else ""
+        pl_nodes = tree.xpath('//*[@id="package"]/a/@href')
+        pl_url = pl_nodes[0] if pl_nodes else ""
+        
+        all_sample_images = tree.xpath('//*[@id="sample-photo"]//ul/li/a/@href')
+        
+        # pl에서 파생된 pf가 있다면, 샘플 목록의 맨 앞에 추가
+        if pl_url and "pb_e_" in pl_url:
+            potential_pf = pl_url.replace("pb_e_", "pf_e_")
+            if potential_pf not in all_sample_images:
+                all_sample_images.insert(0, potential_pf)
 
-        arts = tree.xpath('//*[@id="sample-photo"]//ul/li/a/@href')
-        if pl and "pb_e_" in pl:
-            potential_pf = pl.replace("pb_e_", "pf_e_")
-            if potential_pf not in arts:
-                arts.insert(0, potential_pf)
-        return {"pl": pl, "arts": arts}
+        specific_poster_candidates = []
+        if all_sample_images:
+            specific_poster_candidates.append(all_sample_images[0])
+            if len(all_sample_images) > 1 and all_sample_images[-1] != all_sample_images[0]:
+                specific_poster_candidates.append(all_sample_images[-1])
+        
+        ret = {
+            "pl": pl_url,
+            "specific_poster_candidates": specific_poster_candidates,
+            "arts": all_sample_images
+        }
+
+        logger.debug(f"MGStage __img_urls collected: PL='{ret['pl']}', SpecificCandidates={len(ret['specific_poster_candidates'])}, Total Sample Arts={len(ret['arts'])}")
+        return ret
+
 
     # endregion INFO
     ################################################

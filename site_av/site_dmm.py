@@ -448,9 +448,6 @@ class SiteDmm(SiteAvBase):
     @classmethod
     def __info(cls, code):
 
-        use_image_server = False
-        image_server_local_path = None
-
         cached_data = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = None # kwargs.get('ps_url')
         if not ps_url_from_search_cache:
@@ -772,147 +769,22 @@ class SiteDmm(SiteAvBase):
             logger.exception(f"DMM Meta parsing error for {code}: {e_meta}")
             return None
 
-        # === 3. 이미지 소스 결정 및 관계 처리 (DMM 고유 로직) ===
+        # === 3. 이미지 처리: 모든 이미지 관련 로직을 공통 메서드에 위임 ===
         try:
-            # --- 3a. 원본 이미지 URL 파싱 ---
-            logger.debug(f"DMM Info: PS url from cache: {ps_url_from_search_cache}")
-
-            now_printing_path = None
-            #if use_image_server and image_server_local_path:
-            #    now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
-            #    if not os.path.exists(now_printing_path): now_printing_path = None
-
+            # 원본 이미지 URL 목록 수집
             raw_image_urls = cls.__img_urls(
                 tree, 
-                content_type=entity.content_type, 
-                now_printing_path=now_printing_path,
+                content_type=entity.content_type,
                 api_data=api_data
             )
-            pl_url = raw_image_urls.get('pl')
-            specific_candidates_on_page = raw_image_urls.get('specific_poster_candidates', []) 
-            other_arts_on_page = raw_image_urls.get('arts', [])
 
-            # --- 3b. 최종 소스로 사용할 변수 초기화 ---
-            final_image_sources = {
-                'poster_source': None,
-                'poster_mode': None,
-                'landscape_source': None,
-                'arts': [],
-            }
+            # 공통 처리 함수에 모든 것을 위임
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
 
-            # --- 3c. 랜드스케이프 소스 결정 ---
-            if pl_url:
-                final_image_sources['landscape_source'] = pl_url
-
-            # --- 3d. 포스터 소스 결정 (DMM 고유의 모든 규칙 적용) ---
-            apply_ps_to_poster_for_this_item = False
-            forced_crop_mode_for_this_item = None
-            if hasattr(entity, 'ui_code') and entity.ui_code:
-                label_from_ui_code = cls.get_label_from_ui_code(entity.ui_code)
-                if label_from_ui_code:
-                    if cls.config['ps_force_labels_list']:
-                        
-                        if label_from_ui_code in cls.config['ps_force_labels_list']:
-                            apply_ps_to_poster_for_this_item = True
-                    if cls.config['crop_mode']:
-                        for line in cls.config['crop_mode']:
-                            parts = [x.strip() for x in line.split(":", 1)]
-                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in ["r", "l", "c"]:
-                                forced_crop_mode_for_this_item = parts[1].lower()
-                                break
-            
-            # 사용자 설정에 의한 crop 모드 적용
-            if forced_crop_mode_for_this_item and pl_url:
-                final_image_sources['poster_source'] = pl_url
-                final_image_sources['poster_mode'] = f"crop_{forced_crop_mode_for_this_item}"
-
-            elif ps_url_from_search_cache:
-                # 사용자 설정. 포스터예외처리
-                if apply_ps_to_poster_for_this_item:
-                    final_image_sources['poster_source'] = ps_url_from_search_cache
-                else:
-                    poster_candidates = ([pl_url] if pl_url else []) + specific_candidates_on_page
-                    for candidate in poster_candidates:
-                        _1 = cls.is_portrait_high_quality_image(candidate)
-                        _2 = cls.is_hq_poster(
-                            ps_url_from_search_cache,
-                            candidate, 
-                            sm_source_info=ps_url_from_search_cache,
-                            lg_source_info=candidate
-                        )
-                        if _1 and _2:
-                            final_image_sources['poster_source'] = candidate
-                            break
-                    if final_image_sources['poster_source'] is None and pl_url:
-                        # by soju. 여길 왜 타는가.. sone-042
-                        try:
-                            pl_img_obj = cls.imopen(pl_url)
-                            if pl_img_obj:
-                                w, h = pl_img_obj.size
-                                if w == 800 and 436 <= h <= 446:
-                                    final_poster_source = pl_img_obj.crop((w - 380, 0, w, h))
-                                    final_image_sources['poster_source'] = pl_url
-                                    final_image_sources['poster_mode'] = "mode_1"
-                        except Exception as e_crop:
-                            logger.error(f"DMM: Error during fixed-size crop: {e_crop}")
-                        finally:
-                            if pl_img_obj:
-                                pl_img_obj.close()
-
-                    if final_image_sources['poster_source'] is None:
-                        for candidate in poster_candidates:
-                            crop_pos = cls.has_hq_poster(ps_url_from_search_cache, candidate)
-                            if crop_pos:
-                                final_image_sources['poster_source'] = candidate
-                                final_image_sources['poster_mode'] = f"crop_{crop_pos}"
-                                break
-
-                    if final_image_sources['poster_source'] is None:
-                        final_image_sources['poster_source'] = ps_url_from_search_cache
-            else:
-                logger.warning(f"[{cls.site_name} Info] No PS url found. Poster cannot be determined by PS-based logic.")
-            
-
-            # --- 3e. 최종 팬아트 목록 결정 (아트 처리 및 변수 처리) ---
-            if other_arts_on_page and cls.config['max_arts'] > 0:
-                used_for_thumb = {url for url in [final_image_sources['poster_source'], final_image_sources['landscape_source']] if isinstance(url, str)}
-                final_image_sources['arts'] = [art for art in other_arts_on_page if art and art not in used_for_thumb][:cls.config['max_arts']]
-
-            logger.debug(f"DMM (Decision Phase): Final Poster='{str(final_image_sources['poster_source'])[:100]}...', Landscape='{final_image_sources['landscape_source']}', Fanarts to process({len(final_image_sources['arts'])})")
-
-            # by soju.
-            # final_image_sources를 만드는 것까지만 각 사이트에서 수행한다.
-            # info에 포함해서 리턴하고 
-            # 메타데이터에서
-            #  - ff이용일경우 url 조합해서 리턴
-            #  - discord, image_server 이용일 경우는 개별 사이트 jav_image를 다시 호출해서
-            #    호출해서 이미지 객체를 받은 다음 처리
-
-            # === 4. 최종 후처리 위임 ===
-            """
-            final_image_sources = {
-                'poster_source': final_poster_source,
-                'poster_crop': final_poster_crop_mode,
-                'landscape_source': final_landscape_source,
-                'arts': arts_urls_for_processing,
-            }
-            image_processing_settings = {
-                'image_mode': image_mode,
-                'proxy_url': proxy_url,
-                'max_arts': max_arts,
-                'ui_code': ui_code_for_image,
-                'use_image_server': use_image_server,
-                'image_server_url': image_server_url,
-                'image_server_local_path': image_server_local_path,
-                'image_path_segment': image_path_segment,
-            }
-            """
-            cls.finalize_images_for_entity(entity, final_image_sources)
-            
         except Exception as e:
-            logger.exception(f"DMM ({entity.content_type}): Error during image processing for {code}: {e}")
+            logger.exception(f"DMM: Error during image processing delegation for {code}: {e}")
 
-        # === 5. 예고편(Extras) 처리 ===
+        # === 4. 예고편(Extras) 처리 ===
 
         if cls.config['use_extras']:
             cls.process_extras(entity, tree, detail_url, api_data)
@@ -920,18 +792,18 @@ class SiteDmm(SiteAvBase):
         logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
         return entity
 
-    
+
     # 이미지 url 얻기
     @classmethod
-    def __img_urls(cls, tree=None, content_type='unknown', now_printing_path=None, api_data=None):
+    def __img_urls(cls, tree=None, content_type='unknown', api_data=None):
         img_urls_dict = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
 
+        # --- API 방식 (videoa/vr) ---
         if api_data:
-            # --- 새로운 방식: videoa/vr은 API JSON에서 이미지 URL 추출 ---
             try:
                 content = api_data['ppvContent']
                 package_image = content.get('packageImage', {})
-                img_urls_dict['pl'] = package_image.get('largeUrl') # landscape (pl.jpg)
+                img_urls_dict['pl'] = package_image.get('largeUrl')
                 
                 arts = []
                 if content.get('sampleImages'):
@@ -949,17 +821,15 @@ class SiteDmm(SiteAvBase):
                 logger.error(f"DMM __img_urls (API): Failed to parse image URLs from JSON: {e}")
                 return img_urls_dict
 
-        # --- 기존 방식: dvd/bluray는 HTML(tree)에서 이미지 URL 추출 ---
+        # --- HTML 파싱 방식 (dvd/bluray) ---
         if tree is None:
             logger.warning("DMM __img_urls (HTML): Tree object is None, cannot parse images.")
             return img_urls_dict
 
         try:
             if content_type == 'dvd' or content_type == 'bluray':
-                # --- DVD/Blu-ray 타입 이미지 추출 로직 ---
                 temp_pl_dvd = ""
                 temp_arts_list_dvd = []
-                seen_high_res_urls = set()
 
                 # 1. 메인 패키지 이미지 (PL 후보)
                 package_li_node = tree.xpath('//ul[@id="sample-image-block"]/li[contains(@class, "layout-sampleImage__item") and .//a[@name="package-image"]][1]')
@@ -972,34 +842,28 @@ class SiteDmm(SiteAvBase):
                             if not thumb_url_pkg.lower().endswith("dummy_ps.gif"):
                                 if not thumb_url_pkg.startswith("http"):
                                     thumb_url_pkg = urljoin(SITE_BASE_URL, thumb_url_pkg)
-
                                 if thumb_url_pkg.endswith("ps.jpg"):
                                     temp_pl_dvd = thumb_url_pkg.replace("ps.jpg", "pl.jpg")
 
-                                if temp_pl_dvd and not (now_printing_path and cls.are_images_visually_same(temp_pl_dvd, now_printing_path)):
-                                    img_urls_dict['pl'] = temp_pl_dvd
-                                    seen_high_res_urls.add(temp_pl_dvd)
-                                    logger.debug(f"DMM __img_urls ({content_type}): Package Image (PL) inferred: {temp_pl_dvd}")
-
-                if not img_urls_dict['pl']: # 위에서 PL 못 찾았으면, 기존 fn-sampleImage-imagebox 방식 시도
+                if temp_pl_dvd:
+                    img_urls_dict['pl'] = temp_pl_dvd
+                else: # 위에서 PL 못 찾았으면, 대체 경로 시도
                     package_img_xpath_alt = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
                     package_img_tags_alt = tree.xpath(package_img_xpath_alt)
                     if package_img_tags_alt:
                         raw_pkg_img_url_alt = package_img_tags_alt[0].strip()
                         if raw_pkg_img_url_alt:
                             candidate_pl_url_alt = ""
-                            if raw_pkg_img_url_alt.startswith("//"): candidate_pl_url_alt = "https:" + raw_pkg_img_url_alt
-                            elif not raw_pkg_img_url_alt.startswith("http"): candidate_pl_url_alt = urljoin(SITE_BASE_URL, raw_pkg_img_url_alt)
-                            else: candidate_pl_url_alt = raw_pkg_img_url_alt
-                            if candidate_pl_url_alt and not (now_printing_path and cls.are_images_visually_same(candidate_pl_url_alt, now_printing_path)):
-                                img_urls_dict['pl'] = candidate_pl_url_alt
-                                seen_high_res_urls.add(candidate_pl_url_alt)
-                                logger.debug(f"DMM __img_urls ({content_type}): Package Image (PL from fn-sampleImage-imagebox) extracted: {img_urls_dict['pl']}.")
+                            if raw_pkg_img_url_alt.startswith("//"):
+                                candidate_pl_url_alt = "https:" + raw_pkg_img_url_alt
+                            elif not raw_pkg_img_url_alt.startswith("http"):
+                                candidate_pl_url_alt = urljoin(SITE_BASE_URL, raw_pkg_img_url_alt)
+                            else:
+                                candidate_pl_url_alt = raw_pkg_img_url_alt
+                            img_urls_dict['pl'] = candidate_pl_url_alt
 
                 # 2. 샘플 이미지에서 Art 추출 (name="sample-image"인 것들)
                 sample_li_nodes = tree.xpath('//ul[@id="sample-image-block"]/li[contains(@class, "layout-sampleImage__item") and .//a[@name="sample-image"]]')
-                logger.debug(f"DMM __img_urls ({content_type}): Found {len(sample_li_nodes)} sample <li> tags for art inference.")
-
                 for li_node in sample_li_nodes:
                     img_tag = li_node.xpath('.//img')
                     if not img_tag: continue
@@ -1013,39 +877,28 @@ class SiteDmm(SiteAvBase):
                         thumb_url = urljoin(SITE_BASE_URL, thumb_url)
                     
                     high_res_candidate_url = None
-                    # 새로운 패턴: .../xxxx-N.jpg -> .../xxxxjp-N.jpg
-                    # 예: https://pics.dmm.co.jp/digital/video/venu00354/venu00354-1.jpg -> .../venu00354jp-1.jpg
                     match_new_pattern = re.search(r'^(.*)-(\d+\.(?:jpg|jpeg|png|webp))$', thumb_url, re.IGNORECASE)
                     if match_new_pattern:
                         base_path_part = match_new_pattern.group(1)
                         numeric_suffix_with_ext = match_new_pattern.group(2)
                         high_res_candidate_url = f"{base_path_part}jp-{numeric_suffix_with_ext}"
-                    
-                    if high_res_candidate_url and high_res_candidate_url not in seen_high_res_urls:
-                        if not (now_printing_path and cls.are_images_visually_same(high_res_candidate_url, now_printing_path)):
-                            temp_arts_list_dvd.append(high_res_candidate_url)
-                            seen_high_res_urls.add(high_res_candidate_url)
-                            # logger.debug(f"DMM DVD/BR Art: Added inferred high-res URL (-N to jp-N): {high_res_candidate_url}")
-                
-                img_urls_dict['arts'] = temp_arts_list_dvd
+
+                    if high_res_candidate_url:
+                        temp_arts_list_dvd.append(high_res_candidate_url)
+
+                # 중복된 URL 제거 후 할당
+                img_urls_dict['arts'] = list(dict.fromkeys(temp_arts_list_dvd))
                 
                 # specific_poster_candidates 설정
-                if temp_arts_list_dvd:
-                    if temp_arts_list_dvd[0] not in img_urls_dict['specific_poster_candidates']:
-                        img_urls_dict['specific_poster_candidates'].append(temp_arts_list_dvd[0])
-                    if len(temp_arts_list_dvd) > 1 and \
-                       temp_arts_list_dvd[-1] != temp_arts_list_dvd[0] and \
-                       temp_arts_list_dvd[-1] not in img_urls_dict['specific_poster_candidates']:
-                        img_urls_dict['specific_poster_candidates'].append(temp_arts_list_dvd[-1])
-                # === DVD/Blu-ray 타입 이미지 추출 로직 끝 ===
+                if img_urls_dict['arts']:
+                    img_urls_dict['specific_poster_candidates'].append(img_urls_dict['arts'][0])
+                    if len(img_urls_dict['arts']) > 1 and img_urls_dict['arts'][-1] != img_urls_dict['arts'][0]:
+                        img_urls_dict['specific_poster_candidates'].append(img_urls_dict['arts'][-1])
 
-            else: 
-                logger.error(f"DMM __img_urls: Unknown content type '{content_type}' for image extraction.")
-        
         except Exception as e_img_urls_main:
             logger.exception(f"DMM __img_urls ({content_type}): General error extracting image URLs: {e_img_urls_main}")
 
-        logger.debug(f"DMM __img_urls ({content_type}) Final: PL='{img_urls_dict.get('pl', '')}', SpecificCandidatesCount={len(img_urls_dict.get('specific_poster_candidates',[]))}, ArtsCount={len(img_urls_dict.get('arts',[]))}.")
+        logger.debug(f"DMM __img_urls ({content_type}) Raw URLs collected: PL='{img_urls_dict.get('pl', '')}', SpecificCandidates={len(img_urls_dict.get('specific_poster_candidates',[]))}, Arts={len(img_urls_dict.get('arts',[]))}.")
         return img_urls_dict
 
     # endregion INFO
@@ -1096,13 +949,13 @@ class SiteDmm(SiteAvBase):
                                 trailer_url_final = video_data["video_url"]
                         except json.JSONDecodeError as e_json_dvd:
                             logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}.")
-            
+
             if trailer_url_final:
                 logger.debug(f"DMM Trailer: Found URL for {code}: {trailer_url_final}")
                 url = cls.make_video_url(trailer_url_final)
                 if url:
                     entity.extras.append(EntityExtra("trailer", trailer_title_for_extra, "mp4", url))
-        
+
         except Exception as e_trailer_main: 
             logger.exception(f"DMM ({entity.content_type}): Main trailer processing error: {e_trailer_main}")
 
@@ -1464,20 +1317,7 @@ class SiteDmm(SiteAvBase):
             "age_verified": False,  # 나이 인증 여부
         })
 
-    @classmethod
-    def jav_image(cls, url, mode=None):
-        if mode == "mode_1":
-            try:
-                pl_img_obj = cls.imopen(url)
-                if pl_img_obj:
-                    w, h = pl_img_obj.size
-                    if w == 800 and 436 <= h <= 446:
-                        ret_obj = pl_img_obj.crop((w - 380, 0, w, h))
-                        return cls.pil_to_response(ret_obj)
-            except Exception as e_crop:
-                logger.error(f"DMM: Error during fixed-size crop: {e_crop}")
-        return super().default_jav_image(url, mode)
-    
+
     # endregion SiteAvBase 메서드 오버라이드
     ################################################
 
