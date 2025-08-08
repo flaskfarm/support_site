@@ -809,7 +809,7 @@ class SiteAvBase:
                         
                         if abs(aspect_ratio - 4/3) < 0.05:
                             im_no_lb = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
-                            processed_im = SiteUtilAv.imcrop(im_no_lb, position='c')
+                            processed_im = SiteUtilAv.imcrop(im_no_lb, position='r')
                             temp_filepath = cls.save_pil_to_temp(processed_im)
                             if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
                             processed_im.close(); im_no_lb.close()
