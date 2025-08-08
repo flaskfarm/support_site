@@ -97,43 +97,67 @@ class SiteAvBase:
 
     @classmethod
     def get_response(cls, url, **kwargs):
-        
+        # 순환 참조를 피하기 위해 함수 내에서 필요한 모듈을 임포트
+        try:
+            from .site_dmm import SiteDmm
+            from .site_mgstage import SiteMgstage
+            # 규칙: {타겟 도메인: 해당 도메인을 처리할 스위치 사이트 모듈 클래스}
+            CONTEXT_SWITCH_RULES = {
+                'dmm.co.jp': SiteDmm,
+                'mgstage.com': SiteMgstage,
+                'r18.com': SiteMgstage,
+            }
+        except ImportError:
+            CONTEXT_SWITCH_RULES = {} # 임포트 실패 시 규칙 비활성화
+
+        # 기본값은 현재 실행 중인 모듈(cls)의 설정을 사용
         proxies = None
         if cls.config and cls.config.get('use_proxy', False):
             proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
 
-        request_headers = kwargs.pop("headers", cls.default_headers)
+        request_headers = kwargs.pop("headers", cls.default_headers.copy())
+
+        # URL을 분석하여 스위치 모듈의 설정이 필요한지 확인
+        for domain, expert_module in CONTEXT_SWITCH_RULES.items():
+            if domain in url:
+                # expert_module이 성공적으로 임포트되었고,
+                # 현재 모듈이 해당 도메인의 스위치가 아닐 경우에만 설정 빌려오기
+                if expert_module and cls.site_name != expert_module.site_name:
+                    logger.debug(f"get_response: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: {url}")
+
+                    # 스위치 모듈의 프록시 설정으로 덮어쓰기
+                    if expert_module.config and expert_module.config.get('use_proxy', False):
+                        proxies = {"http": expert_module.config['proxy_url'], "https": expert_module.config['proxy_url']}
+                    else:
+                        proxies = None
+
+                    # 스위치 모듈의 헤더를 가져와 업데이트 (기존 헤더에 추가/덮어쓰기)
+                    request_headers.update(expert_module.default_headers)
+
+                    # DMM의 경우, Referer와 Cookie를 확실하게 설정
+                    if expert_module.site_name == 'dmm':
+                        request_headers['Referer'] = 'https://www.dmm.co.jp/'
+                        dmm_cookie = expert_module.session.cookies.get('age_check_done', domain='.dmm.co.jp')
+                        if dmm_cookie:
+                            request_headers['Cookie'] = f"age_check_done={dmm_cookie}"
+                break # 첫 번째 일치하는 규칙만 적용
+
         method = kwargs.pop("method", "GET")
         post_data = kwargs.pop("post_data", None)
         if post_data:
             method = "POST"
             kwargs["data"] = post_data
 
-        # TODO: 호출하는 쪽에서 넣도록 변경
-        if "javbus.com" in url:
-            request_headers["referer"] = "https://www.javbus.com/"
-
         try:
+            # 요청의 주체는 항상 현재 모듈(cls)의 세션
             res = cls.session.request(method, url, headers=request_headers, proxies=proxies, **kwargs)
             return res
+        except requests.exceptions.RequestException as e:
+            logger.error(f"get_response: RequestException for URL='{url}'. Error: {e}")
+            logger.error(traceback.format_exc())
+            return None
 
-        except requests.exceptions.Timeout as e_timeout:
-            # 에러 로그에 사용하려 했던 프록시 정보 (proxy_url_from_arg)를 명시
-            logger.error(f"SiteUtil.get_response: Timeout for URL='{url}'. Attempted Proxy (from arg)='{cls.config['proxy_url']}'. Error: {e_timeout}")
-            return None
-        except requests.exceptions.ConnectionError as e_conn:
-            logger.error(f"SiteUtil.get_response: ConnectionError for URL='{url}'. Attempted Proxy (from arg)='{cls.config['proxy_url']}'. Error: {e_conn}")
-            return None
-        except requests.exceptions.RequestException as e_req:
-            logger.error(f"SiteUtil.get_response: RequestException (other) for URL='{url}'. Attempted Proxy (from arg)='{cls.config['proxy_url']}'. Error: {e_req}")
-            logger.error(traceback.format_exc())
-            return None
-        except Exception as e_general:
-            logger.error(f"SiteUtil.get_response: General Exception for URL='{url}'. Attempted Proxy (from arg)='{cls.config['proxy_url']}'. Error: {e_general}")
-            logger.error(traceback.format_exc())
-            return None
-   
-    
+
     # 외부에서 이미지를 요청하는 URL을 만든다.
     # proxy를 사용하지 않고 가공이 필요없다면 그냥 오리지널을 리턴해야하며, 그 판단은 개별 사이트에서 한다.
     @classmethod
@@ -166,13 +190,16 @@ class SiteAvBase:
             "site": cls.site_name,
             "url": url
         }
-        # 정상적일때만.
-        proxies = None
-        if cls.config['use_proxy']:
-            proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
-        with cls.session.get(url, proxies=proxies, headers=cls.default_headers) as res:
-            if res.status_code != 200:
-                return None
+
+        # 유효성 검사 일단 생략
+        #proxies = None
+        #if cls.config['use_proxy']:
+        #    proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
+        #
+        #with cls.session.get(url, proxies=proxies, headers=cls.default_headers) as res:
+        #    if res.status_code != 200:
+        #        return None
+
         if cls.module_char == 'C':
             return f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_video?{urlencode(param)}"
         else:
@@ -198,6 +225,20 @@ class SiteAvBase:
 
 
     @classmethod
+    def get_tree_cs(cls, url, **kwargs):
+        text = cls.get_text_cs(url, **kwargs)
+        if text is None:
+            return text
+        return html.fromstring(text)
+
+    @classmethod
+    def get_text_cs(cls, url, **kwargs):
+        res = cls.get_response_cs(url, **kwargs)
+        if res is None: return None
+        return res.text
+
+
+    @classmethod
     def get_cloudscraper_instance(cls, new_instance=False):
         # 간단한 싱글톤 또는 캐시된 인스턴스 반환 (매번 생성 방지)
         # browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False} 등 User-Agent 설정 가능
@@ -217,16 +258,29 @@ class SiteAvBase:
         return cls._cs_scraper_instance
 
 
+# site_av_base.py
+
     @classmethod
     def get_response_cs(cls, url, **kwargs):
         """cloudscraper를 사용하여 HTTP GET 요청을 보내고 응답 객체를 반환합니다."""
         method = kwargs.pop("method", "GET").upper()
+        
+        post_data = kwargs.pop("post_data", None)
+        if post_data:
+            method = "POST"
+            
+        proxies = kwargs.pop("proxies", None)
+        proxy_url = None
+        
+        if proxies is None:
+            # kwargs로 프록시가 전달되지 않은 경우, cls.config에서 찾음
+            if cls.config and cls.config.get('use_proxy', False):
+                proxy_url = cls.config.get('proxy_url')
+                if proxy_url:
+                    proxies = {"http": proxy_url, "https": proxy_url}
+        else:
+            proxy_url = proxies.get("http", proxies.get("https"))
 
-        proxies = None
-        if cls.config and cls.config.get('use_proxy', False):
-            proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
-
-        proxy_url = kwargs.pop("proxy_url", None)
         cookies = kwargs.pop("cookies", None)
         headers = kwargs.pop("headers", cls.default_headers)
 
@@ -235,16 +289,14 @@ class SiteAvBase:
             logger.error("SiteUtil.get_response_cs: Failed to get cloudscraper instance.")
             return None
 
-        # logger.debug(f"SiteUtil.get_response_cs: Making {method} request to URL='{url}'")
         if headers: 
             scraper.headers.update(headers)
 
         try:
             if method == "POST":
-                post_data = kwargs.pop("post_data", None)
                 res = scraper.post(url, data=post_data, cookies=cookies, proxies=proxies, **kwargs)
             else: # GET
-                res = scraper.get(url, cookies=cookies, proxies=proxies,**kwargs)
+                res = scraper.get(url, cookies=cookies, proxies=proxies, **kwargs)
 
             if res.status_code == 429:
                 return res
@@ -253,12 +305,9 @@ class SiteAvBase:
                 logger.warning(f"SiteUtil.get_response_cs: Received status code {res.status_code} for URL='{url}'. Proxy='{proxy_url}'.")
                 if res.status_code == 403:
                     logger.error(f"SiteUtil.get_response_cs: Received 403 Forbidden for URL='{url}'. Proxy='{proxy_url}'. Response text: {res.text[:500]}")
-                return None #
+                return None
 
             return res
-        except cloudscraper.exceptions.CloudflareChallengeError as e_cf_challenge:
-            logger.error(f"SiteUtil.get_response_cs: Cloudflare challenge error for URL='{url}'. Error: {e_cf_challenge}")
-            return None
         except requests.exceptions.RequestException as e_req:
             logger.error(f"SiteUtil.get_response_cs: RequestException (not related to status code) for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
             logger.error(traceback.format_exc())
@@ -288,19 +337,66 @@ class SiteAvBase:
     # 메타데이터 라우팅 함수에서 호출한다.
     # 리턴타입: redirect 
     @classmethod
-    def jav_image(cls, url, mode=None):
-        if mode == None or mode.startswith("crop"):
-            return cls.default_jav_image(url, mode)
+    def jav_image(cls, url=None, mode=None, site=None, path=None):
+        # 1. 로컬 파일 요청 처리
+        if site == 'system' and path:
+            try:
+                allowed_path = os.path.join(path_data, "tmp")
+                if os.path.commonpath([allowed_path, os.path.abspath(path)]) != allowed_path:
+                    abort(403)
+                return send_file(path, mimetype='image/jpeg')
+            except FileNotFoundError:
+                abort(404)
+            except Exception:
+                abort(500)
+
+        # 2. 원격 URL에 대한 기본 처리
+        # mode가 'crop_...' 이거나 None인 경우만 처리됨
+        return cls.default_jav_image(url, mode)
+
 
     @classmethod
     def jav_video(cls, url):
         try:
+            try:
+                from .site_dmm import SiteDmm
+                from .site_mgstage import SiteMgstage
+                CONTEXT_SWITCH_RULES = {
+                    'dmm.co.jp': SiteDmm,
+                    'mgstage.com': SiteMgstage,
+                    'r18.com': SiteMgstage,
+                }
+            except ImportError:
+                CONTEXT_SWITCH_RULES = {}
+
             proxies = None
-            if cls.config['use_proxy']:
+            if cls.config and cls.config.get('use_proxy', False):
                 proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
-            req = cls.session.get(url, proxies=proxies, headers=cls.default_headers, stream=True)
+
+            request_headers = cls.default_headers.copy()
+
+            for domain, expert_module in CONTEXT_SWITCH_RULES.items():
+                if domain in url:
+                    if expert_module and cls.site_name != expert_module.site_name:
+                        logger.debug(f"jav_video: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: {url}")
+
+                        if expert_module.config and expert_module.config.get('use_proxy', False):
+                            proxies = {"http": expert_module.config['proxy_url'], "https": expert_module.config['proxy_url']}
+                        else:
+                            proxies = None
+
+                        request_headers.update(expert_module.default_headers)
+                        if expert_module.site_name == 'dmm':
+                            request_headers['Referer'] = 'https://www.dmm.co.jp/'
+                        elif expert_module.site_name == 'mgstage':
+                            request_headers['Referer'] = 'https://www.mgstage.com/'
+                    break
+
+            req = cls.session.get(url, proxies=proxies, headers=request_headers, stream=True)
             req.raise_for_status()
+
         except requests.exceptions.RequestException as e:
+            logger.error(f"jav_video: Failed to get video stream for {url}. Error: {e}")
             return abort(500)
 
         def generate_content():
@@ -310,33 +406,34 @@ class SiteAvBase:
         response_headers = {
             'Content-Type': req.headers.get('Content-Type', 'video/mp4'),
             'Content-Length': req.headers.get('Content-Length'),
-            'Accept-Ranges': 'bytes', # 시간 탐색을 위해 필요
+            'Accept-Ranges': 'bytes',
         }
         return Response(generate_content(), headers=response_headers)
 
 
     @classmethod
     def set_config(cls, db):
-        """
-        사이트별 설정을 적용하는 메소드
-        :param config: 사이트 설정 딕셔너리
-        """
-        if cls.session == None:
+        if cls.session is None:
             cls.session = cls.get_session()
         else:
-            # 설정을 변경하면 그냥 새로 생성.
             cls.session.close()
             cls.session = cls.get_session()
+        
         cls.MetadataSetting = db
+
+        if cls.config is None:
+            cls.config = {}
+
         use_proxy = f"jav_censored_{cls.site_name}_use_proxy"
-        if db.get(use_proxy) == None:
+        if db.get(use_proxy) is None:
             use_proxy = f"jav_uncensored_{cls.site_name}_use_proxy"
+        
         proxy_url = f"jav_censored_{cls.site_name}_proxy_url"
-        if db.get(proxy_url) == None:
+        if db.get(proxy_url) is None:
             proxy_url = f"jav_uncensored_{cls.site_name}_proxy_url"
-        cls.config = {
-            #공통
-            "image_mode": db.get('jav_censored_image_mode'), # 사용하지 않음
+        
+        new_config_values = {
+            "image_mode": db.get('jav_censored_image_mode'),
             "trans_option": db.get('jav_censored_trans_option'),
             "use_extras": db.get_bool('jav_censored_use_extras'),
             "max_arts": db.get_int('jav_censored_art_count'),
@@ -345,6 +442,8 @@ class SiteAvBase:
             "use_proxy": db.get_bool(use_proxy),
             "proxy_url": db.get(proxy_url),
         }
+
+        cls.config.update(new_config_values)
 
 
     # endregion
@@ -473,7 +572,89 @@ class SiteAvBase:
         return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
         #bytes_im.seek(0)
         #return send_file(bytes_im, mimetype=mimetype)
+
+
+    @classmethod
+    def default_jav_image_cs(cls, image_url, mode=None):
+        """
+        default_jav_image와 동일하지만, get_response_cs를 사용하는 버전.
+        """
+        # get_response_cs를 사용하여 이미지 데이터를 가져옴
+        res = cls.get_response_cs(image_url, verify=False) 
+
+        # --- 응답 검증 추가 ---
+        if res is None:
+            P.logger.error(f"image_proxy: SiteUtil.get_response returned None for URL: {image_url}")
+            abort(404) # 또는 적절한 에러 응답
+            return # 함수 종료
         
+        if res.status_code != 200:
+            P.logger.error(f"image_proxy: Received status code {res.status_code} for URL: {image_url}. Content: {res.text[:200]}")
+            abort(res.status_code if res.status_code >= 400 else 500)
+            return
+
+        content_type_header = res.headers.get('Content-Type', '').lower()
+        if not content_type_header.startswith('image/'):
+            P.logger.error(f"image_proxy: Expected image Content-Type, but got '{content_type_header}' for URL: {image_url}. Content: {res.text[:200]}")
+            abort(400) # 잘못된 요청 또는 서버 응답 오류
+            return
+        # --- 응답 검증 끝 ---
+
+        try:
+            bytes_im = BytesIO(res.content)
+            im = Image.open(bytes_im)
+            imformat = im.format
+            if imformat is None: # Pillow가 포맷을 감지 못하는 경우 (드물지만 발생 가능)
+                P.logger.warning(f"image_proxy: Pillow could not determine format for image from URL: {image_url}. Attempting to infer from Content-Type.")
+                if 'jpeg' in content_type_header or 'jpg' in content_type_header:
+                    imformat = 'JPEG'
+                elif 'png' in content_type_header:
+                    imformat = 'PNG'
+                elif 'webp' in content_type_header:
+                    imformat = 'WEBP'
+                elif 'gif' in content_type_header:
+                    imformat = 'GIF'
+                else:
+                    P.logger.error(f"image_proxy: Could not infer image format from Content-Type '{content_type_header}'. URL: {image_url}")
+                    abort(400)
+                    return
+            mimetype = im.get_format_mimetype()
+            if mimetype is None: # 위에서 imformat을 강제로 설정한 경우 mimetype도 설정
+                if imformat == 'JPEG': mimetype = 'image/jpeg'
+                elif imformat == 'PNG': mimetype = 'image/png'
+                elif imformat == 'WEBP': mimetype = 'image/webp'
+                elif imformat == 'GIF': mimetype = 'image/gif'
+                else:
+                    P.logger.error(f"image_proxy: Could not determine mimetype for inferred format '{imformat}'. URL: {image_url}")
+                    abort(400)
+                    return
+
+        except UnidentifiedImageError as e: # PIL.UnidentifiedImageError 명시적 임포트 필요
+            P.logger.error(f"image_proxy: PIL.UnidentifiedImageError for URL: {image_url}. Response Content-Type: {content_type_header}")
+            P.logger.error(f"image_proxy: Error details: {e}")
+            # 디버깅을 위해 실패한 이미지 데이터 일부 저장 (선택적)
+            try:
+                failed_image_path = os.path.join(path_data, "tmp", f"failed_image_{time.time()}.bin")
+                with open(failed_image_path, 'wb') as f:
+                    f.write(res.content)
+                P.logger.info(f"image_proxy: Content of failed image saved to: {failed_image_path}")
+            except Exception as save_err:
+                P.logger.error(f"image_proxy: Could not save failed image content: {save_err}")
+            abort(400) # 잘못된 이미지 파일
+            return
+        except Exception as e_pil:
+            P.logger.error(f"image_proxy: General PIL error for URL: {image_url}: {e_pil}")
+            P.logger.error(traceback.format_exc())
+            abort(500)
+            return
+
+        # apply crop - quality loss
+        
+        if mode is not None and mode.startswith("crop_"):
+            im = SiteUtilAv.imcrop(im, position=mode[-1])
+        return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
+        #bytes_im.seek(0)
+        #return send_file(bytes_im, mimetype=mimetype)
 
 
     @classmethod
@@ -481,6 +662,367 @@ class SiteAvBase:
         with BytesIO() as buf:
             pil.save(buf, format=format, quality=95)
             return Response(buf.getvalue(), mimetype=mimetype)
+
+
+
+    # START: ADDED METHOD FOR IMAGE PROCESSING REFACTOR
+
+    @classmethod
+    def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache):
+        """
+        이미지 처리 전체 과정을 담당하는 최상위 공통 메서드.
+        __info 메서드는 이 함수를 호출하여 이미지 처리를 위임한다.
+        """
+        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+        final_image_sources = None
+        temp_filepath_to_clean = None
+
+        try:
+            # Step 1: 이미지 서버 모드이고 사용자 포스터가 있는지 먼저 확인
+            user_poster_exists = False
+            if image_mode == 'image_server':
+                if cls.check_user_poster_exists_for_image_server(entity):
+                    user_poster_exists = True
+                    logger.debug(f"Image Server: User poster for {entity.ui_code} found. Skipping image determination.")
+
+            # Step 2: 사용자 포스터가 없을 경우에만 이미지 분석 및 결정 로직 실행
+            if not user_poster_exists:
+                decision_data = {
+                    'raw_urls': raw_image_urls,
+                    'ps_url': ps_url_from_cache,
+                    'ui_code': entity.ui_code,
+                    'site_name': cls.site_name,
+                    'site_config': cls.config,
+                }
+                final_image_sources = cls.determine_final_image_sources(decision_data)
+                # 정리해야 할 임시 파일 경로를 받아옴
+                temp_filepath_to_clean = final_image_sources.get('temp_poster_filepath')
+
+            # Step 3: 최종 URL 생성 및 Entity에 추가
+            # finalize_images_for_entity는 final_image_sources가 None인 경우도 처리할 수 있어야 함
+            cls.finalize_images_for_entity(entity, final_image_sources)
+
+        except Exception as e:
+            logger.error(f"Error during process_image_data for {entity.code}: {e}")
+            logger.error(traceback.format_exc())
+
+        finally:
+            # Step 4: 임시 파일 정리
+            if temp_filepath_to_clean and os.path.exists(temp_filepath_to_clean):
+                try:
+                    os.remove(temp_filepath_to_clean)
+                    logger.debug(f"Cleaned up temporary poster file: {temp_filepath_to_clean}")
+                except Exception as e_remove:
+                    logger.error(f"Failed to remove temp file {temp_filepath_to_clean}: {e_remove}")
+
+        return entity # 이미지가 추가된 entity 객체 반환
+
+
+    # << Step 1 & 3-2 헬퍼: 이미지 서버 경로 및 파일 확인 >>
+    @classmethod
+    def get_image_server_path(cls, entity):
+        """이미지 서버 저장 경로를 계산하는 헬퍼 함수"""
+        local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+        save_format = cls.MetadataSetting.get('jav_censored_image_server_save_format')
+        code = entity.ui_code.lower()
+        CODE = code.upper()
+        label = code.split('-')[0].upper()
+        label_1 = label[0]
+
+        _format = save_format.format(
+            code=code, CODE=CODE, label=label, label_1=label_1,
+        ).split('/')
+        return os.path.join(local_path, *(_format))
+
+    @classmethod
+    def check_user_poster_exists_for_image_server(cls, entity):
+        """이미지 서버 모드에서 사용자 지정 포스터가 존재하는지 확인합니다."""
+        if not entity.ui_code:
+            return False
+        try:
+            target_folder = cls.get_image_server_path(entity)
+            user_poster_filename = f"{entity.ui_code.lower()}_p_user.jpg"
+            user_poster_filepath = os.path.join(target_folder, user_poster_filename)
+            return os.path.exists(user_poster_filepath)
+        except Exception as e:
+            logger.error(f"Error checking user poster for {entity.ui_code}: {e}")
+            return False
+
+
+    # << Step 2 헬퍼: 이미지 소스 결정 >>
+    @classmethod
+    def determine_final_image_sources(cls, decision_data):
+        """
+        명시된 모든 조건을 반영하여 포스터 소스를 결정.
+        """
+        # --- 1. 초기 설정 및 변수 준비 ---
+        raw_urls = decision_data.get('raw_urls', {})
+        ps_url = decision_data.get('ps_url')
+        ui_code = decision_data.get('ui_code', '')
+        site_config = decision_data.get('site_config', {})
+        site_name = decision_data.get('site_name')
+        
+        pl_url = raw_urls.get('pl')
+        specific_candidates_on_page = raw_urls.get('specific_poster_candidates', [])
+        other_arts_on_page = raw_urls.get('arts', [])
+        
+        final_image_sources = {
+            'poster_source': None, 'poster_mode': None,
+            'landscape_source': pl_url, 'arts': [], 'temp_poster_filepath': None,
+            'processed_from_url': None,
+        }
+        poster_found = False
+
+        # --- 2. 포스터 결정 로직 ---
+        
+        # 2-1. JavDB (PS 없는 사이트) 전용 로직
+        if not poster_found and site_name == 'javdb' and not ps_url:
+            logger.debug(f"JavDB-specific PS-less logic activated.")
+            
+            # 우선순위 1: 룰 기반 강제 크롭
+            forced_crop_mode = None
+            if ui_code:
+                label = ui_code.split('-', 1)[0] if '-' in ui_code else (re.match(r'([A-Z]+)', ui_code.upper()).group(1) if re.match(r'([A-Z]+)', ui_code.upper()) else '')
+                if label and site_config.get('crop_mode'):
+                    for rule in site_config['crop_mode']:
+                        parts = [x.strip() for x in rule.split(":", 1)]
+                        if len(parts) == 2 and parts[0].upper() == label and parts[1].lower() in "rlc":
+                            forced_crop_mode = parts[1].lower(); break
+            if forced_crop_mode and pl_url:
+                final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
+                poster_found = True
+
+            # 우선순위 2: specific_poster_candidates에서 세로형 고화질 포스터 확인
+            if not poster_found:
+                for candidate_url in specific_candidates_on_page:
+                    if cls.is_portrait_high_quality_image(candidate_url):
+                        final_image_sources['poster_source'] = candidate_url
+                        poster_found = True; break
+            
+            # 우선순위 3: PL 이미지 비율에 따른 사전 처리
+            if not poster_found and pl_url:
+                im_lg_obj = None
+                try:
+                    im_lg_obj = cls.imopen(pl_url)
+                    if im_lg_obj:
+                        w, h = im_lg_obj.size; aspect_ratio = w / h if h > 0 else 0
+                        
+                        if abs(aspect_ratio - 4/3) < 0.05:
+                            im_no_lb = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
+                            processed_im = SiteUtilAv.imcrop(im_no_lb, position='r')
+                            temp_filepath = cls.save_pil_to_temp(processed_im)
+                            if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
+                            processed_im.close(); im_no_lb.close()
+                        elif aspect_ratio >= 1.8:
+                            right_half = im_lg_obj.crop((w / 2, 0, w, h))
+                            processed_im = SiteUtilAv.imcrop(right_half, position='c')
+                            temp_filepath = cls.save_pil_to_temp(processed_im)
+                            if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
+                            processed_im.close(); right_half.close()
+                        else:
+                            final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_r'})
+                finally:
+                    if im_lg_obj: im_lg_obj.close()
+
+        # 2-2. PS가 있는 다른 모든 사이트를 위한 공통 로직
+        if not poster_found and ps_url:
+            # logger.debug(f"Standard PS-based logic activated for site '{site_name}'.")
+
+            # 1. 룰 기반 예외처리
+            apply_ps_to_poster = False
+            forced_crop_mode = None
+            if ui_code:
+                label_from_ui_code = ui_code.split('-', 1)[0] if '-' in ui_code else (re.match(r'([A-Z]+)', ui_code.upper()).group(1) if re.match(r'([A-Z]+)', ui_code.upper()) else '')
+                if label_from_ui_code:
+                    if site_config.get('ps_force_labels_set') and label_from_ui_code in site_config['ps_force_labels_set']:
+                        apply_ps_to_poster = True
+                    if site_config.get('crop_mode'):
+                        for line in site_config['crop_mode']:
+                            parts = [x.strip() for x in line.split(":", 1)]
+                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in "rlc":
+                                forced_crop_mode = parts[1].lower()
+                                break
+            if forced_crop_mode and pl_url:
+                final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
+                poster_found = True
+            elif apply_ps_to_poster:
+                final_image_sources['poster_source'] = ps_url
+                poster_found = True
+
+            # 2. 고화질 세로 포스터 탐색
+            if not poster_found:
+                poster_candidates_simple = ([pl_url] if pl_url else []) + specific_candidates_on_page
+                im_sm_obj = None
+                try:
+                    im_sm_obj = cls.imopen(ps_url)
+                    if im_sm_obj:
+                        for candidate_url in poster_candidates_simple:
+                            im_lg_obj = None
+                            try:
+                                im_lg_obj = cls.imopen(candidate_url)
+                                if im_lg_obj and cls.is_portrait_high_quality_image(im_lg_obj) and cls.is_hq_poster(im_sm_obj, im_lg_obj):
+                                    final_image_sources['poster_source'] = candidate_url
+                                    poster_found = True
+                                    break # for 루프 탈출
+                            finally:
+                                if im_lg_obj: im_lg_obj.close()
+                finally:
+                    if im_sm_obj: im_sm_obj.close()
+
+            # 3. 특수 / 일반 처리
+            if not poster_found:
+                all_candidates_advanced = list(dict.fromkeys(([pl_url] if pl_url else []) + other_arts_on_page))
+                im_sm_obj = cls.imopen(ps_url)
+                if im_sm_obj:
+                    try:
+                        for candidate_url in all_candidates_advanced:
+                            im_lg_obj = None
+                            try:
+                                im_lg_obj = cls.imopen(candidate_url)
+                                if not im_lg_obj: continue
+                                w, h = im_lg_obj.size
+                                aspect_ratio = w / h if h > 0 else 0
+                                
+                                # 규칙 1: DMM 특수 사이즈
+                                if w == 800 and 436 <= h <= 446:
+                                    processed_im = im_lg_obj.crop((w - 380, 0, w, h))
+                                    temp_filepath = cls.save_pil_to_temp(processed_im)
+                                    if temp_filepath:
+                                        final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': candidate_url})
+                                        poster_found = True
+                                    processed_im.close()
+                                
+                                # 규칙 2: 4:3 비율 (레터박스)
+                                elif abs(aspect_ratio - 4/3) < 0.05:
+                                    crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
+                                    if crop_pos:
+                                        final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
+                                        poster_found = True
+                                    else:
+                                        im_no_lb = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
+                                        crop_pos_lb = cls.has_hq_poster(im_sm_obj, im_no_lb)
+                                        if crop_pos_lb:
+                                            final_poster_obj = SiteUtilAv.imcrop(im_no_lb, position=crop_pos_lb)
+                                            temp_filepath = cls.save_pil_to_temp(final_poster_obj)
+                                            if temp_filepath:
+                                                final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': candidate_url})
+                                                poster_found = True
+                                            final_poster_obj.close()
+                                        im_no_lb.close()
+
+                                # 규칙 3: 1.8:1 이상 와이드 (MG-Style)
+                                elif aspect_ratio >= 1.8:
+                                    crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
+                                    if crop_pos:
+                                        final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
+                                        poster_found = True
+                                    else:
+                                        right_half = im_lg_obj.crop((w / 2, 0, w, h))
+                                        if cls.is_hq_poster(im_sm_obj, right_half):
+                                            final_poster_obj = SiteUtilAv.imcrop(right_half, position='c')
+                                            temp_filepath = cls.save_pil_to_temp(final_poster_obj)
+                                            if temp_filepath:
+                                                final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': candidate_url})
+                                                poster_found = True
+                                            final_poster_obj.close()
+                                        right_half.close()
+                                        
+                                        if not poster_found:
+                                            left_half = im_lg_obj.crop((0, 0, w / 2, h))
+                                            if cls.is_hq_poster(im_sm_obj, left_half):
+                                                final_poster_obj = SiteUtilAv.imcrop(left_half, position='c')
+                                                temp_filepath = cls.save_pil_to_temp(final_poster_obj)
+                                                if temp_filepath:
+                                                    final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': candidate_url})
+                                                    poster_found = True
+                                                final_poster_obj.close()
+                                            left_half.close()
+
+                                # 규칙 4: 일반 이미지
+                                else:
+                                    crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
+                                    if crop_pos:
+                                        final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
+                                        poster_found = True
+                            finally:
+                                if im_lg_obj: im_lg_obj.close()
+                            if poster_found: break
+                    finally:
+                        if im_sm_obj: im_sm_obj.close()
+
+            # 4. 최종 폴백
+            if not final_image_sources.get('poster_source') and ps_url:
+                final_image_sources['poster_source'] = ps_url
+
+        # --- 3. 팬아트 목록 결정 (항상 마지막에 실행) ---
+        final_thumb_source_urls = set()
+        if final_image_sources.get('landscape_source'):
+            final_thumb_source_urls.add(final_image_sources['landscape_source'])
+        
+        poster_source = final_image_sources.get('poster_source')
+        poster_mode = final_image_sources.get('poster_mode')
+        
+        if poster_mode == 'local_file':
+            processed_from = final_image_sources.get('processed_from_url')
+            if processed_from: final_thumb_source_urls.add(processed_from)
+        elif isinstance(poster_source, str) and poster_source.startswith('http'):
+            final_thumb_source_urls.add(poster_source)
+
+        all_potential_arts = list(dict.fromkeys(other_arts_on_page + ([pl_url] if pl_url else [])))
+        
+        final_fanarts = []
+        exclude_set = set(final_thumb_source_urls)
+        for art_url in all_potential_arts:
+            if art_url and art_url not in exclude_set:
+                final_fanarts.append(art_url)
+        
+        max_arts = site_config.get('max_arts', 0)
+        final_image_sources['arts'] = final_fanarts[:max_arts] if max_arts > 0 else []
+        
+        return final_image_sources
+
+
+    @classmethod
+    def save_pil_to_temp(cls, pil_obj):
+        """PIL 객체를 임시 파일로 저장하고 경로를 반환합니다."""
+        try:
+            temp_dir = os.path.join(path_data, "tmp")
+            os.makedirs(temp_dir, exist_ok=True)
+            filename = f"temp_poster_{int(time.time())}_{os.urandom(4).hex()}.jpg"
+            filepath = os.path.join(temp_dir, filename)
+
+            img_to_save = pil_obj
+            if pil_obj.mode != 'RGB':
+                img_to_save = pil_obj.convert('RGB')
+
+            img_to_save.save(filepath, "JPEG", quality=95)
+            logger.debug(f"Saved temporary poster to: {filepath}")
+            return filepath
+        except Exception as e:
+            logger.error(f"Failed to save PIL to temp file: {e}")
+            return None
+
+
+    @classmethod
+    def has_hq_poster_from_url(cls, im_sm_source, im_lg_source):
+        """
+        이미지 소스(URL/경로)를 직접 받아 has_hq_poster를 호출하는 래퍼 함수.
+        내부에서 이미지 객체를 열고 닫는 것을 책임진다.
+        """
+        im_sm_obj, im_lg_obj = None, None
+        try:
+            im_sm_obj = cls.imopen(im_sm_source)
+            im_lg_obj = cls.imopen(im_lg_source)
+            return cls.has_hq_poster(im_sm_obj, im_lg_obj)
+        except Exception as e:
+            logger.error(f"Error in has_hq_poster_from_url for '{im_lg_source}': {e}")
+            return None
+        finally:
+            if im_sm_obj: im_sm_obj.close()
+            if im_lg_obj: im_lg_obj.close()
+
+
+    # END: ADDED METHOD
 
 
     # 의미상 메타데이터에서 처리해야한다.
@@ -495,52 +1037,75 @@ class SiteAvBase:
             entity.fanart = []
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
 
+        # image_sources가 None일 경우(image_server 모드에서 사용자 파일이 이미 있을 때)에 대한 방어 코드
+        if image_sources is None and image_mode != 'image_server':
+            # logger.warning("image_sources is None but image_mode is not 'image_server'. No images will be processed.")
+            return
+
         if image_mode == 'ff_proxy':
-            # proxy를 사용하거나 mode값이 있다면. 조작을 해야하니 ff로
-            if cls.config['use_proxy'] or image_sources['poster_mode']:
-                param = {
-                    'site': cls.site_name,
-                    'url': unquote_plus(image_sources['poster_source']), 
-                    'mode': image_sources.get('poster_mode', '')
-                }
-                if param['mode'] == None:
-                    del param['mode']  # mode가 None이면 제거
-                param = urlencode(param)
-                if cls.module_char == 'C':
-                    url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{param}"
+            # image_sources가 없을 경우를 대비한 방어 코드
+            if not image_sources or not image_sources.get('poster_source'):
+                return
+
+            poster_source = image_sources['poster_source']
+            poster_mode = image_sources.get('poster_mode', '')
+
+            # proxy를 사용하거나, mode가 있거나, 로컬 파일인 경우 ff_proxy URL 생성
+            if cls.config['use_proxy'] or poster_mode:
+                if poster_mode == 'local_file':
+                    # 사전 처리된 로컬 파일인 경우
+                    param = {
+                        'site': 'system',
+                        'path': poster_source 
+                    }
                 else:
-                    url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image_un?{param}"
+                    # 원격 URL이거나, 원격 URL에 crop 모드가 적용된 경우
+                    param = {
+                        'site': cls.site_name,
+                        'url': unquote_plus(poster_source), 
+                        'mode': poster_mode
+                    }
+                
+                if param.get('mode') in [None, '']:
+                    del param['mode']
+
+                param_str = urlencode(param)
+                module_prefix = 'jav_image' if cls.module_char == 'C' else 'jav_image_un'
+                url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{module_prefix}?{param_str}"
             else:
-                url = image_sources['poster_source']
+                # 프록시도, 모드도 없는 순수 원격 URL
+                url = poster_source
             entity.thumb.append(EntityThumb(aspect="poster", value=url))
 
-            if cls.config['use_proxy']:
-                param = urlencode({
-                    'site': cls.site_name,
-                    'url': unquote_plus(image_sources['landscape_source']),
-                })
-                if cls.module_char == 'C':
-                    url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{param}"
+            if image_sources.get('landscape_source'):
+                landscape_source = image_sources['landscape_source']
+                if cls.config['use_proxy']:
+                    param = urlencode({
+                        'site': cls.site_name,
+                        'url': unquote_plus(landscape_source)
+                    })
+                    module_prefix = 'jav_image' if cls.module_char == 'C' else 'jav_image_un'
+                    url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{module_prefix}?{param}"
                 else:
-                    url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image_un?{param}"
-            else:
-                url = image_sources['landscape_source']
-            entity.thumb.append(EntityThumb(aspect="landscape", value=url))
-        
-            for art_url in image_sources['arts']:
+                    url = landscape_source
+                entity.thumb.append(EntityThumb(aspect="landscape", value=url))
+
+            for art_url in image_sources.get('arts', []):
                 if cls.config['use_proxy']:
                     param = urlencode({
                         'site': cls.site_name,
                         'url': unquote_plus(art_url)
                     })
-                    if cls.module_char == 'C':
-                        url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{param}"
-                    else:
-                        url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image_un?{param}"
+                    module_prefix = 'jav_image' if cls.module_char == 'C' else 'jav_image_un'
+                    url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{module_prefix}?{param}"
                 else:
                     url = art_url
                 entity.fanart.append(url)
+
         elif image_mode == 'discord_proxy':
+            if not image_sources or not image_sources.get('poster_source'):
+                return
+
             def apply(url, use_proxy_server, server_url):
                 if use_proxy_server == False:
                     return url
@@ -555,8 +1120,16 @@ class SiteAvBase:
 
             # poster
             response = cls.jav_image(image_sources['poster_source'], mode=image_sources.get('poster_mode', ''))
-            response_bytes = BytesIO(response.data)
-            
+
+            if poster_mode == 'local_file':
+                # 로컬 파일인 경우, 파일을 직접 읽어서 BytesIO 생성
+                with open(poster_source, 'rb') as f:
+                    response_bytes = BytesIO(f.read())
+            else:
+                # 원격 URL인 경우, jav_image를 통해 이미지 데이터 가져오기
+                response = cls.jav_image(url=poster_source, mode=poster_mode, site=cls.site_name)
+                response_bytes = BytesIO(response.data)
+
             if use_my_webhook:
                 webhook_url = webhook_list[random.randint(0,len(webhook_list)-1)]
             url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
@@ -611,47 +1184,50 @@ class SiteAvBase:
                 save = True
                 for idx, filename in enumerate(filenames):
                     filepath = os.path.join(target_folder, filename)
-                    url = f"{server_url}/{target_folder.replace(local_path, '').strip('/')}/{filename}"
+                    url = f"{server_url}/{os.path.relpath(filepath, local_path)}".replace("\\", "/")
                     if idx == 0 and os.path.exists(filepath):
                         entity.thumb.append(EntityThumb(aspect=aspect, value=url))
                         save = False
                         break
                     elif idx == 1 and os.path.exists(filepath):
-                        if rewrite:
-                            os.remove(filepath)
-                        else:
+                        if not rewrite:
                             entity.thumb.append(EntityThumb(aspect=aspect, value=url))
                             save = False
-                if save:
+
+                if save and image_sources:
                     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                    if aspect == "poster":
-                        response = cls.jav_image(image_sources['poster_source'], mode=image_sources.get('poster_mode', ''))
+                    
+                    source_key = 'poster_source' if aspect == 'poster' else 'landscape_source'
+                    source = image_sources.get(source_key)
+                    if not source: continue
+
+                    mode = image_sources.get('poster_mode') if aspect == 'poster' else None
+
+                    if mode == 'local_file':
+                        # 로컬 파일은 복사
+                        import shutil
+                        shutil.copy(source, filepath)
                     else:
-                        response = cls.jav_image(image_sources['landscape_source'])
-                    response_bytes = BytesIO(response.data)
-                    response_bytes.seek(0)
-                    with open(filepath, 'wb') as f:
-                        f.write(response_bytes.read())
+                        # 원격 파일은 다운로드
+                        response = cls.jav_image(url=source, mode=mode, site=cls.site_name)
+                        with open(filepath, 'wb') as f:
+                            f.write(response.data)
                     entity.thumb.append(EntityThumb(aspect=aspect, value=url))
 
             # arts
-            for idx, art_url in enumerate(image_sources['arts']):
-                filename = f"{code}_art_{idx+1}.jpg"
-                filepath = os.path.join(target_folder, filename)
-                url = f"{server_url}/{target_folder.replace(local_path, '').strip('/')}/{filename}"
-                if os.path.exists(filepath):
-                    if rewrite:
-                        os.remove(filepath)
-                    else:
+            if image_sources and image_sources.get('arts'):
+                for idx, art_url in enumerate(image_sources['arts']):
+                    filename = f"{entity.ui_code.lower()}_art_{idx+1}.jpg"
+                    filepath = os.path.join(target_folder, filename)
+                    url = f"{server_url}/{os.path.relpath(filepath, local_path)}".replace("\\", "/")
+                    if os.path.exists(filepath) and not rewrite:
                         entity.fanart.append(url)
                         continue
-                os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                response = cls.jav_image(art_url)
-                response_bytes = BytesIO(response.data)
-                response_bytes.seek(0)
-                with open(filepath, 'wb') as f:
-                    f.write(response_bytes.read())
-                entity.fanart.append(url)
+                    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                    response = cls.jav_image(url=art_url, site=cls.site_name)
+                    with open(filepath, 'wb') as f:
+                        f.write(response.data)
+                    entity.fanart.append(url)
 
         logger.info(f"[ImageUtil] 이미지 최종 처리 완료. Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}")
 
@@ -662,51 +1238,16 @@ class SiteAvBase:
     ################################################
     # region SiteUtilAV 이미지 처리 관련
     @classmethod
-    def is_portrait_high_quality_image(cls, image_url, min_height=600, aspect_ratio_threshold=1.2):
-        """
-        주어진 이미지 URL 또는 파일 경로가 세로형 고화질 이미지인지 판단합니다.
-        SiteUtil.imopen을 사용하여 PIL Image 객체를 가져옵니다.
-        - 높이가 min_height 이상
-        - 세로/가로 비율이 aspect_ratio_threshold 이상
-        """
-        if not image_url:
-            logger.debug("is_portrait_high_quality_image: No image_url/path provided.")
-            return False
-
-        img_pil_object = None
+    def is_portrait_high_quality_image(cls, img_pil_object, min_height=600, aspect_ratio_threshold=1.2):
+        """주어진 PIL Image 객체가 세로형 고화질 이미지인지 판단합니다."""
+        if not img_pil_object: return False
         try:
-            img_pil_object = cls.imopen(image_url) 
-
-            if img_pil_object is None:
-                logger.debug(f"is_portrait_high_quality_image: SiteUtil.imopen returned None for '{image_url}'")
-                return False
-
             width, height = img_pil_object.size
-            
-            actual_ratio = 0
-            if width > 0:
-                actual_ratio = height / width
-
-            if height >= min_height and actual_ratio >= aspect_ratio_threshold:
-                # logger.debug(f"Image '{image_url}' IS portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
-                return True
-            else:
-                #logger.debug(f"Image '{image_url}' is NOT portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
-                return False
-
-        except Exception as e: 
-            logger.debug(f"is_portrait_high_quality_image: Unexpected error processing image '{image_url}': {e}")
-            # logger.error(traceback.format_exc()) # 상세 오류 로깅
-            return False
-        finally:
-            if img_pil_object and not isinstance(image_url, Image.Image): 
-                try:
-                    img_pil_object.close() 
-                except Exception as e_close:
-                    logger.debug(f"is_portrait_high_quality_image: Error closing PIL image object for '{image_url}': {e_close}")
+            if width == 0: return False
+            return height >= min_height and (height / width) >= aspect_ratio_threshold
+        except Exception: return False
 
 
-    
     @classmethod
     def are_images_visually_same(cls, img_src1, img_src2, threshold=10):
         """
@@ -772,162 +1313,56 @@ class SiteAvBase:
             return False # 전체 함수 오류
 
 
-    
     @classmethod
-    def is_hq_poster(cls, im_sm_source, im_lg_source, sm_source_info=None, lg_source_info=None):
-        logger.debug(f"--- is_hq_poster called ---")
-        log_sm_info = sm_source_info or (f"URL: {im_sm_source}" if isinstance(im_sm_source, str) else f"Type: {type(im_sm_source)}")
-        log_lg_info = lg_source_info or (f"URL: {im_lg_source}" if isinstance(im_lg_source, str) else f"Type: {type(im_lg_source)}")
-        
-        logger.debug(f"  Small Image Source: {log_sm_info}")
-        logger.debug(f"  Large Image Source: {log_lg_info}")
-
+    def is_hq_poster(cls, im_sm_obj, im_lg_obj):
+        """두 PIL Image 객체의 시각적 유사성을 판단합니다."""
         try:
-            if im_sm_source is None or im_lg_source is None:
-                logger.debug("  Result: False (Source is None)")
-                return False
-
-            im_sm_obj = cls.imopen(im_sm_source)
-            im_lg_obj = cls.imopen(im_lg_source)
-
-            if im_sm_obj is None or im_lg_obj is None:
-                logger.debug("  Result: False (Failed to open one or both images from source)")
-                return False
-            # logger.debug("  Images acquired/opened successfully.")
-
-            try:
-
-                ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
-                logger.debug(f"  Sizes: Small=({ws}x{hs}), Large=({wl}x{hl})")
-
-                ratio_sm = ws / hs if hs != 0 else 0
-                ratio_lg = wl / hl if hl != 0 else 0
-                ratio_diff = abs(ratio_sm - ratio_lg)
-                # logger.debug(f"  Aspect Ratios: Small={ratio_sm:.3f}, Large={ratio_lg:.3f}, Diff={ratio_diff:.3f}")
-
-                if ratio_diff > 0.1: 
-                    # logger.debug("  Result: False (Aspect ratio difference > 0.1)")
-                    return False
-
-                # dhash 비교
-                dhash_sm = hfun(im_sm_obj); dhash_lg = hfun(im_lg_obj)
-                hdis_d = dhash_sm - dhash_lg
-                # logger.debug(f"  dhash distance: {hdis_d}")
-                if hdis_d >= 14:
-                    # logger.debug("  Result: False (dhash distance >= 14)")
-                    return False
-
-                if hdis_d <= 6:
-                    # logger.debug("  Result: True (dhash distance <= 6)")
-                    return True
-
-                phash_sm = phash(im_sm_obj); phash_lg = phash(im_lg_obj)
-                hdis_p = phash_sm - phash_lg
-                hdis_sum = hdis_d + hdis_p # 합산 거리
-                logger.debug(f"  phash distance: {hdis_p}, Combined distance (d+p): {hdis_sum}")
-                result = hdis_sum < 24 # 유사도 판단 기준
-                logger.debug(f"  Result: {result} (Combined distance < 24)")
-                return result
-
-            except ImportError:
-                logger.warning("  ImageHash library not found. Cannot perform hash comparison.")
-                return False
-            except Exception as hash_e:
-                logger.exception(f"  Error during image hash comparison: {hash_e}")
-                return False
-        except Exception as e:
-            logger.exception(f"  Error in is_hq_poster: {e}")
-            return False
-        # finally:
-            # logger.debug(f"--- is_hq_poster finished ---")
-
-    @classmethod
-    def has_hq_poster(cls, im_sm_url, im_lg_url):
-        try:
-            if not im_sm_url or not isinstance(im_sm_url, str) or \
-               not im_lg_url or not isinstance(im_lg_url, str):
-                logger.debug("has_hq_poster: Invalid or empty URL(s) provided.")
-                return None
-
-            im_sm_obj = cls.imopen(im_sm_url)
-            im_lg_obj_original = cls.imopen(im_lg_url)
-
-            if im_sm_obj is None or im_lg_obj_original is None:
-                logger.debug("has_hq_poster: Failed to open one or both images.")
-                return None
-
-            # 1단계: 원본 PL 이미지로 비교 시도
-            # logger.debug(f"has_hq_poster: Attempting comparison with original PL ('{im_lg_url}').")
-            found_pos = cls._internal_has_hq_poster_comparison(
-                im_sm_obj, 
-                im_lg_obj_original, 
-                function_name_for_log="has_hq_poster_original_pl",
-                sm_source_info=im_sm_url,
-                lg_source_info=im_lg_url
-            )
-
-            if found_pos:
-                logger.debug(f"has_hq_poster: Found position '{found_pos}' using original PL.")
-                return found_pos
-
-            # 2단계: 1단계 실패 시, PL이 4:3 비율이면 레터박스 제거 후 재시도
-            logger.debug("has_hq_poster: Original PL comparison failed. Checking for letterbox removal eligibility.")
-            im_lg_no_letterbox = None
-            try:
-                wl_orig, hl_orig = im_lg_obj_original.size
-                if hl_orig > 0:
-                    aspect_ratio_lg = wl_orig / hl_orig
-                    # 4:3 비율 근처인지 확인 (예: 1.30 ~ 1.36 범위)
-                    if 1.30 <= aspect_ratio_lg <= 1.36:
-                        top_crop_ratio = 0.0533 
-                        bottom_crop_ratio = 0.0533 # 상하 동일 비율로 가정
-                        
-                        top_pixels = int(hl_orig * top_crop_ratio)
-                        # bottom_pixels는 잘라낼 하단 영역의 시작점이 아니라, 남길 영역의 끝 y좌표
-                        bottom_y_coord = hl_orig - int(hl_orig * bottom_crop_ratio) 
-                        
-                        if top_pixels < bottom_y_coord and top_pixels >= 0 and bottom_y_coord <= hl_orig :
-                            box_for_lb_removal = (0, top_pixels, wl_orig, bottom_y_coord)
-                            cropped_candidate = im_lg_obj_original.crop(box_for_lb_removal)
-                            if cropped_candidate:
-                                im_lg_no_letterbox = cropped_candidate
-                                wl_new, hl_new = im_lg_no_letterbox.size
-                                logger.debug(f"has_hq_poster: PL ('{im_lg_url}') is 4:3 like. Letterbox removed. Original: {wl_orig}x{hl_orig}, Cropped for retry: {wl_new}x{hl_new}")
-                            else:
-                                logger.debug(f"has_hq_poster: Failed to crop letterbox from 4:3 PL ('{im_lg_url}').")
-                        else:
-                            logger.debug(f"has_hq_poster: Invalid letterbox crop pixels for 4:3 PL ('{im_lg_url}'). Top: {top_pixels}, Bottom_Y: {bottom_y_coord}, Height: {hl_orig}.")
-                    else:
-                        logger.debug(f"has_hq_poster: PL ('{im_lg_url}') aspect ratio ({aspect_ratio_lg:.2f}) not in 4:3 range for letterbox removal retry.")
-                else:
-                    logger.debug(f"has_hq_poster: PL ('{im_lg_url}') height is 0. Cannot calculate aspect ratio.")
-            except Exception as e_letterbox_check:
-                logger.error(f"has_hq_poster: Error during letterbox check/removal for PL ('{im_lg_url}'): {e_letterbox_check}")
-
-            # 레터박스 제거된 이미지가 있다면, 그것으로 다시 비교 시도
-            if im_lg_no_letterbox:
-                found_pos_retry = cls._internal_has_hq_poster_comparison(
-                    im_sm_obj, 
-                    im_lg_no_letterbox, 
-                    function_name_for_log="has_hq_poster_letterbox_removed",
-                    sm_source_info=im_sm_url,
-                    lg_source_info=f"{im_lg_url} (letterbox removed)"
-                )
-                if found_pos_retry:
-                    logger.debug(f"has_hq_poster: Found position '{found_pos_retry}' using letterbox-removed PL.")
-                    # 중요: 여기서 반환되는 found_pos_retry는 레터박스 제거된 이미지 기준의 크롭 위치.
-                    # 호출부에서 이 PL URL을 사용할 때는 레터박스 제거를 다시 수행해야 함.
-                    return found_pos_retry 
+            if im_sm_obj is None or im_lg_obj is None: return False
             
-            logger.debug(f"has_hq_poster: All comparison attempts failed for PL ('{im_lg_url}').")
+            ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
+            if hs == 0 or hl == 0: return False
+            if abs((ws / hs) - (wl / hl)) > 0.1: return False
+
+            hdis_d = hfun(im_sm_obj) - hfun(im_lg_obj)
+            if hdis_d >= 14: return False
+            if hdis_d <= 6: return True
+
+            hdis_p = phash(im_sm_obj) - phash(im_lg_obj)
+            return (hdis_d + hdis_p) < 24
+        except Exception: return False
+
+
+    @classmethod
+    def has_hq_poster(cls, im_sm_obj, im_lg_obj):
+        """두 PIL Image 객체를 받아 크롭 영역 일치 여부를 판단하고 크롭 위치를 반환합니다."""
+        try:
+            if im_sm_obj is None or im_lg_obj is None: return None
+            
+            ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
+            if ws > wl or hs > hl: return None
+
+            positions = ["r", "l", "c"]
+            threshold = 20  # 이 임계값은 필요에 따라 조정 가능
+
+            for pos in positions:
+                cropped_im = None
+                try:
+                    cropped_im = SiteUtilAv.imcrop(im_lg_obj, position=pos)
+                    if cropped_im is None: continue
+                    
+                    # average_hash와 phash를 조합하여 비교
+                    dist_a = average_hash(im_sm_obj) - average_hash(cropped_im)
+                    dist_p = phash(im_sm_obj) - phash(cropped_im)
+
+                    if (dist_a + dist_p) < threshold:
+                        return pos
+                finally:
+                    if cropped_im: cropped_im.close()
+            return None
+        except Exception as e:
+            logger.debug(f"has_hq_poster exception: {e}")
             return None
 
-        except Exception as e: 
-            logger.exception(f"Error in has_hq_poster function for PL ('{im_lg_url if isinstance(im_lg_url, str) else 'Non-URL_LG'}'): {e}")
-            return None
-
-
-    
 
     @classmethod
     def _internal_has_hq_poster_comparison(cls, im_sm_obj, im_lg_to_compare, function_name_for_log="has_hq_poster", sm_source_info=None, lg_source_info=None):
