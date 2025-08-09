@@ -214,7 +214,7 @@ class Site10Musume(SiteAvBase):
                 thumb_url = next((t.value for t in entity.thumb if t.aspect == 'poster'), '')
                 video_url = cls.make_video_url(sample_files[-1].get('URL'))
                 if video_url:
-                    trailer_title = entity.tagline or entity.ui_code
+                    trailer_title = entity.tagline if entity.tagline else entity.title
                     entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
         except Exception: pass
 

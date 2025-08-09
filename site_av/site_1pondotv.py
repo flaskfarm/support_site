@@ -103,7 +103,7 @@ class Site1PondoTv(SiteAvBase):
             logger.debug(f"Using cached JSON data for 1pondo code: {code_part}")
             json_data = cls._info_cache[code_part]
             del cls._info_cache[code_part] # 한 번 사용한 캐시는 메모리 관리를 위해 삭제
-        
+
         # 2. 캐시에 데이터가 없으면 API를 통해 직접 호출
         if json_data is None:
             logger.debug(f"Cache miss for 1pondo code: {code_part}. Calling API.")
@@ -202,7 +202,7 @@ class Site1PondoTv(SiteAvBase):
                 thumb_url = next((t.value for t in entity.thumb if t.aspect == 'poster'), '')
                 video_url = cls.make_video_url(sample_files[-1].get('URL'))
                 if video_url:
-                    trailer_title = entity.tagline if entity.tagline else entity.ui_code
+                    trailer_title = entity.tagline if entity.tagline else entity.title
                     entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
         except Exception: pass
 
