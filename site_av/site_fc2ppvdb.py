@@ -1,4 +1,5 @@
 import re
+import os
 import traceback
 import time
 from datetime import datetime, timedelta
@@ -18,480 +19,198 @@ class SiteFc2ppvdb(SiteAvBase):
     default_headers = SiteAvBase.base_default_headers.copy()
     default_headers['Referer'] = SITE_BASE_URL + "/"
 
+    _info_cache = {}
     ppvdb_default_cookies = {}
     _block_release_time_fc2ppvdb = 0 # 차단 해제 시간 저장 (타임스탬프)
     _last_retry_after_value = 0 # 마지막으로 받은 Retry-After 값 (로그용)
 
-    
-
-    
     @classmethod
-    def search(cls, keyword_num_part, do_trans=False, manual=False):
-        # 요청 전 차단 상태 확인
-        if cls._is_blocked():
-            return {'ret': 'error_site_rate_limited', 'data': f"Site is currently rate-limited. Try again later. Retry-After was {cls._last_retry_after_value}s."}
-        
-        ret = {'ret': 'failed', 'data': []}
-        tree = None
-        response_html_text = None # HTML 저장용
-
+    def search(cls, keyword, manual=False):
         try:
-            search_url = f'{SITE_BASE_URL}/articles/{keyword_num_part}/'
+            ret = {}
+            match = re.search(r'(\d{6,7})', keyword)
+            if not match:
+                return {'ret': 'success', 'data': []}
+
+            code = match.group(1)
+
+            if cls._is_blocked():
+                logger.warning(f"[{cls.site_name} Search] Aborted due to rate-limiting.")
+                return {'ret': 'success', 'data': []}
+
+            search_url = f'{SITE_BASE_URL}/articles/{code}/'
             tree, response_html_text = cls._get_fc2ppvdb_page_content(search_url, use_cloudscraper=True)
 
-            if response_html_text and "Site is rate-limited" in response_html_text: # _get_fc2ppvdb_page_content에서 반환한 메시지
-                logger.warning(f"[{cls.site_name} Search] Aborted due to rate-limiting for {search_url}.")
-                return {'ret': 'Too Many Requests', 'data': response_html_text}
+            if tree is None:
+                return {'ret': 'success', 'data': []}
 
+            if response_html_text:
+                cls._info_cache[code] = response_html_text
 
-            if tree is None: # _get_fc2ppvdb_page_content에서 tree가 None이면 실패
-                logger.warning(f"[{cls.site_name} Search] Failed to get valid HTML tree for URL: {search_url}.")
-                ret['data'] = 'failed to get tree or redirection page'
-                """
-                if not_found_delay_seconds > 0 and ret['data'] != 'not found on site': # 'not found on site' 아닐때만 딜레이
-                    logger.info(f"[{cls.site_name} Search] 'failed to get tree', delaying for {not_found_delay_seconds} seconds.")
-                    time.sleep(not_found_delay_seconds)
-                """
-                return ret
-
-            # 페이지를 찾을 수 없는 경우
-            not_found_title_elements = tree.xpath('/html/head/title/text()')
-            not_found_h1_elements = tree.xpath('/html/body/div/div/div/main/div/div/h1/text()')
-            is_page_not_found = False
-            if not_found_title_elements and 'お探しの商品が見つかりません' in not_found_title_elements[0]:
-                is_page_not_found = True
-            elif not_found_title_elements and 'not found' in not_found_title_elements[0].lower():
-                logger.debug(f"[{cls.site_name} Search] Page Not Found {keyword_num_part} (429 Too many requests)")
-                is_page_not_found = True
-            elif not_found_h1_elements and "404 Not Found" in not_found_h1_elements[0]:
-                is_page_not_found = True
-
-            # 페이지 삭제
-            # XPath: //div[contains(@class, 'absolute') and contains(@class, 'inset-0')]/h1[contains(text(), 'このページは削除されました')]
-            # 더 간단하게: //h1[contains(text(), 'このページは削除されました')]
-            deleted_page_elements = tree.xpath("//h1[contains(text(), 'このページは削除されました')]")
-            if deleted_page_elements:
-                logger.debug(f"[{cls.site_name} Search] Page deleted on site for keyword_num_part: {keyword_num_part} (문구: {deleted_page_elements[0].text.strip()})")
-                is_page_not_found = True
-
-            if is_page_not_found:
-                logger.debug(f"[{cls.site_name} Search] Page not found or deleted on site for keyword_num_part: {keyword_num_part}")
-                ret['data'] = 'not found on site'
-                """
-                if not_found_delay_seconds > 0:
-                    logger.debug(f"[{cls.site_name} Search] 'not found on site', delaying for {not_found_delay_seconds} seconds.")
-                    time.sleep(not_found_delay_seconds)
-                """
-                return ret
+            not_found_elements = tree.xpath('/html/head/title[contains(text(), "お探しの商品が見つかりません")] | //h1[contains(text(), "404 Not Found")] | //h1[contains(text(), "このページは削除されました")]')
+            if not_found_elements:
+                logger.debug(f"[{cls.site_name} Search] Page not found or deleted for code: {code}")
+                return {'ret': 'success', 'data': []}
 
             item = EntityAVSearch(cls.site_name)
-            item.code = cls.module_char + cls.site_char + keyword_num_part
+            item.code = cls.module_char + cls.site_char + code
+            item.ui_code = f'FC2-{code}'
+            item.score = 100
 
             info_block_xpath_base = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]'
-
-            # 제목 (번역 안 함)
             title_elements = tree.xpath(f'{info_block_xpath_base}/div[2]/h2/a/text()')
-            if title_elements:
-                item.title = title_elements[0].strip()
-                # logger.debug(f"[{cls.site_name} Search] Parsed title: {item.title}")
-            else:
-                item.title = f"FC2-{keyword_num_part}" 
-                logger.warning(f"[{cls.site_name} Search] Title not found. Using fallback: {item.title}")
-            item.title_ko = item.title # title_ko에도 원본 제목 할당 (또는 None)
+            item.title = title_elements[0].strip() if title_elements else item.ui_code
 
-            # 출시년도
+            if manual:
+                item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+            else:
+                item.title_ko = item.title
+
             year_text_elements = tree.xpath(f"{info_block_xpath_base}/div[2]/div[starts-with(normalize-space(.), '販売日：')]/span/text()")
             if year_text_elements:
                 date_str = year_text_elements[0].strip()
                 if re.match(r'\d{4}-\d{2}-\d{2}', date_str):
-                    item.year = int(date_str.split('-')[0])
-                    # logger.debug(f"[{cls.site_name} Search] Parsed year: {item.year}")
-            # else: item.year = 0 # 또는 EntityAVSearch 기본값 사용
+                    try: item.year = int(date_str.split('-')[0])
+                    except (ValueError, IndexError): pass
 
-            # 이미지 URL
-            original_image_url_from_site = None
             img_elements = tree.xpath(f'{info_block_xpath_base}/div[1]/a/img/@src')
             if img_elements:
-                image_url_temp = img_elements[0]
-                if image_url_temp.startswith('/'):
-                    original_image_url_from_site = SITE_BASE_URL + image_url_temp
-                else:
-                    original_image_url_from_site = image_url_temp
+                item.image_url = f"{SITE_BASE_URL}{img_elements[0]}" if img_elements[0].startswith('/') else img_elements[0]
+            else:
+                item.image_url = ""
 
-            # === 이미지 URL 처리 ===
-            # manual=True (에이전트 검색 결과)일 때만 이미지 URL을 process_image_mode로 처리
-            if manual and original_image_url_from_site:
-                # LogicJavFc2에서 전달받은 image_mode와 proxy_url 사용
-                # current_image_mode_for_search는 kwargs에서 가져온 image_mode (jav_censored_image_mode)
-                try:
-                    if cls.config['use_proxy']:
-                        item.image_url = cls.make_image_url(original_image_url_from_site)
-                except Exception as e_img: 
-                    logger.error(f"DMM Search: ImgProcErr (manual):{e_img}")
+            if manual:
+                if cls.config.get('use_proxy'):
+                    item.image_url = cls.make_image_url(item.image_url)
 
-                # logger.debug(f"[{cls.site_name} Search Manual] Processed image URL: {original_image_url_from_site} -> {item.image_url} (mode: {current_image_mode_for_search})")
-            elif original_image_url_from_site: # manual=False 이거나 이미지가 있을 경우 원본 URL 사용
-                item.image_url = original_image_url_from_site
-            else: # 이미지가 아예 없는 경우
-                item.image_url = "" # 또는 None
-
-            item.ui_code = f'FC2-{keyword_num_part}'
-            item.score = 100 
-
-            # logger.debug(f"[{cls.site_name} Search] Final item for keyword_num_part '{keyword_num_part}': score={item.score}, ui_code='{item.ui_code}', title='{item.title}', year={item.year if hasattr(item, 'year') else 'N/A'}, image_url='{item.image_url}'")
-
-            ret['data'].append(item.as_dict())
+            ret['data'] = [item.as_dict()]
             ret['ret'] = 'success'
 
         except Exception as exception: 
-            logger.error(f'[{cls.site_name} Search] Exception for keyword_num_part {keyword_num_part}: {exception}')
+            logger.error(f'[{cls.site_name} Search] Exception for keyword {keyword}: {exception}')
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(exception)
-
         return ret
 
 
     @classmethod
-    def info(cls, code_module_site_id):
-
-        # 요청 전 차단 상태 확인
-        if cls._is_blocked():
-            return {'ret': 'error_site_rate_limited', 'data': f"Site is currently rate-limited. Try again later. Retry-After was {cls._last_retry_after_value}s."}
-
-        keyword_num_part = code_module_site_id[len(cls.module_char) + len(cls.site_char):]
-        ui_code_for_images = f'FC2-{keyword_num_part}'
-
-        ret = {'ret': 'failed', 'data': None}
-        tree = None
-        response_html_text = None
-
+    def info(cls, code):
         try:
-            info_url = f'{SITE_BASE_URL}/articles/{keyword_num_part}/'
-            # logger.debug(f"[{cls.site_name} Info] Requesting URL: {info_url}")
-
-            tree, response_html_text = cls._get_fc2ppvdb_page_content(info_url,  use_cloudscraper=True)
-
-            if tree is None: # _get_fc2ppvdb_page_content에서 tree가 None이면 실패
-                logger.warning(f"[{cls.site_name} Info] Failed to get valid HTML tree for URL: {info_url}")
-                ret['data'] = 'failed to get tree or redirection page'
-                return ret
-
-            not_found_title_elements = tree.xpath('/html/head/title/text()')
-            not_found_h1_elements = tree.xpath('/html/body/div/div/div/main/div/div/h1/text()')
-            is_page_not_found = False
-            if not_found_title_elements and ('お探しの商品が見つかりません' in not_found_title_elements[0] or 'not found' in not_found_title_elements[0].lower()):
-                is_page_not_found = True
-            elif not_found_h1_elements and "404 Not Found" in not_found_h1_elements[0]:
-                is_page_not_found = True
-
-            deleted_page_elements = tree.xpath("//h1[contains(text(), 'このページは削除されました')]")
-            if deleted_page_elements:
-                logger.debug(f"[{cls.site_name} Info] Page deleted on site for code: {code_module_site_id}")
-                is_page_not_found = True
-
-            if is_page_not_found:
-                logger.info(f'[{cls.site_name} Info] Page not found or deleted on site for code: {code_module_site_id}')
-                ret['data'] = 'not found on site'
-                return ret
-
-            entity = EntityMovie(cls.site_name, code_module_site_id)
-            entity.country = ['일본']
-            entity.mpaa = '청소년 관람불가'
-
-            info_base_xpath = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[2]'
-            info_base_elements = tree.xpath(info_base_xpath)
-            if not info_base_elements:
-                logger.error(f"[{cls.site_name} Info] Main info block not found for {code_module_site_id}")
-                ret['data'] = 'Main info block not found on page'
-                return ret
-            info_element = info_base_elements[0]
-
-            entity.thumb = []
-            entity.fanart = []
-            entity.extras = []
-            final_image_sources = {
-                'poster_source': None,
-                'poster_mode': None,
-                'landscape_source': None,
-                'arts': [],
-            }
-            poster_xpath = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[1]/a/img/@src'
-            poster_img_elements = tree.xpath(poster_xpath)
-            if poster_img_elements:
-                poster_url_temp = poster_img_elements[0]
-                if poster_url_temp.startswith('/'):
-                    poster_url_original = SITE_BASE_URL + poster_url_temp
-                else:
-                    poster_url_original = poster_url_temp
-                #logger.debug(f"[{cls.site_name} Info] Original poster URL: {poster_url_original}")
-                final_image_sources['poster_source'] = poster_url_original
-                final_image_sources['landscape_source'] = poster_url_original
-                
+            ret = {}
+            entity = cls.__info(code)
+            if entity:
+                ret['ret'] = 'success'
+                ret['data'] = entity.as_dict()
             else:
-                logger.debug(f'[{cls.site_name} Info] 포스터 이미지를 찾을 수 없음: {code_module_site_id}')
-
-            cls.finalize_images_for_entity(entity, final_image_sources)
-
-            title_xpath = './h2/a/text()'
-            title_elements = info_element.xpath(title_xpath)
-            if title_elements:
-                raw_title = title_elements[0].strip()
-                # logger.debug(f"[{cls.site_name} Info] Raw title for tagline/plot: {raw_title}")
-                entity.tagline = cls.trans(raw_title)
-                entity.plot = cls.trans(entity.tagline)
-                # logger.debug(f"[{cls.site_name} Info] Processed tagline/plot: {entity.tagline}")
-            else:
-                logger.debug(f"[{cls.site_name} Info] Tagline/Plot (Title) not found for {code_module_site_id}")
-
-            date_xpath = "./div[starts-with(normalize-space(.), '販売日：')]/span/text()"
-            date_elements = info_element.xpath(date_xpath)
-            if date_elements:
-                date_str = date_elements[0].strip()
-                if re.match(r'\d{4}-\d{2}-\d{2}', date_str):
-                    entity.premiered = date_str
-                    entity.year = int(date_str.split('-')[0])
-                    # logger.debug(f"[{cls.site_name} Info] Parsed premiered: {entity.premiered}, year: {entity.year}")
-                else:
-                    logger.debug(f"[{cls.site_name} Info] Date format mismatch: {date_str} in {code_module_site_id}")
-            else:
-                logger.debug(f"[{cls.site_name} Info] Premiered date not found for {code_module_site_id}")
-
-            seller_name_raw = None
-            
-            seller_xpath_link = "./div[starts-with(normalize-space(.), '販売者：')]/span/a/text()"
-            seller_elements_link = info_element.xpath(seller_xpath_link)
-
-            if seller_elements_link:
-                seller_name_raw = seller_elements_link[0].strip()
-                logger.debug(f"[{cls.site_name} Info] Parsed Seller (for Director/Studio) from link: {seller_name_raw}")
-            else: 
-                seller_xpath_text = "./div[starts-with(normalize-space(.), '販売者：')]/span/text()"
-                seller_elements_text = info_element.xpath(seller_xpath_text)
-                if seller_elements_text and seller_elements_text[0].strip():
-                    seller_name_raw = seller_elements_text[0].strip()
-                    #logger.debug(f"[{cls.site_name} Info] Parsed Seller (for Director/Studio) from text: {seller_name_raw}")
-                else:
-                    logger.debug(f"[{cls.site_name} Info] Seller (for Director/Studio) not found for {code_module_site_id}")
-
-            if seller_name_raw:
-                entity.director = entity.studio = seller_name_raw
-            else:
-                entity.director = entity.studio = None
-
-            actor_xpath = "./div[starts-with(normalize-space(.), '女優：')]/span//a/text() | ./div[starts-with(normalize-space(.), '女優：')]/span/text()[normalize-space()]"
-            actor_name_elements = info_element.xpath(actor_xpath)
-            if actor_name_elements:
-                entity.actor = []
-                processed_actors = set()
-                for actor_name_part in actor_name_elements:
-                    individual_names = [name.strip() for name in re.split(r'[,/\s]+', actor_name_part.strip()) if name.strip()]
-                    for name_ja in individual_names:
-                        if name_ja and name_ja not in processed_actors:
-                            actor_obj = EntityActor(cls.trans(name_ja))
-                            actor_obj.originalname = name_ja
-                            entity.actor.append(actor_obj)
-                            processed_actors.add(name_ja)
-                            # logger.debug(f"[{cls.site_name} Info] Added actor: {name_ja} (KO: {actor_obj.name})")
-            if not hasattr(entity, 'actor') or not entity.actor:
-                logger.debug(f"[{cls.site_name} Info] Actors (女優) not found or empty for {code_module_site_id}")
-
-            entity.tag = ['FC2']
-            logger.debug(f"[{cls.site_name} Info] Default tag set: {entity.tag}")
-
-            entity.genre = []
-            genre_xpath = "./div[starts-with(normalize-space(.), 'タグ：')]/span//a/text() | ./div[starts-with(normalize-space(.), 'タグ：')]/span/text()[normalize-space()]"
-            genre_elements = info_element.xpath(genre_xpath)
-            if genre_elements:
-                raw_genres_from_site = []
-                for gen_text_part in genre_elements:
-                    individual_tags = [tag.strip() for tag in re.split(r'[,/\s]+', gen_text_part.strip()) if tag.strip()]
-                    raw_genres_from_site.extend(individual_tags)
-
-                processed_genres = set()
-                for item_genre_ja in raw_genres_from_site:
-                    if item_genre_ja not in processed_genres:
-                        translated_genre = cls.trans(item_genre_ja)
-                        entity.genre.append(translated_genre) 
-                        processed_genres.add(item_genre_ja)
-                        # logger.debug(f"[{cls.site_name} Info] Added genre: {item_genre_ja} (KO: {translated_genre})")
-            if not entity.genre:
-                logger.debug(f"[{cls.site_name} Info] Genres (タグ) not found or empty for {code_module_site_id}")
-
-            runtime_xpath = "./div[starts-with(normalize-space(.), '収録時間：')]/span/text()"
-            runtime_elements = info_element.xpath(runtime_xpath)
-            if runtime_elements:
-                time_str = runtime_elements[0].strip()
-                parts = time_str.split(':')
-                try:
-                    if len(parts) == 3:
-                        h, m, s = map(int, parts)
-                        entity.runtime = h * 60 + m
-                    elif len(parts) == 2:
-                        m, s = map(int, parts)
-                        entity.runtime = m
-                    else:
-                        logger.debug(f"[{cls.site_name} Info] Unexpected runtime format: {time_str} for {code_module_site_id}")
-                    if hasattr(entity, 'runtime') and entity.runtime is not None:
-                        logger.debug(f"[{cls.site_name} Info] Parsed runtime (minutes): {entity.runtime}")
-                except ValueError:
-                    logger.debug(f"[{cls.site_name} Info] Failed to parse runtime string: {time_str} for {code_module_site_id}")
-            else:
-                logger.debug(f"[{cls.site_name} Info] Runtime (収録時間) not found for {code_module_site_id}")
-
-            entity.title = f'FC2-{keyword_num_part}'
-            entity.originaltitle = f'FC2-{keyword_num_part}'
-            entity.sorttitle = f'FC2-{keyword_num_part}'
-            logger.debug(f"[{cls.site_name} Info] Set fixed title/originaltitle/sorttitle: {entity.title}")
-
-            # 리뷰 정보 파싱
-            entity.review = []
-            use_review = False
-            if use_review:
-                logger.debug(f"[{cls.site_name} Info] Parsing reviews for {code_module_site_id}")
-                comments_section = tree.xpath("//div[@id='comments']")
-                if comments_section:
-                    comment_elements = comments_section[0].xpath("./div[starts-with(@id, 'comment-')]")
-                    logger.debug(f"[{cls.site_name} Info] Found {len(comment_elements)} comment elements.")
-
-                    for comment_el in comment_elements:
-                        try:
-                            review_obj = EntityReview(cls.site_name)
-
-                            author_el = comment_el.xpath("./div[contains(@class, 'flex-auto')]/div[1]/div[1]/p/text()")
-                            author = author_el[0].strip() if author_el and author_el[0].strip() else 'Anonymous'
-
-                            up_votes_el = comment_el.xpath(".//span[starts-with(@id, 'up-counter-')]/text()")
-                            up_votes = up_votes_el[0].strip() if up_votes_el else '0'
-
-                            down_votes_el = comment_el.xpath(".//span[starts-with(@id, 'down-counter-')]/text()")
-                            down_votes = down_votes_el[0].strip() if down_votes_el else '0'
-
-                            date_id_text_el = comment_el.xpath("./div[contains(@class, 'flex-auto')]/div[1]/div[2]/p/text()")
-                            review_date_str = ''
-                            comment_id_str = ''
-                            if date_id_text_el:
-                                full_date_id_str = date_id_text_el[0].strip()
-                                match_date = re.search(r'(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})', full_date_id_str)
-                                if match_date:
-                                    review_date_str = match_date.group(1)
-
-                                match_id = re.search(r'ID:(\S+)', full_date_id_str)
-                                if match_id:
-                                    comment_id_str = match_id.group(1)
-
-                            review_obj.author = author
-                            if hasattr(review_obj, 'date') and review_date_str:
-                                review_obj.date = review_date_str
-
-                            comment_p_elements = comment_el.xpath("./div[contains(@class, 'flex-auto')]/p[contains(@class, 'text-gray-500')]")
-                            comment_text_raw = ''
-                            if comment_p_elements:
-                                p_element = comment_p_elements[0]
-                                parts = []
-                                for node in p_element.xpath('./node()'):
-                                    if isinstance(node, str):
-                                        parts.append(node)
-                                    elif hasattr(node, 'tag'):
-                                        if node.tag == 'br':
-                                            parts.append('\n')
-                                        else:
-                                            parts.append(html.tostring(node, encoding='unicode', method='html'))
-
-                                inner_html_content_with_newlines = ''.join(parts)
-                                temp_element = html.fromstring(f"<div>{inner_html_content_with_newlines}</div>")
-                                comment_text_raw = temp_element.text_content().strip()
-
-                            if not comment_text_raw:
-                                logger.debug(f"[{cls.site_name} Info] Skipping comment (ID: {comment_id_str or 'N/A'}) due to empty content.")
-                                continue
-
-                            if hasattr(review_obj, 'source'):
-                                review_obj.source = comment_text_raw
-
-                            comment_text_for_display = SiteUtil.trans(comment_text_raw, do_trans=do_trans, source='ja', target='ko')
-
-                            review_header_parts = [f"좋아요: {up_votes}", f"싫어요: {down_votes}"]
-                            if review_date_str and not hasattr(review_obj, 'date'): # date 속성이 없을 경우 text에 포함
-                                review_header_parts.append(f"작성일: {review_date_str}")
-
-                            review_header = "[" + " / ".join(review_header_parts) + "]"
-                            review_obj.text = f"{review_header} {comment_text_for_display}"
-
-                            if comment_id_str:
-                                review_obj.link = f"{info_url}#comment-{comment_id_str}"
-                            else:
-                                review_obj.link = info_url
-
-                            entity.review.append(review_obj)
-                            logger.debug(f"[{cls.site_name} Info] Added review by '{author}': Up={up_votes}, Down={down_votes}, Date='{review_date_str}', ID='{comment_id_str}'")
-
-                        except Exception as e_review:
-                            logger.error(f"[{cls.site_name} Info] Exception parsing a review for {code_module_site_id}: {e_review}")
-                            logger.error(traceback.format_exc())
-                else:
-                    logger.debug(f"[{cls.site_name} Info] No comments section found for {code_module_site_id}")
-            else:
-                logger.debug(f"[{cls.site_name} Info] Skipping review parsing as 'use_review' is False for {code_module_site_id}")
-
-            logger.info(f"[{cls.site_name} Info] Successfully processed info for code: {code_module_site_id}")
-            ret['ret'] = 'success'
-            ret['data'] = entity.as_dict()
-
+                ret['ret'] = 'error'
         except Exception as exception: 
-            logger.error(f'[{cls.site_name} Info] Exception for code {code_module_site_id}: {exception}')
+            logger.error(f'[{cls.site_name} Info] Exception for code {code}: {exception}')
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(exception)
-
         return ret
 
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    @classmethod
+    def __info(cls, code):
+        if cls._is_blocked():
+            logger.warning(f"[{cls.site_name} Info] Aborted due to rate-limiting.")
+            return None
 
+        code_part = code[len(cls.module_char) + len(cls.site_char):]
+        tree = None
 
+        if code_part in cls._info_cache:
+            logger.debug(f"Using cached HTML data for FC2 code: {code_part}")
+            html_text = cls._info_cache[code_part]
+            tree = html.fromstring(html_text)
+            del cls._info_cache[code_part]
 
+        if tree is None:
+            logger.debug(f"Cache miss for FC2 code: {code_part}. Calling site.")
+            info_url = f'{SITE_BASE_URL}/articles/{code_part}/'
+            tree, _ = cls._get_fc2ppvdb_page_content(info_url, use_cloudscraper=True)
 
+        if tree is None:
+            return None
 
+        entity = EntityMovie(cls.site_name, code)
+        entity.country = ['일본']; entity.mpaa = '청소년 관람불가'
+        entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
+        entity.tag = []; entity.genre = []; entity.actor = []
 
+        entity.ui_code = f'FC2-{code_part}'
+        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
 
+        info_base_xpath = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[2]'
+        info_element = tree.xpath(info_base_xpath)
+        if not info_element: 
+            logger.warning(f"FC2 Info: Main info block not found for {code}")
+            return None
+        info_element = info_element[0]
 
+        title_elements = info_element.xpath('./h2/a/text()')
+        if title_elements:
+            entity.tagline = cls.trans(title_elements[0].strip())
+        entity.plot = entity.tagline
 
+        date_elements = info_element.xpath("./div[starts-with(normalize-space(.), '販売日：')]/span/text()")
+        if date_elements:
+            date_str = date_elements[0].strip()
+            if re.match(r'\d{4}-\d{2}-\d{2}', date_str):
+                entity.premiered = date_str
+                try: entity.year = int(date_str.split('-')[0])
+                except (ValueError, IndexError): pass
 
+        seller_elements = info_element.xpath("./div[starts-with(normalize-space(.), '販売者：')]/span/a/text()")
+        if seller_elements:
+            entity.director = entity.studio = seller_elements[0].strip()
 
+        actor_elements = info_element.xpath("./div[starts-with(normalize-space(.), '女優：')]/span//a/text()")
+        for actor_name in actor_elements:
+            actor_obj = EntityActor(cls.trans(actor_name.strip()))
+            actor_obj.originalname = actor_name.strip()
+            entity.actor.append(actor_obj)
 
+        entity.tag.append('FC2')
+        genre_elements = info_element.xpath("./div[starts-with(normalize-space(.), 'タグ：')]/span//a/text()")
+        for item_genre in genre_elements:
+            entity.genre.append(cls.trans(item_genre.strip()))
 
+        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+        if image_mode == 'image_server':
+            module_type = 'jav_uncensored'
+            local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+            server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+            base_save_format = cls.MetadataSetting.get(f'{module_type}_image_server_save_format')
 
+            label = "FC2"
+            # 1. code_part (순수 숫자 품번)를 7자리로 패딩
+            padded_code = code_part.zfill(7)
+            # 2. 패딩된 코드의 '앞 3자리'를 하위 폴더 이름으로 사용
+            code_prefix_part = padded_code[:3]
 
+            base_path_part = base_save_format.format(label=label)
+            final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), code_prefix_part)
 
+            entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+            entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
 
+        poster_url = ""
+        poster_elements = tree.xpath('/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[1]/a/img/@src')
+        if poster_elements:
+            poster_url = f"{SITE_BASE_URL}{poster_elements[0]}" if poster_elements[0].startswith('/') else poster_elements[0]
 
+        final_image_sources = {
+            'poster_source': poster_url,
+            'poster_mode': None,
+            'landscape_source': None,
+            'arts': [],
+        }
+        cls.finalize_images_for_entity(entity, final_image_sources)
 
-
-
-
-
-
-
-
-
-
-
-
+        return entity
 
 
     ################################################
@@ -516,7 +235,7 @@ class SiteFc2ppvdb(SiteAvBase):
                 is_rate_limited_by_content_cs = False
                 if "<title>Too Many Requests</title>" in page_text_for_rate_limit_check:
                     is_rate_limited_by_content_cs = True
-                
+
                 if res.status_code == 429 or 'Retry-After' in res.headers or is_rate_limited_by_content_cs:
                     logger.warning(f"[{cls.site_name}] Rate limit detected by Cloudscraper. Status: {res.status_code}, Headers: {res.headers.get('Retry-After')}, HTML Title: {is_rate_limited_by_content_cs}")
                     if cls._handle_rate_limit(res.headers): # Retry-After 헤더가 있으면 그것을 우선 사용
@@ -570,7 +289,7 @@ class SiteFc2ppvdb(SiteAvBase):
                 if "お探しのページは見つかりません。" in page_text:
                     logger.info(f"[{cls.site_name}] Page explicitly states 'not found'...")
                     return None, page_text
-                
+
                 try:
                     return html.fromstring(page_text), page_text
                 except Exception as e_parse:
@@ -589,7 +308,7 @@ class SiteFc2ppvdb(SiteAvBase):
         """현재 사이트가 차단 상태인지 확인하고, 남은 차단 시간을 로깅합니다."""
         if cls._block_release_time_fc2ppvdb == 0:
             return False # 차단된 적 없거나 해제됨
-        
+
         now_timestamp = time.time()
         if now_timestamp < cls._block_release_time_fc2ppvdb:
             remaining_seconds = int(cls._block_release_time_fc2ppvdb - now_timestamp)
@@ -615,12 +334,12 @@ class SiteFc2ppvdb(SiteAvBase):
             # if retry_after_seconds > 86400: # 예: 하루 이상이면 최대 1시간으로 제한 (선택적)
             #    logger.warning(f"[{cls.site_name}] Received very long Retry-After: {retry_after_seconds}s. Limiting block to 1 hour.")
             #    retry_after_seconds = 3600
-            
+
             cls._block_release_time_fc2ppvdb = time.time() + retry_after_seconds
             release_dt_str = datetime.fromtimestamp(cls._block_release_time_fc2ppvdb).strftime('%Y-%m-%d %H:%M:%S')
             logger.warning(f"[{cls.site_name}] Rate limit detected. Retry-After: {retry_after_seconds}s. Blocking requests until {release_dt_str}.")
             return True # 차단 설정됨
         return False # Retry-After 헤더 없거나 유효하지 않음
-    
+
     # endregion UTIL
     ################################################
