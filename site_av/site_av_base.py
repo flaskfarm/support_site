@@ -421,29 +421,30 @@ class SiteAvBase:
         
         cls.MetadataSetting = db
 
-        if cls.config is None:
+        # 모듈 종류(Censored/Uncensored)에 따라 설정 키 접두사를 결정
+        module_type = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
+        
+        # 공통 설정은 항상 jav_censored의 것을 따르도록 강제
+        common_config_prefix = 'jav_censored'
+
+        use_proxy_key = f"{module_type}_{cls.site_name}_use_proxy"
+        proxy_url_key = f"{module_type}_{cls.site_name}_proxy_url"
+        
+        # config 딕셔너리 구성
+        if getattr(cls, 'config', None) is None:
             cls.config = {}
 
-        use_proxy = f"jav_censored_{cls.site_name}_use_proxy"
-        if db.get(use_proxy) is None:
-            use_proxy = f"jav_uncensored_{cls.site_name}_use_proxy"
-        
-        proxy_url = f"jav_censored_{cls.site_name}_proxy_url"
-        if db.get(proxy_url) is None:
-            proxy_url = f"jav_uncensored_{cls.site_name}_proxy_url"
-        
-        new_config_values = {
-            "image_mode": db.get('jav_censored_image_mode'),
-            "trans_option": db.get('jav_censored_trans_option'),
-            "use_extras": db.get_bool('jav_censored_use_extras'),
-            "max_arts": db.get_int('jav_censored_art_count'),
+        cls.config.update({
+            # 공통 설정 (항상 jav_censored 값을 사용)
+            "image_mode": db.get(f'{common_config_prefix}_image_mode'),
+            "trans_option": db.get(f'{common_config_prefix}_trans_option'),
+            "use_extras": db.get_bool(f'{common_config_prefix}_use_extras'),
+            "max_arts": db.get_int(f'{common_config_prefix}_art_count'),
 
-            # 사이트별
-            "use_proxy": db.get_bool(use_proxy),
-            "proxy_url": db.get(proxy_url),
-        }
-
-        cls.config.update(new_config_values)
+            # 사이트별 설정 (각 모듈 타입에 맞는 값을 사용)
+            "use_proxy": db.get_bool(use_proxy_key),
+            "proxy_url": db.get(proxy_url_key),
+        })
 
 
     # endregion
@@ -1154,26 +1155,54 @@ class SiteAvBase:
                 url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
                 url = apply(url, use_proxy_server, server_url)
                 entity.fanart.append(url)
-            
-        elif image_mode == 'image_server':
-            server_url = cls.MetadataSetting.get('jav_censored_image_server_url').rstrip('/')
-            local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
 
-            save_format = cls.MetadataSetting.get('jav_censored_image_server_save_format')
-            rewrite = cls.MetadataSetting.get_bool('jav_censored_image_server_rewrite')
+        elif image_mode == 'image_server':
+            # 1. 사이트 모듈이 경로를 미리 계산했는지 확인
+            target_folder = getattr(entity, 'image_server_target_folder', None)
+            server_url_prefix = getattr(entity, 'image_server_url_prefix', None)
+
+            # 2. 미리 계산된 경로가 없다면 (Censored 등 기존 모듈), 직접 경로를 계산한다.
+            if not target_folder or not server_url_prefix:
+                logger.debug(f"Path not pre-calculated for {entity.ui_code}. Calculating path inside finalize_images_for_entity.")
+                module_type = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
+
+                server_url = cls.MetadataSetting.get(f'{module_type}_image_server_url')
+                if server_url is None: server_url = cls.MetadataSetting.get('jav_censored_image_server_url', F.SystemModelSetting.get('ddns') + '/images')
+                server_url = server_url.rstrip('/')
+
+                local_path = cls.MetadataSetting.get(f'{module_type}_image_server_local_path')
+                if local_path is None: local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path', '/data/images')
+
+                save_format = cls.MetadataSetting.get(f'{module_type}_image_server_save_format')
+                if save_format is None:
+                    logger.error(f"Image Server Error: '{module_type}_image_server_save_format' is not defined.")
+                    return
+
+                code = entity.ui_code.lower()
+                CODE = code.upper()
+                label = code.split('-')[0].upper()
+                label_1 = label[0] if label else ''
+                year = str(getattr(entity, 'year', '0000'))
+
+                format_dict = {'code': code, 'CODE': CODE, 'label': label, 'label_1': label_1, 'year': year, 'site_name': cls.site_name}
+
+                _format_parts = save_format.format(**format_dict).split('/')
+                target_folder = os.path.join(local_path, *(_format_parts))
+
+                # server_url_prefix도 계산
+                relative_path = os.path.join(*_format_parts)
+                server_url_prefix = f"{server_url}/{relative_path.replace(os.path.sep, '/')}"
+
+            # 3. 필요한 나머지 설정 로드
+            module_type = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
+            rewrite_key = f"{'jav_censored' if module_type == 'jav_censored' else module_type}_image_server_rewrite"
+            rewrite = cls.MetadataSetting.get_bool(rewrite_key)
+            if rewrite is None:
+                rewrite = cls.MetadataSetting.get_bool('jav_censored_image_server_rewrite')
+            if rewrite is None:
+                rewrite = True
 
             code = entity.ui_code.lower()
-            CODE = code.upper()
-            label = code.split('-')[0].upper()
-            label_1 = label[0]
-
-            _format = save_format.format(
-                code=code,
-                CODE=CODE,
-                label=label,
-                label_1=label_1,
-            ).split('/')
-            target_folder = os.path.join(local_path, *(_format))
 
             # 포스터
             data = {
@@ -1184,7 +1213,8 @@ class SiteAvBase:
                 save = True
                 for idx, filename in enumerate(filenames):
                     filepath = os.path.join(target_folder, filename)
-                    url = f"{server_url}/{os.path.relpath(filepath, local_path)}".replace("\\", "/")
+                    url = f"{server_url_prefix}/{filename}"
+
                     if idx == 0 and os.path.exists(filepath):
                         entity.thumb.append(EntityThumb(aspect=aspect, value=url))
                         save = False
