@@ -177,7 +177,7 @@ class SiteHeyzo(SiteAvBase):
 
         # --- 파싱된 데이터를 entity 객체에 할당 ---
         entity.ui_code = f'HEYZO-{code_part}'
-        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
 
         entity.tagline = cls.trans(tmp.get('tagline', ''))
         entity.premiered = tmp.get('premiered')
@@ -232,7 +232,8 @@ class SiteHeyzo(SiteAvBase):
                 video_url = cls.make_video_url(f'https://m.heyzo.com/contents/3000/{code_part}/sample.mp4')
                 thumb_url = next((t.value for t in entity.thumb if t.aspect == 'landscape'), '')
                 if video_url:
-                    entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video_url, thumb=thumb_url))
+                    trailer_title = entity.tagline or entity.ui_code
+                    entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
         except Exception:
             pass
 

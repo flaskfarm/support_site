@@ -117,7 +117,7 @@ class SiteCarib(SiteAvBase):
 
         # ui_code 및 title 설정
         entity.ui_code = f'carib-{code_part}'
-        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
 
         # 연도(year) 및 출시일(premiered) 파싱
         try:
@@ -185,7 +185,8 @@ class SiteCarib(SiteAvBase):
                 thumb_url = next((t.value for t in entity.thumb if t.aspect == 'landscape'), '') # 랜드스케이프를 썸네일로
                 video_url = cls.make_video_url(f'https://smovie.caribbeancom.com/sample/movies/{code_part}/480p.mp4')
                 if video_url:
-                    entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video_url, thumb=thumb_url))
+                    trailer_title = entity.tagline or entity.ui_code
+                    entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
         except Exception:
             logger.warning(f"Failed to process extras for {code}")
 

@@ -141,7 +141,7 @@ class SiteFc2ppvdb(SiteAvBase):
         entity.tag = []; entity.genre = []; entity.actor = []
 
         entity.ui_code = f'FC2-{code_part}'
-        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
 
         info_base_xpath = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[2]'
         info_element = tree.xpath(info_base_xpath)
