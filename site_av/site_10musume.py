@@ -126,7 +126,7 @@ class Site10Musume(SiteAvBase):
         entity.tag = []; entity.genre = []; entity.actor = []
 
         entity.ui_code = f'10mu-{code[2:]}'
-        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+        entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
 
         entity.premiered = json_data.get('Release')
 
@@ -214,7 +214,8 @@ class Site10Musume(SiteAvBase):
                 thumb_url = next((t.value for t in entity.thumb if t.aspect == 'poster'), '')
                 video_url = cls.make_video_url(sample_files[-1].get('URL'))
                 if video_url:
-                    entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video_url, thumb=thumb_url))
+                    trailer_title = entity.tagline or entity.ui_code
+                    entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
         except Exception: pass
 
         return entity
