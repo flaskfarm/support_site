@@ -185,7 +185,7 @@ class SiteCarib(SiteAvBase):
                 thumb_url = next((t.value for t in entity.thumb if t.aspect == 'landscape'), '') # 랜드스케이프를 썸네일로
                 video_url = cls.make_video_url(f'https://smovie.caribbeancom.com/sample/movies/{code_part}/480p.mp4')
                 if video_url:
-                    trailer_title = entity.tagline or entity.ui_code
+                    trailer_title = entity.tagline if entity.tagline else entity.title
                     entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
         except Exception:
             logger.warning(f"Failed to process extras for {code}")

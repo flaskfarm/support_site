@@ -232,7 +232,7 @@ class SiteHeyzo(SiteAvBase):
                 video_url = cls.make_video_url(f'https://m.heyzo.com/contents/3000/{code_part}/sample.mp4')
                 thumb_url = next((t.value for t in entity.thumb if t.aspect == 'landscape'), '')
                 if video_url:
-                    trailer_title = entity.tagline or entity.ui_code
+                    trailer_title = entity.tagline if entity.tagline else entity.title
                     entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
         except Exception:
             pass
