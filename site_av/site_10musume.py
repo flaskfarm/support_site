@@ -168,13 +168,18 @@ class Site10Musume(SiteAvBase):
         gallery_data = json_data.get('Gallery', [])
         arts_urls = [format_thumb_url(p) for p in gallery_data] if isinstance(gallery_data, list) else []
 
-        final_image_sources = {
-            'poster_source': format_thumb_url(json_data.get('MovieThumb')),
-            'poster_mode': None,
-            'landscape_source': format_thumb_url(json_data.get('ThumbUltra')),
-            'arts': arts_urls,
-        }
-        cls.finalize_images_for_entity(entity, final_image_sources)
+        # 썸네일
+        try:
+            raw_image_urls = {
+                'poster': format_thumb_url(json_data.get('MovieThumb')),
+                'pl': format_thumb_url(json_data.get('ThumbUltra')),
+                'ps': None,
+                'arts': [],
+                'specific_poster_candidates': []
+            }
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+        except Exception as e:
+            logger.exception(f"10Musume: Error during image processing delegation for {code}: {e}")
 
         # tagline
         entity.tagline = cls.trans(json_data.get('Title', ''))

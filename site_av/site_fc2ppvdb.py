@@ -202,13 +202,18 @@ class SiteFc2ppvdb(SiteAvBase):
         if poster_elements:
             poster_url = f"{SITE_BASE_URL}{poster_elements[0]}" if poster_elements[0].startswith('/') else poster_elements[0]
 
-        final_image_sources = {
-            'poster_source': poster_url,
-            'poster_mode': None,
-            'landscape_source': None,
-            'arts': [],
-        }
-        cls.finalize_images_for_entity(entity, final_image_sources)
+        # 썸네일
+        try:
+            raw_image_urls = {
+                'poster': poster_url,
+                'pl': None,
+                'ps': None,
+                'arts': [],
+                'specific_poster_candidates': []
+            }
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+        except Exception as e:
+            logger.exception(f"Heyzo: Error during image processing delegation for {code}: {e}")
 
         return entity
 
