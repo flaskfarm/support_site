@@ -1030,32 +1030,26 @@ class SiteAvBase:
         image_mode = decision_data['image_mode']
         image_sources = decision_data['final_image_sources']
 
+        poster_source = image_sources.get('poster_source')
+        poster_mode = image_sources.get('poster_mode', '')
+        landscape_source = image_sources.get('landscape_source')
+        arts = image_sources.get('arts', [])
+
+        if not image_sources or not poster_source:
+            return
+
         if image_mode == 'ff_proxy':
-            # image_sources가 없을 경우를 대비한 방어 코드
-            if not image_sources or not image_sources.get('poster_source'):
-                return
-
-            poster_source = image_sources['poster_source']
-            poster_mode = image_sources.get('poster_mode', '')
-
             # proxy를 사용하거나, mode가 있거나, 로컬 파일인 경우 ff_proxy URL 생성
             if cls.config['use_proxy'] or poster_mode:
                 if poster_mode == 'local_file':
                     # 사전 처리된 로컬 파일인 경우
-                    param = {
-                        'site': 'system',
-                        'path': poster_source
-                    }
+                    param = {'site': 'system', 'path': poster_source}
                 else:
                     # 원격 URL이거나, 원격 URL에 crop 모드가 적용된 경우
-                    param = {
-                        'site': cls.site_name,
-                        'url': unquote_plus(poster_source),
-                        'mode': poster_mode
-                    }
-
-                if param.get('mode') in [None, '']:
-                    del param['mode']
+                    param = {'site': cls.site_name, 'url': unquote_plus(poster_source), 'mode': poster_mode}
+                
+                if not param.get('mode'):
+                    param.pop('mode', None)
 
                 param_str = urlencode(param)
                 module_prefix = 'jav_image' if cls.module_char == 'C' else 'jav_image_un'
@@ -1065,25 +1059,18 @@ class SiteAvBase:
                 url = poster_source
             entity.thumb.append(EntityThumb(aspect="poster", value=url))
 
-            if image_sources.get('landscape_source'):
-                landscape_source = image_sources['landscape_source']
+            if landscape_source:
                 if cls.config['use_proxy']:
-                    param = urlencode({
-                        'site': cls.site_name,
-                        'url': unquote_plus(landscape_source)
-                    })
+                    param = urlencode({'site': cls.site_name, 'url': unquote_plus(landscape_source)})
                     module_prefix = 'jav_image' if cls.module_char == 'C' else 'jav_image_un'
                     url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{module_prefix}?{param}"
                 else:
                     url = landscape_source
                 entity.thumb.append(EntityThumb(aspect="landscape", value=url))
 
-            for art_url in image_sources.get('arts', []):
+            for art_url in arts:
                 if cls.config['use_proxy']:
-                    param = urlencode({
-                        'site': cls.site_name,
-                        'url': unquote_plus(art_url)
-                    })
+                    param = urlencode({'site': cls.site_name, 'url': unquote_plus(art_url)})
                     module_prefix = 'jav_image' if cls.module_char == 'C' else 'jav_image_un'
                     url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{module_prefix}?{param}"
                 else:
@@ -1091,24 +1078,20 @@ class SiteAvBase:
                 entity.fanart.append(url)
 
         elif image_mode == 'discord_proxy':
-            if not image_sources or not image_sources.get('poster_source'):
-                return
-
             def apply(url, use_proxy_server, server_url):
-                if use_proxy_server == False:
+                if not use_proxy_server:
                     return url
-                url = server_url.rstrip('/') + '/attachments/' + url.split('/attachments/')[1]
+                if url and '/attachments/' in url:
+                    return server_url.rstrip('/') + '/attachments/' + url.split('/attachments/')[1]
                 return url
 
-            use_proxy_server = cls.MetadataSetting.get_bool('jav_censored_use_discord_proxy_server')
+            use_proxy_server = cls.MetadataSetting.get('jav_censored_use_discord_proxy_server') == 'True'
             server_url = cls.MetadataSetting.get('jav_censored_discord_proxy_server_url')
-            use_my_webhook = cls.MetadataSetting.get_bool('jav_censored_use_my_webhook')
+            use_my_webhook = cls.MetadataSetting.get('jav_censored_use_my_webhook') == 'True'
             webhook_list = cls.MetadataSetting.get_list('jav_censored_my_webhook_list')
             webhook_url = None
 
-            # poster
-            response = cls.jav_image(image_sources['poster_source'], mode=image_sources.get('poster_mode', ''))
-
+            # --- 포스터 처리 ---
             if poster_mode == 'local_file':
                 # 로컬 파일인 경우, 파일을 직접 읽어서 BytesIO 생성
                 with open(poster_source, 'rb') as f:
@@ -1118,30 +1101,34 @@ class SiteAvBase:
                 response = cls.jav_image(url=poster_source, mode=poster_mode, site=cls.site_name)
                 response_bytes = BytesIO(response.data)
 
-            if use_my_webhook:
-                webhook_url = webhook_list[random.randint(0,len(webhook_list)-1)]
-            url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
-            url = apply(url, use_proxy_server, server_url)
-            entity.thumb.append(EntityThumb(aspect="poster", value=url))
+            if use_my_webhook and webhook_list:
+                webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
 
-            # poster
-            response = cls.jav_image(image_sources['landscape_source'])
-            response_bytes = BytesIO(response.data)
-            if use_my_webhook:
-                webhook_url = webhook_list[random.randint(0,len(webhook_list)-1)]
-            url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
-            url = apply(url, use_proxy_server, server_url)
-            entity.thumb.append(EntityThumb(aspect="landscape", value=url))
+            discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
+            final_url = apply(discord_url, use_proxy_server, server_url)
+            entity.thumb.append(EntityThumb(aspect="poster", value=final_url))
 
-            # arts
-            for art_url in image_sources['arts']:
-                response = cls.jav_image(art_url)
+            # --- 랜드스케이프 처리 ---
+            if landscape_source:
+                response = cls.jav_image(url=landscape_source, site=cls.site_name)
                 response_bytes = BytesIO(response.data)
-                if use_my_webhook:
-                    webhook_url = webhook_list[random.randint(0,len(webhook_list)-1)]
-                url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
-                url = apply(url, use_proxy_server, server_url)
-                entity.fanart.append(url)
+                if use_my_webhook and webhook_list:
+                    webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
+
+                discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
+                final_url = apply(discord_url, use_proxy_server, server_url)
+                entity.thumb.append(EntityThumb(aspect="landscape", value=final_url))
+
+            # --- 팬아트 처리 ---
+            for art_url in arts:
+                response = cls.jav_image(url=art_url, site=cls.site_name)
+                response_bytes = BytesIO(response.data)
+                if use_my_webhook and webhook_list:
+                    webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
+
+                discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
+                final_url = apply(discord_url, use_proxy_server, server_url)
+                entity.fanart.append(final_url)
 
         elif image_mode == 'image_server':
             image_server_paths = decision_data.get('image_server_paths', {})
