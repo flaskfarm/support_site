@@ -201,13 +201,17 @@ class SiteHeyzo(SiteAvBase):
             entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
 
         # 썸네일
-        final_image_sources = {
-            'poster_source': tmp.get('poster'),
-            'poster_mode': None,
-            'landscape_source': tmp.get('landscape'),
-            'arts': [], # Heyzo는 별도의 갤러리 페이지가 없음
-        }
-        cls.finalize_images_for_entity(entity, final_image_sources)
+        try:
+            raw_image_urls = {
+                'poster': tmp.get('poster'),
+                'pl': tmp.get('landscape'),
+                'ps': None,
+                'arts': [],
+                'specific_poster_candidates': []
+            }
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+        except Exception as e:
+            logger.exception(f"Heyzo: Error during image processing delegation for {code}: {e}")
 
         for actor_name in tmp.get('actor', []):
             entity.actor.append(EntityActor(actor_name))

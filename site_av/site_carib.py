@@ -153,13 +153,18 @@ class SiteCarib(SiteAvBase):
         if cls.get_response(jacket_url).status_code != 404:
             poster_url = jacket_url
 
-        final_image_sources = {
-            'poster_source': poster_url,
-            'poster_mode': None,
-            'landscape_source': f'https://www.caribbeancom.com/moviepages/{code_part}/images/l_l.jpg',
-            'arts': [], # Caribbeancom은 샘플 이미지를 찾기 어려움
-        }
-        cls.finalize_images_for_entity(entity, final_image_sources)
+        # 썸네일
+        try:
+            raw_image_urls = {
+                'poster': poster_url,
+                'pl': f'https://www.caribbeancom.com/moviepages/{code_part}/images/l_l.jpg',
+                'ps': None,
+                'arts': [],
+                'specific_poster_candidates': []
+            }
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+        except Exception as e:
+            logger.exception(f"Caribbeancom: Error during image processing delegation for {code}: {e}")
 
         # 나머지 메타데이터 파싱
         title_node = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')
