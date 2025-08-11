@@ -9,6 +9,7 @@ import random
 import json
 # python 확장
 import requests
+import ssl
 from lxml import html
 from flask import Response, abort, send_file
 from io import BytesIO
@@ -16,6 +17,7 @@ from PIL import Image, UnidentifiedImageError
 from imagehash import dhash as hfun
 from imagehash import phash 
 from imagehash import average_hash
+from requests.adapters import HTTPAdapter
 
 # FF
 from support import SupportDiscord
@@ -55,6 +57,7 @@ class SiteAvBase:
     MetadataSetting = None
 
     _cs_scraper_instance = None  # cloudscraper 인스턴스 캐싱용 (선택적)
+    _cs_scraper_no_verify_instance = None # SSL 검증 안하는 인스턴스 캐싱용
     
     ################################################
     # region 기본적인 것들
@@ -240,23 +243,54 @@ class SiteAvBase:
 
 
     @classmethod
-    def get_cloudscraper_instance(cls, new_instance=False):
-        # 간단한 싱글톤 또는 캐시된 인스턴스 반환 (매번 생성 방지)
-        # browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False} 등 User-Agent 설정 가능
-        # delay: 요청 사이 지연시간 (초) - 너무 자주 요청 시 차단 방지
-        if new_instance or cls._cs_scraper_instance is None:
-            try:
-                # User-Agent는 default_headers의 것을 활용하거나, cloudscraper 기본값 사용
-                # browser_kwargs = {'custom': cls.default_headers['User-Agent']} if 'User-Agent' in cls.default_headers else {}
-                cls._cs_scraper_instance = cloudscraper.create_scraper(
-                    # browser=browser_kwargs, # 필요시 User-Agent 지정
-                    delay=5 # 예시: 요청 간 5초 지연 (너무 짧으면 차단될 수 있음, 적절히 조절)
-                )
-                # logger.debug("Created new cloudscraper instance.")
-            except Exception as e_cs_create:
-                logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
-                return None # 생성 실패 시 None 반환
-        return cls._cs_scraper_instance
+    def get_cloudscraper_instance(cls, new_instance=False, no_verify=False):
+        """
+        cloudscraper 인스턴스를 반환합니다.
+        no_verify=True일 경우, SSL 인증서 검증을 비활성화한 별도의 인스턴스를 반환합니다.
+        """
+        if no_verify:
+            if new_instance or cls._cs_scraper_no_verify_instance is None:
+                try:
+                    # 1. 커스텀 SSLContext 생성
+                    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+
+                    # 2. 커스텀 HTTPAdapter 정의
+                    class NoVerifyAdapter(HTTPAdapter):
+                        def init_poolmanager(self, *args, **kwargs):
+                            kwargs['ssl_context'] = context
+                            super().init_poolmanager(*args, **kwargs)
+
+                        def proxy_manager_for(self, *args, **kwargs):
+                            kwargs['ssl_context'] = context
+                            return super().proxy_manager_for(*args, **kwargs)
+
+                    # 3. requests.Session 객체를 만들고 어댑터 마운트
+                    custom_session = requests.Session()
+                    custom_session.mount('https://', NoVerifyAdapter())
+
+                    # 4. create_scraper에 직접 세션 객체 전달
+                    cls._cs_scraper_no_verify_instance = cloudscraper.create_scraper(
+                        sess=custom_session,
+                        delay=5
+                    )
+                    logger.debug("Created new cloudscraper instance with SSL verification DISABLED.")
+                except Exception as e_cs_create:
+                    logger.error(f"Failed to create no-verify cloudscraper instance: {e_cs_create}")
+                    logger.error(traceback.format_exc())
+                    return None
+            return cls._cs_scraper_no_verify_instance
+        else:
+            # 기본 인스턴스
+            if new_instance or cls._cs_scraper_instance is None:
+                try:
+                    cls._cs_scraper_instance = cloudscraper.create_scraper(delay=5)
+                    logger.debug("Created new cloudscraper instance.")
+                except Exception as e_cs_create:
+                    logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
+                    return None
+            return cls._cs_scraper_instance
 
 
 # site_av_base.py
@@ -285,7 +319,9 @@ class SiteAvBase:
         cookies = kwargs.pop("cookies", None)
         headers = kwargs.pop("headers", cls.default_headers)
 
-        scraper = cls.get_cloudscraper_instance()
+        verify = kwargs.pop("verify", True)
+
+        scraper = cls.get_cloudscraper_instance(no_verify=(not verify))
         if scraper is None:
             logger.error("SiteUtil.get_response_cs: Failed to get cloudscraper instance.")
             return None
@@ -1047,7 +1083,7 @@ class SiteAvBase:
                 else:
                     # 원격 URL이거나, 원격 URL에 crop 모드가 적용된 경우
                     param = {'site': cls.site_name, 'url': unquote_plus(poster_source), 'mode': poster_mode}
-                
+
                 if not param.get('mode'):
                     param.pop('mode', None)
 
