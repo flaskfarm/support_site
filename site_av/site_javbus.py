@@ -16,6 +16,7 @@ class SiteJavbus(SiteAvBase):
     site_char = "B"
     module_char = "C"
     default_headers = SiteAvBase.base_default_headers.copy()
+    default_headers.update({'Referer': SITE_BASE_URL + '/'})
     _ps_url_cache = {}
 
 
@@ -33,7 +34,7 @@ class SiteJavbus(SiteAvBase):
         else:
             ret["ret"] = "success" if data else "no_match"; ret["data"] = data
         return ret
-    
+
 
     @classmethod
     def __search(cls, keyword, do_trans, manual):
@@ -348,24 +349,6 @@ class SiteJavbus(SiteAvBase):
             return {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
 
 
-    @classmethod
-    def get_response(cls, url, **kwargs):
-        """
-        Javbus는 Cloudflare 보호가 적용되므로, 모든 요청(페이지, 이미지 등)에 대해
-        부모 클래스의 get_response_cs(cloudscraper)를 사용하도록 오버라이드합니다.
-        """
-        # _get_javbus_page_tree에 있던 쿠키들을 여기에 통합
-        if 'cookies' not in kwargs:
-            kwargs['cookies'] = {}
-        kwargs['cookies'].update({'age': 'verified', 'age_check_done': '1', 'ckcy': '1', 'dv': '1', 'existmag': 'mag'})
-        
-        # Cloudscraper의 delay 기본값이 너무 길 수 있으므로, 
-        # Javbus 요청에 대해서만 짧은 delay를 적용하기 위해 새 인스턴스를 생성할 수도 있음.
-        # 여기서는 기본 인스턴스를 사용.
-        
-        return super().get_response_cs(url, **kwargs)
-
-
     ################################################
     # region SiteAvBase 메서드 오버라이드
 
@@ -384,27 +367,19 @@ class SiteJavbus(SiteAvBase):
     @classmethod
     def get_response(cls, url, **kwargs):
         """
-        Javbus는 모든 요청에 Cloudflare 보호가 적용되므로, 
+        Javbus는 모든 요청에 Cloudflare 보호가 적용되므로,
         get_response를 오버라이드하여 항상 cloudscraper를 사용하도록 강제하고,
-        이 모듈의 프록시 설정을 명시적으로 전달합니다.
+        SSL 검증을 비활성화하며, 필요한 헤더와 쿠키를 설정합니다.
         """
-        # Javbus에 필요한 기본 쿠키를 kwargs에 추가
         if 'cookies' not in kwargs:
             kwargs['cookies'] = {}
         kwargs['cookies'].update({'age': 'verified', 'age_check_done': '1', 'ckcy': '1', 'dv': '1', 'existmag': 'mag'})
 
-        # cls.config가 유효한지 확인하고, 프록시 설정을 kwargs에 직접 추가
-        if cls.config and cls.config.get('use_proxy'):
-            proxies = {
-                "http": cls.config.get('proxy_url'),
-                "https": cls.config.get('proxy_url')
-            }
-            # get_response_cs는 proxies를 kwargs로 받지 않으므로, 
-            # cloudscraper 인스턴스에 직접 설정하거나, get_response_cs를 수정해야 함.
-            # get_response_cs를 수정하는 것이 더 깔끔함.
-            kwargs['proxies'] = proxies # kwargs를 통해 전달
+        # SSL 인증서 검증 비활성화 (ValueError 해결)
+        # 이 값이 get_response_cs로 전달되어 no_verify 인스턴스를 선택하게 함
+        kwargs['verify'] = False
 
-        logger.debug(f"Javbus: Using cloudscraper (get_response_cs) for URL: {url} with kwargs: {kwargs}")
+        logger.debug(f"Javbus: Using overridden get_response -> get_response_cs for URL: {url}")
         return super().get_response_cs(url, **kwargs)
 
 
@@ -415,7 +390,6 @@ class SiteJavbus(SiteAvBase):
         get_response 대신 get_response_cs를 사용하는 default_jav_image_cs를 호출하도록 오버라이드.
         """
         logger.debug(f"Javbus: Using overridden jav_image (cloudscraper) for URL: {url}")
-        # SiteAvBase에 default_jav_image_cs 헬퍼를 만들거나, 여기서 로직을 직접 구현
         return cls.default_jav_image_cs(url, mode)
 
 
