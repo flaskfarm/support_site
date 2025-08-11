@@ -384,13 +384,14 @@ class SiteJavbus(SiteAvBase):
 
 
     @classmethod
-    def jav_image(cls, url, mode=None):
+    def jav_image(cls, url, mode=None, **kwargs):
         """
         [이미지 요청용] jav_image 요청도 Cloudflare를 통과해야 하므로,
-        get_response 대신 get_response_cs를 사용하는 default_jav_image_cs를 호출하도록 오버라이드.
+        get_response를 오버라이드한 이 클래스의 로직을 타도록 default_jav_image를 호출.
+        kwargs를 통해 사용하지 않는 인자(예: site)를 받아 에러를 방지.
         """
-        logger.debug(f"Javbus: Using overridden jav_image (cloudscraper) for URL: {url}")
-        return cls.default_jav_image_cs(url, mode)
+        logger.debug(f"Javbus: Using overridden jav_image (default_jav_image) for URL: {url}")
+        return cls.default_jav_image(url, mode)
 
 
     # endregion SiteAvBase 메서드 오버라이드
