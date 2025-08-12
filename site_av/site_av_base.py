@@ -141,7 +141,7 @@ class SiteAvBase:
                 # expert_module이 성공적으로 임포트되었고,
                 # 현재 모듈이 해당 도메인의 스위치가 아닐 경우에만 설정 빌려오기
                 if expert_module and cls.site_name != expert_module.site_name:
-                    logger.debug(f"get_response: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: {url}")
+                    # logger.debug(f"get_response: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: {url}")
 
                     # 스위치 모듈의 프록시 설정으로 덮어쓰기
                     if expert_module.config and expert_module.config.get('use_proxy', False):

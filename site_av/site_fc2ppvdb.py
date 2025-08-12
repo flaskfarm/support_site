@@ -95,25 +95,26 @@ class SiteFc2ppvdb(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code):
+    def info(cls, code, fp_meta_mode=False):
+        ret = {}
+        entity_result_val_final = None
         try:
-            ret = {}
-            entity = cls.__info(code)
-            if entity:
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            if entity_result_val_final:
                 ret['ret'] = 'success'
-                ret['data'] = entity.as_dict()
+                ret['data'] = entity_result_val_final
             else:
                 ret['ret'] = 'error'
-        except Exception as exception: 
-            logger.error(f'[{cls.site_name} Info] Exception for code {code}: {exception}')
-            logger.error(traceback.format_exc())
+                ret["data"] = f"Failed to get fc2 info for {code}"
+        except Exception as e:
             ret['ret'] = 'exception'
-            ret['data'] = str(exception)
+            ret['data'] = str(e)
+            logger.exception(f"fc2 info error: {e}")
         return ret
 
 
     @classmethod
-    def __info(cls, code):
+    def __info(cls, code, fp_meta_mode=False):
         if cls._is_blocked():
             logger.warning(f"[{cls.site_name} Info] Aborted due to rate-limiting.")
             return None

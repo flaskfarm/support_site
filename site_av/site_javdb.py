@@ -259,33 +259,26 @@ class SiteJavdb(SiteAvBase):
     # region INFO
     
     @classmethod
-    def info(cls, code):
+    def info(cls, code, fp_meta_mode=False):
         ret = {}
+        entity_result_val_final = None
         try:
-            entity_obj = cls.__info(code)
-            
-            if entity_obj:
-                if hasattr(entity_obj, 'ui_code') and entity_obj.ui_code:
-                    try: 
-                        logger.debug(f"JavDB Info: Attempting Shiroutoname correction for {entity_obj.ui_code}")
-                        entity_obj = cls.shiroutoname_info(entity_obj) 
-                    except Exception as e_shirouto: 
-                        logger.exception(f"JavDB Info: Shiroutoname correction error for {entity_obj.ui_code}: {e_shirouto}")
-
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            if entity_result_val_final:
                 ret["ret"] = "success"
-                ret["data"] = entity_obj.as_dict()
+                ret["data"] = entity_result_val_final
             else:
                 ret["ret"] = "error"
-                ret["data"] = f"Failed to get JavDB info for {code} (__info returned None)."
+                ret["data"] = f"Failed to get JavDB info for {code}"
         except Exception as e:
             ret["ret"] = "exception"
             ret["data"] = str(e)
-            logger.exception(f"JavDB info (outer) error for code {code}: {e}")
+            logger.exception(f"JavDB info error: {e}")
         return ret
     
 
     @classmethod
-    def __info(cls, code):
+    def __info(cls, code, fp_meta_mode=False):
         original_keyword = ''
 
         custom_cookies = { 'over18': '1', 'locale': 'en' }
@@ -430,12 +423,29 @@ class SiteJavdb(SiteAvBase):
             # === 3. 이미지 처리 위임 ===
             # JavDB는 PS가 없으므로 ps_url_from_cache는 항상 None
             ps_url_from_search_cache = None
-            raw_image_urls = cls.__img_urls(tree)
-            
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+
+            try:
+                raw_image_urls = cls.__img_urls(tree)
+
+                if not fp_meta_mode:
+                    entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+                else:
+                    poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
+                    if poster_url:
+                        entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
+
+                    landscape_url = raw_image_urls.get('pl')
+                    if landscape_url:
+                        entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
+
+                    # 팬아트는 URL만 리스트로 할당
+                    entity.fanart = raw_image_urls.get('arts', [])
+
+            except Exception as e:
+                logger.exception(f"JavDB: Error during image processing delegation for {code}: {e}")
 
             # === 4. 예고편 및 Shiroutoname 보정 처리 ===
-            if cls.config['use_extras']:
+            if not fp_meta_mode and cls.config['use_extras']:
                 trailer_source_tag = tree.xpath('//video[@id="preview-video"]/source/@src')
                 if trailer_source_tag:
                     trailer_url_raw = trailer_source_tag[0].strip()
@@ -443,6 +453,9 @@ class SiteJavdb(SiteAvBase):
                         trailer_url_final = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
                         trailer_url_final = cls.make_video_url(trailer_url_final)
                         entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", trailer_url_final))
+            elif fp_meta_mode:
+                # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
+                pass
 
             if entity.originaltitle:
                 try: entity = cls.shiroutoname_info(entity)

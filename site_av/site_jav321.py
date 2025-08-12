@@ -145,24 +145,28 @@ class SiteJav321(SiteAvBase):
 
     ################################################
     # region INFO
-    
-    @classmethod
-    def info(cls, code):
-        ret = {}
-        try:
-            entity = cls.__info(code)
-            if entity:
-                ret["ret"] = "success"; ret["data"] = entity.as_dict()
-            else:
-                ret["ret"] = "error"; ret["data"] = f"Failed to get Jav321 info entity for {code}"
-        except Exception as exception:
-            logger.exception("메타 정보 처리 중 예외:")
-            ret["ret"] = "exception"; ret["data"] = str(exception)
-        return ret
-    
 
     @classmethod
-    def __info(cls, code):
+    def info(cls, code, fp_meta_mode=False):
+        ret = {}
+        entity_result_val_final = None
+        try:
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            if entity_result_val_final:
+                ret["ret"] = "success"
+                ret["data"] = entity_result_val_final
+            else:
+                ret["ret"] = "error"
+                ret["data"] = f"Failed to get Jav321 info for {code}"
+        except Exception as e:
+            ret["ret"] = "exception"
+            ret["data"] = str(e)
+            logger.exception(f"Jav321 info error: {e}")
+        return ret
+
+
+    @classmethod
+    def __info(cls, code, fp_meta_mode=False):
         url_pid = code[2:]
         url = f"{SITE_BASE_URL}/video/{url_pid}"
         tree = None
@@ -191,11 +195,10 @@ class SiteJav321(SiteAvBase):
             ui_code_for_image = entity.ui_code.lower()
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
             logger.debug(f"Jav321 Info: Initial identifier from URL ('{url_pid}') parsed as: {ui_code_for_image}")
-       
-            
+
             identifier_parsed = bool(ui_code_for_image)
             raw_h3_title_text = ""
-            
+
             tagline_h3_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[1]/h3')
             if tagline_h3_nodes:
                 h3_node = tagline_h3_nodes[0]
@@ -206,7 +209,7 @@ class SiteJav321(SiteAvBase):
                     raw_h3_title_text = h3_clone.text_content().strip() 
                 except Exception as e_remove_small_tag:
                     raw_h3_title_text = h3_node.text_content().strip()
-            
+
             plot_div_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[3]/div')
             if plot_div_nodes:
                 plot_full_text = plot_div_nodes[0].text_content().strip()
@@ -297,29 +300,47 @@ class SiteJav321(SiteAvBase):
             if not identifier_parsed:
                 logger.error(f"Jav321: CRITICAL - Identifier parse failed for {code} from any source.")
                 return None
-            
+
             if not entity.tagline and entity.title: entity.tagline = entity.title
             if not entity.plot and entity.tagline: entity.plot = entity.tagline 
-            
+
             # === 3. 이미지 처리 위임 ===
             ps_url_from_search_cache = cls._ps_url_cache.get(code)
-            
-            # 3-1. 원본 이미지 URL 목록 수집
-            raw_image_urls = cls.__img_urls(tree)
-            
-            # 3-2. 공통 처리 함수에 모든 것을 위임하고, 업데이트된 entity를 받음
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+
+            try:
+                raw_image_urls = cls.__img_urls(tree)
+
+                if not fp_meta_mode:
+                    entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+                else:
+                    poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
+                    if poster_url:
+                        entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
+
+                    landscape_url = raw_image_urls.get('pl')
+                    if landscape_url:
+                        entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
+
+                    # 팬아트는 URL만 리스트로 할당
+                    entity.fanart = raw_image_urls.get('arts', [])
+
+            except Exception as e:
+                logger.exception(f"Jav321: Error during image processing delegation for {code}: {e}")
 
             # === 4. 예고편 및 Shiroutoname 보정 처리 ===
-            if cls.config['use_extras']:
-                try: 
-                    trailer_xpath = '//*[@id="vjs_sample_player"]/source/@src'
-                    trailer_tags = tree.xpath(trailer_xpath)
-                    if trailer_tags and trailer_tags[0].strip().startswith("http"):
-                        url = cls.make_video_url(trailer_tags[0].strip())
-                        if url:
-                            entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", url))
-                except Exception as e_trailer: logger.exception(f"Jav321: Error processing trailer for {code}: {e_trailer}")
+            if not fp_meta_mode and cls.config['use_extras']:
+                if cls.config['use_extras']:
+                    try: 
+                        trailer_xpath = '//*[@id="vjs_sample_player"]/source/@src'
+                        trailer_tags = tree.xpath(trailer_xpath)
+                        if trailer_tags and trailer_tags[0].strip().startswith("http"):
+                            url = cls.make_video_url(trailer_tags[0].strip())
+                            if url:
+                                entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", url))
+                    except Exception as e_trailer: logger.exception(f"Jav321: Error processing trailer for {code}: {e_trailer}")
+            elif fp_meta_mode:
+                # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
+                pass
 
             if entity.originaltitle:
                 try: entity = cls.shiroutoname_info(entity)
