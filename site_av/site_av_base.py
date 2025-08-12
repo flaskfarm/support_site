@@ -86,18 +86,32 @@ class SiteAvBase:
             # Celery 환경에서는 requests_cache를 사용하지 않음.
             session = requests.Session()
         return session
-    
+
+
     @classmethod
     def get_tree(cls, url, **kwargs):
         text = cls.get_text(url, **kwargs)
         if text is None:
-            return text
-        return html.fromstring(text)
+            return None
+        try:
+            return html.fromstring(text)
+        except Exception as e:
+            logger.error(f"Failed to parse HTML from URL '{url}': {e}")
+            return None
+
 
     @classmethod
     def get_text(cls, url, **kwargs):
         res = cls.get_response(url, **kwargs)
-        return res.text
+        if res is None:
+            logger.warning(f"get_text: get_response returned None for URL: {url}")
+            return None
+        if 200 <= res.status_code < 300:
+            return res.text
+        else:
+            logger.warning(f"get_text: Received non-2xx status code {res.status_code} for URL: {url}")
+            return None
+
 
     @classmethod
     def get_response(cls, url, **kwargs):
@@ -956,23 +970,37 @@ class SiteAvBase:
                 if not final_image_sources['poster_source'] and pl_url:
                     im_lg_obj = cls.imopen(pl_url)
                     if im_lg_obj:
-                        w, h = im_lg_obj.size; aspect_ratio = w / h if h > 0 else 0
-                        if abs(aspect_ratio - 4/3) < 0.05:
-                            im_no_lb = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
-                            processed_im = SiteUtilAv.imcrop(im_no_lb, position='r')
-                            temp_filepath = cls.save_pil_to_temp(processed_im)
-                            if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
-                            processed_im.close(); im_no_lb.close()
-                        elif aspect_ratio >= 1.8:
-                            right_half = im_lg_obj.crop((w / 2, 0, w, h))
-                            processed_im = SiteUtilAv.imcrop(right_half, position='c')
-                            temp_filepath = cls.save_pil_to_temp(processed_im)
-                            if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
-                            processed_im.close(); right_half.close()
-                        else:
-                            final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_r'})
-                        im_lg_obj.close()
+                        try:
+                            w, h = im_lg_obj.size
+                            aspect_ratio = w / h if h > 0 else 0
 
+                            # 1. 4:3 비율 (레터박스 가능성)
+                            if abs(aspect_ratio - (4/3)) < 0.05:
+                                im_no_lb = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
+                                processed_im = SiteUtilAv.imcrop(im_no_lb, position='r')
+                                temp_filepath = cls.save_pil_to_temp(processed_im)
+                                if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
+                                processed_im.close(); im_no_lb.close()
+
+                            # 2. 1.8:1 이상 와이드 (MG-Style)
+                            elif aspect_ratio >= 1.8:
+                                right_half = im_lg_obj.crop((w / 2, 0, w, h))
+                                processed_im = SiteUtilAv.imcrop(right_half, position='c')
+                                temp_filepath = cls.save_pil_to_temp(processed_im)
+                                if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
+                                processed_im.close(); right_half.close()
+
+                            # 3. (신규) 4:3 비율 미만 (가로가 충분히 넓지 않음)
+                            elif aspect_ratio < (4/3 - 0.05):
+                                # logger.debug(f"Image for {ui_code} has aspect ratio < 4:3. Applying 'crop_c'.")
+                                final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_c'})
+
+                            # 4. 그 외 나머지 (4:3 ~ 1.8:1 사이의 일반적인 가로 이미지)
+                            else:
+                                # logger.debug(f"Image for {ui_code} has standard landscape ratio. Applying 'crop_r'.")
+                                final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_r'})
+                        finally:
+                            if im_lg_obj: im_lg_obj.close()
 
             # 최종 폴백: 어떤 조건도 만족하지 못하면 PS 이미지를 포스터로 사용
             if not final_image_sources.get('poster_source') and ps_url:
