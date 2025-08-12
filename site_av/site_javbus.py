@@ -3,7 +3,7 @@ from lxml import html
 from typing import Union
 
 from ..entity_av import EntityAVSearch
-from ..entity_base import EntityMovie, EntityActor
+from ..entity_base import EntityMovie, EntityActor, EntityThumb
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 from ..constants import AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
@@ -136,25 +136,26 @@ class SiteJavbus(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code):
+    def info(cls, code, fp_meta_mode=False):
         ret = {}
+        entity_result_val_final = None
         try:
-            entity = cls.__info(code)
-            if entity:
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            if entity_result_val_final:
                 ret["ret"] = "success"
-                ret["data"] = entity.as_dict()
+                ret["data"] = entity_result_val_final
             else:
                 ret["ret"] = "error"
-                ret["data"] = f"Failed to get JavBus info for {code} (__info returned None)."
+                ret["data"] = f"Failed to get JavBus info for {code}"
         except Exception as e:
             ret["ret"] = "exception"
             ret["data"] = str(e)
-            logger.exception(f"JavBus info (outer) error for code {code}: {e}")
+            logger.exception(f"JavBus info error: {e}")
         return ret
 
-    
+
     @classmethod
-    def __info(cls, code):
+    def __info(cls, code, fp_meta_mode=False):
         try:
             # === 1. 페이지 로딩 및 기본 Entity 생성 ===
             original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
@@ -260,18 +261,32 @@ class SiteJavbus(SiteAvBase):
                     entity.tag.append(label)
 
             # === 3. 이미지 처리 위임 ===
-            
-            # 3-1. PS URL은 검색 캐시 또는 페이지에서 직접 유추하여 가져옴
+
+            # PS URL은 검색 캐시 또는 페이지에서 직접 유추하여 가져옴
             ps_url_from_search_cache = cls._ps_url_cache.get(code, {}).get('ps')
-            
-            # 3-2. 원본 이미지 URL 목록 수집
-            raw_image_urls = cls.__img_urls(tree)
-            
+
             # 검색 캐시에 PS가 없었다면, 페이지에서 유추한 PS를 사용
             ps_url_to_use = ps_url_from_search_cache or raw_image_urls.get('ps')
 
-            # 3-3. 공통 처리 함수에 모든 것을 위임
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_to_use)
+            try:
+                raw_image_urls = cls.__img_urls(tree)
+
+                if not fp_meta_mode:
+                    entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+                else:
+                    poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
+                    if poster_url:
+                        entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
+
+                    landscape_url = raw_image_urls.get('pl')
+                    if landscape_url:
+                        entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
+
+                    # 팬아트는 URL만 리스트로 할당
+                    entity.fanart = raw_image_urls.get('arts', [])
+
+            except Exception as e:
+                logger.exception(f"JavBus: Error during image processing delegation for {code}: {e}")
 
             # === 4. Shiroutoname 보정 처리 ===
             if entity.ui_code:

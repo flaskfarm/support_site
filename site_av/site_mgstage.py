@@ -3,7 +3,7 @@ import os
 
 from ..constants import MGS_CODE_LEN, MGS_LABEL_MAP, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO
 from ..entity_av import EntityAVSearch
-from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
+from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
@@ -164,32 +164,33 @@ class SiteMgstage(SiteAvBase):
     # region INFO
     
     @classmethod
-    def info(cls, code):
+    def info(cls, code, fp_meta_mode=False):
         ret = {}
+        entity_result_val_final = None
         try:
-            entity = cls.__info(code) 
-            if entity: 
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            if entity_result_val_final: 
                 ret["ret"] = "success"
-                ret["data"] = entity.as_dict()
+                ret["data"] = entity_result_val_final
             else: 
                 ret["ret"] = "error"
-                ret["data"] = f"Failed to get MGStage ({cls.module_char}) info for {code}"
+                ret["data"] = f"Failed to get MGStage info for {code}"
         except Exception as e: 
             ret["ret"] = "exception"
             ret["data"] = str(e)
-            logger.exception(f"MGStage ({cls.module_char}) info error: {e}")
+            logger.exception(f"MGStage info error: {e}")
         return ret
 
 
     @classmethod
-    def __info(cls, code):
+    def __info(cls, code, fp_meta_mode=False):
         cached_data = cls._ps_url_cache.get(code, {}) 
         ps_url_from_search_cache = cached_data.get('ps')
 
         url = SITE_BASE_URL + f"/product/product_detail/{code[2:]}/"
         tree = cls.get_tree(url)
         if tree is None:
-            logger.error(f"MGStage ({cls.module_char}): Failed to get page tree for {code}. URL: {url}")
+            logger.error(f"MGStage info error: Failed to get page tree for {code}. URL: {url}")
             return None
 
         entity = EntityMovie(cls.site_name, code)
@@ -295,34 +296,47 @@ class SiteMgstage(SiteAvBase):
 
         # 3. 이미지 처리: 모든 이미지 관련 로직을 공통 메서드에 위임
         try:
-            # 3-1. 원본 이미지 URL 목록 수집
             raw_image_urls = cls.__img_urls(tree)
 
-            # 3-2. 공통 처리 함수에 모든 것을 위임하고, 업데이트된 entity를 받음
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
-        
-        except Exception as e:
-            logger.exception(f"MGStage ({cls.module_char}): Error during image processing delegation for {code}: {e}")
+            if not fp_meta_mode:
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+            else:
+                poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
+                if poster_url:
+                    entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
 
+                landscape_url = raw_image_urls.get('pl')
+                if landscape_url:
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
+
+                # 팬아트는 URL만 리스트로 할당
+                entity.fanart = raw_image_urls.get('arts', [])
+
+        except Exception as e:
+            logger.exception(f"MGStage: Error during image processing delegation for {code}: {e}")
 
         # 4. 예고편 및 Shiroutoname 보정 처리
-        if cls.config['use_extras']:
-            try:
-                trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
-                if trailer_sample_btn:
-                    pid_trailer = trailer_sample_btn[0].split("/")[-1]
-                    api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
-                    api_headers_trailer = cls.default_headers.copy(); api_headers_trailer['Referer'] = url 
-                    api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
-                    res_json_trailer = cls.get_response(api_url_trailer, headers=api_headers_trailer).json()
-                    if res_json_trailer and res_json_trailer.get("url"):
-                        trailer_base = res_json_trailer["url"].split(".ism")[0]; 
-                        trailer_final_url = trailer_base + ".mp4"
-                        trailer_final_url = cls.make_video_url(trailer_final_url)
-                        trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
-                        entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
-            except Exception as e_trailer_proc_dvd:
-                logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
+        if not fp_meta_mode and cls.config['use_extras']:
+            if cls.config['use_extras']:
+                try:
+                    trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
+                    if trailer_sample_btn:
+                        pid_trailer = trailer_sample_btn[0].split("/")[-1]
+                        api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
+                        api_headers_trailer = cls.default_headers.copy(); api_headers_trailer['Referer'] = url 
+                        api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
+                        res_json_trailer = cls.get_response(api_url_trailer, headers=api_headers_trailer).json()
+                        if res_json_trailer and res_json_trailer.get("url"):
+                            trailer_base = res_json_trailer["url"].split(".ism")[0]; 
+                            trailer_final_url = trailer_base + ".mp4"
+                            trailer_final_url = cls.make_video_url(trailer_final_url)
+                            trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
+                            entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
+                except Exception as e_trailer_proc_dvd:
+                    logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
+        elif fp_meta_mode:
+            # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
+            pass
 
         if entity.originaltitle:
             try: 

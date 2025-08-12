@@ -87,25 +87,26 @@ class SiteHeyzo(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code):
+    def info(cls, code, fp_meta_mode=False):
+        ret = {}
+        entity_result_val_final = None
         try:
-            ret = {}
-            entity = cls.__info(code)
-            if entity:
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            if entity_result_val_final:
                 ret['ret'] = 'success'
-                ret['data'] = entity.as_dict()
+                ret['data'] = entity_result_val_final
             else:
                 ret['ret'] = 'error'
-        except Exception as e: 
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+                ret["data"] = f"Failed to get heyzo info for {code}"
+        except Exception as e:
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+            logger.exception(f"heyzo info error: {e}")
         return ret
 
 
     @classmethod
-    def __info(cls, code):
+    def __info(cls, code, fp_meta_mode=False):
         code_part = code[2:]
         tmp = {}
         tree = None; m_tree = None; json_data = None
@@ -231,14 +232,17 @@ class SiteHeyzo(SiteAvBase):
         entity.studio = 'HEYZO'
 
         # 부가영상 or 예고편
-        try:
-            if cls.config.get('use_extras'):
-                video_url = cls.make_video_url(f'https://m.heyzo.com/contents/3000/{code_part}/sample.mp4')
-                thumb_url = next((t.value for t in entity.thumb if t.aspect == 'landscape'), '')
-                if video_url:
-                    trailer_title = entity.tagline if entity.tagline else entity.title
-                    entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
-        except Exception:
+        if not fp_meta_mode and cls.config['use_extras']:
+            try:
+                if cls.config.get('use_extras'):
+                    video_url = cls.make_video_url(f'https://m.heyzo.com/contents/3000/{code_part}/sample.mp4')
+                    thumb_url = next((t.value for t in entity.thumb if t.aspect == 'landscape'), '')
+                    if video_url:
+                        trailer_title = entity.tagline if entity.tagline else entity.title
+                        entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
+            except Exception: pass
+        elif fp_meta_mode:
+            # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
             pass
 
         return entity

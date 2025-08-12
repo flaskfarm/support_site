@@ -5,7 +5,7 @@ from urllib.parse import urljoin, quote, urlencode, urlparse
 from lxml import html
 
 from ..entity_av import EntityAVSearch
-from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
+from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 from ..constants import AV_STUDIO, AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
@@ -427,11 +427,11 @@ class SiteDmm(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code):
+    def info(cls, code, fp_meta_mode=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code).as_dict() # kwargs를 사용하지 않음
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
             if entity_result_val_final: 
                 ret["ret"] = "success"; 
                 ret["data"] = entity_result_val_final
@@ -441,12 +441,12 @@ class SiteDmm(SiteAvBase):
         except Exception as e_info_dmm_main_call_val_final: 
             ret["ret"] = "exception"
             ret["data"] = str(e_info_dmm_main_call_val_final)
-            logger.exception(f"DMM info main call error: {e_info_dmm_main_call_val_final}")
+            logger.exception(f"DMM info error: {e_info_dmm_main_call_val_final}")
         return ret
 
 
     @classmethod
-    def __info(cls, code):
+    def __info(cls, code, fp_meta_mode=False):
 
         cached_data = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = None # kwargs.get('ps_url')
@@ -778,18 +778,32 @@ class SiteDmm(SiteAvBase):
                 api_data=api_data
             )
 
-            # 공통 처리 함수에 모든 것을 위임
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+            if not fp_meta_mode:
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+            else:
+                poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
+                if poster_url:
+                    entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
+
+                landscape_url = raw_image_urls.get('pl')
+                if landscape_url:
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
+
+                # 팬아트는 URL만 리스트로 할당
+                entity.fanart = raw_image_urls.get('arts', [])
 
         except Exception as e:
-            logger.exception(f"DMM: Error during image processing delegation for {code}: {e}")
+            logger.exception(f"DMM: Error during image processing for {code}: {e}")
 
         # === 4. 예고편(Extras) 처리 ===
 
-        if cls.config['use_extras']:
+        if not fp_meta_mode and cls.config['use_extras']:
             cls.process_extras(entity, tree, detail_url, api_data)
-            
-        logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
+        elif fp_meta_mode:
+            # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
+            pass
+
+        logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}, SkipImage: {fp_meta_mode}")
         return entity
 
 
