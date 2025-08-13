@@ -121,7 +121,7 @@ class SiteJavdb(SiteAvBase):
 
             title_match = re.search(r'<title>(.*?)</title>', html_content_text, re.IGNORECASE | re.DOTALL)
             page_title_from_text = title_match.group(1).strip() if title_match else "N/A"
-            logger.warning(f"JavDB Search: No item nodes found with XPath ('{item_list_xpath_expression}') for keyword '{keyword_for_url}'. Page title: '{page_title_from_text}'. HTML saved (if successful).")
+            logger.warning(f"JavDB Search: No item nodes found with XPath ('{item_list_xpath_expression}') for keyword '{keyword_for_url}'. Page title: '{page_title_from_text}'.")
             return []
 
         # --- 검색 결과 아이템 처리 루프 ---
