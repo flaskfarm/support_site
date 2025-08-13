@@ -376,7 +376,7 @@ class SiteAvBase:
 
     ################################################
     # region SiteAvBase 인터페이스
-    
+
     @classmethod
     def search(cls, keyword, **kwargs):
         pass
@@ -384,7 +384,7 @@ class SiteAvBase:
     @classmethod
     def info(cls, code, **kwargs):
         pass
-    
+
     # 메타데이터 라우팅 함수에서 호출한다.
     # 리턴타입: redirect 
     @classmethod
@@ -745,9 +745,28 @@ class SiteAvBase:
                 save_format = cls.MetadataSetting.get(f'{module_prefix}_image_server_save_format')
 
                 if base_path and url_base and save_format:
-                    # 경로 포맷팅에 필요한 변수 준비
-                    label_full = getattr(entity, 'label', entity.ui_code.split('-')[0])
-                    label_first = getattr(entity, 'label_1', label_full[0] if label_full else '')
+                    base_label = getattr(entity, 'label', entity.ui_code.split('-')[0])
+
+                    label_full = base_label
+                    # '741'로 시작하는 특수 레이블은 규칙에서 제외
+                    if not base_label.upper().startswith('741'):
+                        numeric_prefix_match = re.match(r'^(\d+)([A-Z].*)', base_label.upper())
+                        if numeric_prefix_match:
+                            label_full = numeric_prefix_match.group(2)
+                            logger.debug(f"Numeric prefix label detected: '{base_label}'. Using '{label_full}' for path.")
+
+                    # --- label_1 (첫 글자) 결정 로직 ---
+                    label_first = ""
+                    # 1. 741로 시작하는 특수 품번 예외 처리
+                    if base_label.upper().startswith('741'):
+                        label_first = '09'
+                        # logger.debug(f"Special '741' prefix label detected: '{base_label}'. Using '09' for label_1.")
+                    # 2. entity에 이미 label_1이 설정된 경우 (DMM 등에서 파싱)
+                    elif getattr(entity, 'label_1', None):
+                        label_first = entity.label_1
+                    # 3. 그 외의 경우, 정제된 label_full의 첫 글자 사용
+                    elif label_full:
+                        label_first = label_full[0]
 
                     try:
                         # KeyError 방지를 위해 format_map 사용
