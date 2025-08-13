@@ -18,8 +18,8 @@ class SiteJav321(SiteAvBase):
     module_char = "C"
 
     default_headers = SiteAvBase.base_default_headers.copy()
-    default_headers.update({'Referer': SITE_BASE_URL + '/'})
-    _ps_url_cache = {} 
+    default_headers.update({"Referer": SITE_BASE_URL + "/"})
+    _ps_url_cache = {}
 
     ################################################
     # region SEARCH

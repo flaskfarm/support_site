@@ -551,52 +551,50 @@ class SiteAvBase:
         # image open
         res = cls.get_response(image_url, verify=False)  # SSL 인증서 검증 비활성화 (필요시)
 
-        # --- 응답 검증 추가 ---
         if res is None:
             P.logger.error(f"image_proxy: SiteUtil.get_response returned None for URL: {image_url}")
             abort(404) # 또는 적절한 에러 응답
             return # 함수 종료
-        
+
         if res.status_code != 200:
             P.logger.error(f"image_proxy: Received status code {res.status_code} for URL: {image_url}. Content: {res.text[:200]}")
             abort(res.status_code if res.status_code >= 400 else 500)
             return
 
         content_type_header = res.headers.get('Content-Type', '').lower()
-        if not content_type_header.startswith('image/'):
-            P.logger.error(f"image_proxy: Expected image Content-Type, but got '{content_type_header}' for URL: {image_url}. Content: {res.text[:200]}")
-            abort(400) # 잘못된 요청 또는 서버 응답 오류
-            return
-        # --- 응답 검증 끝 ---
+        content_bytes = res.content
+        is_image_content = False
+
+        # 1. Content-Type 헤더로 1차 확인
+        if content_type_header.startswith('image/'):
+            is_image_content = True
+        # 2. binary/octet-stream인 경우, 파일 시그니처(Magic Number)로 2차 확인
+        elif content_type_header == 'binary/octet-stream':
+            if len(content_bytes) > 4:
+                # JPEG (JFIF, EXIF) or PNG or GIF
+                if (content_bytes.startswith(b'\xFF\xD8\xFF') or
+                    content_bytes.startswith(b'\x89PNG') or
+                    content_bytes.startswith(b'GIF8')):
+                    # logger.warning(f"image_proxy: Content-Type is 'binary/octet-stream' but content is a valid image. Proceeding for URL: {image_url}")
+                    is_image_content = True
+
+        if not is_image_content:
+            P.logger.error(f"image_proxy: Expected image, but got Content-Type '{content_type_header}' and invalid content for URL: {image_url}")
+            abort(400)
 
         try:
-            bytes_im = BytesIO(res.content)
+            bytes_im = BytesIO(content_bytes)
             im = Image.open(bytes_im)
             imformat = im.format
-            if imformat is None: # Pillow가 포맷을 감지 못하는 경우 (드물지만 발생 가능)
-                P.logger.warning(f"image_proxy: Pillow could not determine format for image from URL: {image_url}. Attempting to infer from Content-Type.")
-                if 'jpeg' in content_type_header or 'jpg' in content_type_header:
+            
+            # Pillow가 포맷을 감지 못했거나, Content-Type이 binary였을 경우, im.format으로 재확인
+            if imformat is None or content_type_header == 'binary/octet-stream':
+                P.logger.debug(f"image_proxy: Pillow detected format '{imformat}' for binary stream. URL: {image_url}")
+                # Pillow가 감지한 포맷이 없다면, 기본 JPEG로 가정
+                if imformat not in ['JPEG', 'PNG', 'WEBP', 'GIF']:
                     imformat = 'JPEG'
-                elif 'png' in content_type_header:
-                    imformat = 'PNG'
-                elif 'webp' in content_type_header:
-                    imformat = 'WEBP'
-                elif 'gif' in content_type_header:
-                    imformat = 'GIF'
-                else:
-                    P.logger.error(f"image_proxy: Could not infer image format from Content-Type '{content_type_header}'. URL: {image_url}")
-                    abort(400)
-                    return
-            mimetype = im.get_format_mimetype()
-            if mimetype is None: # 위에서 imformat을 강제로 설정한 경우 mimetype도 설정
-                if imformat == 'JPEG': mimetype = 'image/jpeg'
-                elif imformat == 'PNG': mimetype = 'image/png'
-                elif imformat == 'WEBP': mimetype = 'image/webp'
-                elif imformat == 'GIF': mimetype = 'image/gif'
-                else:
-                    P.logger.error(f"image_proxy: Could not determine mimetype for inferred format '{imformat}'. URL: {image_url}")
-                    abort(400)
-                    return
+
+            mimetype = im.get_format_mimetype() or f'image/{imformat.lower()}'
 
         except UnidentifiedImageError as e: # PIL.UnidentifiedImageError 명시적 임포트 필요
             P.logger.error(f"image_proxy: PIL.UnidentifiedImageError for URL: {image_url}. Response Content-Type: {content_type_header}")
@@ -701,7 +699,7 @@ class SiteAvBase:
             return
 
         # apply crop - quality loss
-        
+
         if mode is not None and mode.startswith("crop_"):
             im = SiteUtilAv.imcrop(im, position=mode[-1])
         return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
@@ -715,9 +713,6 @@ class SiteAvBase:
             pil.save(buf, format=format, quality=95)
             return Response(buf.getvalue(), mimetype=mimetype)
 
-
-
-    # START: ADDED METHOD FOR IMAGE PROCESSING REFACTOR
 
     @classmethod
     def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache):
@@ -832,7 +827,7 @@ class SiteAvBase:
         return results
 
 
-    # << Step 2 헬퍼: 이미지 소스 결정 >>
+    # --- 이미지 소스 결정 ---
     @classmethod
     def determine_final_image_sources(cls, decision_data):
         """
@@ -938,7 +933,7 @@ class SiteAvBase:
                                 crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
                                 if crop_pos:
                                     final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"}); break
-                            elif aspect_ratio >= 1.8: # 1.8:1 이상 와이드 (MG-Style)
+                            elif aspect_ratio >= 1.7: # 1.7:1 이상 와이드 (MG-Style)
                                 crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
                                 if crop_pos:
                                     final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"}); break
@@ -979,25 +974,29 @@ class SiteAvBase:
                                 im_no_lb = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
                                 processed_im = SiteUtilAv.imcrop(im_no_lb, position='r')
                                 temp_filepath = cls.save_pil_to_temp(processed_im)
-                                if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
+                                if temp_filepath:
+                                    logger.debug(f"Image for {ui_code} has aspect ratio < 4:3. Applying 'crop_c'.")
+                                    final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
                                 processed_im.close(); im_no_lb.close()
 
-                            # 2. 1.8:1 이상 와이드 (MG-Style)
-                            elif aspect_ratio >= 1.8:
+                            # 2. 1.7:1 이상 와이드 (MG-Style)
+                            elif aspect_ratio >= 1.7:
                                 right_half = im_lg_obj.crop((w / 2, 0, w, h))
                                 processed_im = SiteUtilAv.imcrop(right_half, position='c')
                                 temp_filepath = cls.save_pil_to_temp(processed_im)
-                                if temp_filepath: final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
+                                if temp_filepath:
+                                    logger.debug(f"Image for {ui_code} has aspect ratio >= 1.7. Applying right_half and 'crop_c'.")
+                                    final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
                                 processed_im.close(); right_half.close()
 
                             # 3. (신규) 4:3 비율 미만 (가로가 충분히 넓지 않음)
                             elif aspect_ratio < (4/3 - 0.05):
-                                # logger.debug(f"Image for {ui_code} has aspect ratio < 4:3. Applying 'crop_c'.")
+                                logger.debug(f"Image for {ui_code} has aspect ratio < 4:3. Applying 'crop_c'.")
                                 final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_c'})
 
-                            # 4. 그 외 나머지 (4:3 ~ 1.8:1 사이의 일반적인 가로 이미지)
+                            # 4. 그 외 나머지 (4:3 ~ 1.7:1 사이의 일반적인 가로 이미지)
                             else:
-                                # logger.debug(f"Image for {ui_code} has standard landscape ratio. Applying 'crop_r'.")
+                                logger.debug(f"Image for {ui_code} has standard landscape ratio. Applying 'crop_r'.")
                                 final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_r'})
                         finally:
                             if im_lg_obj: im_lg_obj.close()
@@ -1077,9 +1076,6 @@ class SiteAvBase:
         finally:
             if im_sm_obj: im_sm_obj.close()
             if im_lg_obj: im_lg_obj.close()
-
-
-    # END: ADDED METHOD
 
 
     # 의미상 메타데이터에서 처리해야한다.
@@ -1392,7 +1388,7 @@ class SiteAvBase:
                 try:
                     cropped_im = SiteUtilAv.imcrop(im_lg_obj, position=pos)
                     if cropped_im is None: continue
-                    
+
                     # average_hash와 phash를 조합하여 비교
                     dist_a = average_hash(im_sm_obj) - average_hash(cropped_im)
                     dist_p = phash(im_sm_obj) - phash(cropped_im)
@@ -1409,8 +1405,6 @@ class SiteAvBase:
 
     @classmethod
     def _internal_has_hq_poster_comparison(cls, im_sm_obj, im_lg_to_compare, function_name_for_log="has_hq_poster", sm_source_info=None, lg_source_info=None):
-        # [수정] sm_source_info, lg_source_info 파라미터를 기본값 None으로 추가
-        
         ws, hs = im_sm_obj.size
         wl, hl = im_lg_to_compare.size
         if ws > wl or hs > hl:
@@ -1448,8 +1442,6 @@ class SiteAvBase:
         return None
 
 
-
-    
     # 파일명에 indx 포함. 0 우, 1 좌
     @classmethod
     def get_mgs_half_pl_poster_info_local(cls, ps_url: str, pl_url: str, do_save:bool = True):
@@ -1518,7 +1510,6 @@ class SiteAvBase:
                                     return temp_filepath, None, pl_url
 
                                 try:
-                                    
                                     os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
                                     save_params = {}
                                     if ext in ['jpg', 'webp']: save_params['quality'] = 95
@@ -1540,7 +1531,7 @@ class SiteAvBase:
                         else: # 크롭 자체 실패
                             logger.debug(f"MGS Special Local: Failed to crop center from {obj_name}.")
                 idx += 1
-            
+
             logger.debug("MGS Special Local: All similarity checks failed. No suitable poster found.")
             return None, None, None # 최종적으로 실패 반환
 
@@ -1549,18 +1540,10 @@ class SiteAvBase:
             return None, None, None
 
 
-
-
-
-
-
     # endregion SiteUtilAV 이미지 처리 관련
     ################################################
-    
 
 
-
-    
     ################################################
     # region 유틸
 
@@ -1582,7 +1565,7 @@ class SiteAvBase:
             entity.actor = [EntityActor(a["name"]) for a in data["actors"]]
         return entity
 
-    
+
     @classmethod
     def __shiroutoname_info(cls, keyword):
         url = "https://shiroutoname.com/"
@@ -1635,7 +1618,7 @@ class SiteAvBase:
             results.append(result)
         return results
 
-    
+
     @classmethod
     def get_translated_tag(cls, tag_type, tag):
         tags_json = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tags.json")

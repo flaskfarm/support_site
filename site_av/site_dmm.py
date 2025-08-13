@@ -21,22 +21,21 @@ class SiteDmm(SiteAvBase):
     site_name = "dmm"
     site_char = "D"
     module_char = "C"
-    default_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    default_headers = SiteAvBase.base_default_headers.copy()
+    default_headers.update({
+        "Referer": SITE_BASE_URL + "/",
         "Sec-Ch-Ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
         "Sec-Ch-Ua-Mobile": "?0", "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "same-origin",
         "Sec-Fetch-User": "?1", "Upgrade-Insecure-Requests": "1",
-        "Referer": "https://www.dmm.co.jp" + "/", "DNT": "1", "Cache-Control": "max-age=0", "Connection": "keep-alive",
-    }
+        "DNT": "1", "Cache-Control": "max-age=0", "Connection": "keep-alive",
+    })
     _ps_url_cache = {} # code: {'ps': ps_url, 'type': content_type}
 
 
     ################################################
     # region SEARCH
-    
+
     @classmethod
     def search(cls, keyword, do_trans, manual):
         ret = {}
@@ -49,7 +48,7 @@ class SiteDmm(SiteAvBase):
             ret["ret"] = "success" if data_list else "no_match"
             ret["data"] = data_list
         return ret
-    
+
 
     @classmethod
     def __search(cls, keyword, do_trans, manual, is_retry: bool = False):
