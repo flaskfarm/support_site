@@ -16,13 +16,12 @@ class SiteJavbus(SiteAvBase):
     site_char = "B"
     module_char = "C"
     default_headers = SiteAvBase.base_default_headers.copy()
-    default_headers.update({'Referer': SITE_BASE_URL + '/'})
+    default_headers.update({"Referer": SITE_BASE_URL + "/"})
     _ps_url_cache = {}
-
 
     ################################################
     # region SEARCH
-    
+
     @classmethod
     def search(cls, keyword, do_trans, manual):
         ret = {}

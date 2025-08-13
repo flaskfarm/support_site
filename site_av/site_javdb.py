@@ -17,7 +17,8 @@ class SiteJavdb(SiteAvBase):
     site_char = 'J'
     module_char = 'C'
     default_headers = SiteAvBase.base_default_headers.copy()
-    
+    default_headers.update({"Referer": SITE_BASE_URL + "/"})
+
     ################################################
     # region SEARCH
 
