@@ -1,14 +1,29 @@
 import os
+import sys
+import subprocess
+from typing import Sequence
 
-try:
-    import xmltodict
-except:
-    os.system("pip install xmltodict")
 
-try:
-    import lxml
-except:
-    os.system("pip install lxml")
+def check_packages(packages: Sequence[tuple[str, str]]) -> None:
+    for pkg, pi in packages:
+        try:
+            __import__(pkg)
+        except Exception:
+            subprocess.check_call((sys.executable, "-m", "pip", "install", pi))
+
+
+# support_site 에 필요한 파이썬 패키지 설치
+check_packages((
+    ("xmltodict", "xmltodict"),
+    ("lxml", "lxml"),
+    ("imagehash", "imagehash"),
+    ("cloudscraper", "cloudscraper"),
+    ("tmdbsimple", "tmdbsimple"),
+    ("tvdb_api", "tvdb_api"),
+    ("requests_cache", "requests-cache"),
+    ("discord", "discord.py"),
+    ("dateutil", "dateutils"),
+))
 
 from support import SupportSC
 
