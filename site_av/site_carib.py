@@ -40,18 +40,20 @@ class SiteCarib(SiteAvBase):
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code
-            item.ui_code = f'carib-{code}'
+
+            item.ui_code = cls._parse_ui_code_uncensored(keyword)
+            if not item.ui_code: # 파싱 실패 시 폴백
+                item.ui_code = f'CARIB-{code}'
 
             title_node = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')
             item.title = title_node[0].strip() if title_node else ""
 
+            item.image_url = f'https://www.caribbeancom.com/moviepages/{code}/images/l_l.jpg'
             if manual:
-                item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
-                if cls.config.get('use_proxy'):
-                    item.image_url = cls.make_image_url(f'https://www.caribbeancom.com/moviepages/{code}/images/l_l.jpg')
-            else:
                 item.title_ko = item.title
-                item.image_url = f'https://www.caribbeancom.com/moviepages/{code}/images/l_l.jpg'
+                item.image_url = cls.make_image_url(item.image_url)
+            else:
+                item.title_ko = cls.trans(item.title)
 
             try: 
                 item.year = int("20" + code[4:6])
@@ -117,8 +119,11 @@ class SiteCarib(SiteAvBase):
         entity.tag = []; entity.genre = []; entity.actor = []
 
         # ui_code 및 title 설정
-        entity.ui_code = f'carib-{code_part}'
+        entity.ui_code = cls._parse_ui_code_uncensored(f'carib-{code_part}')
+        if not entity.ui_code: entity.ui_code = f'carib-{code_part}'
+        
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
+        entity.label = "CARIB"
 
         # 연도(year) 및 출시일(premiered) 파싱
         try:
@@ -129,43 +134,46 @@ class SiteCarib(SiteAvBase):
             entity.year = 0
             entity.premiered = None
 
-        # 이미지 서버 경로 계산
-        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-        if image_mode == 'image_server':
-            module_type = 'jav_uncensored'
-            local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-            server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-            base_save_format = cls.MetadataSetting.get(f'{module_type}_image_server_save_format')
-
-            label = entity.ui_code.split('-')[0].upper()
-            year_part = str(entity.year) if entity.year else "0000"
-
-            base_path_part = base_save_format.format(label=label)
-            final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), year_part)
-
-            entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-            entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-
-        # 썸네일
-        # jacket.jpg가 있는지 확인하여 포스터 결정 (404 체크는 비용이 크므로, 다른 방법을 고려할 수 있음)
-        # 여기서는 원본 로직을 유지
         poster_url = f'https://www.caribbeancom.com/moviepages/{code_part}/images/l_l.jpg'
+        landscape_url = poster_url
         jacket_url = f'https://www.caribbeancom.com/moviepages/{code_part}/images/jacket.jpg'
-        if cls.get_response(jacket_url).status_code != 404:
-            poster_url = jacket_url
 
-        # 썸네일
-        try:
-            raw_image_urls = {
-                'poster': poster_url,
-                'pl': f'https://www.caribbeancom.com/moviepages/{code_part}/images/l_l.jpg',
-                'ps': None,
-                'arts': [],
-                'specific_poster_candidates': []
-            }
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
-        except Exception as e:
-            logger.exception(f"Caribbeancom: Error during image processing delegation for {code}: {e}")
+        if not fp_meta_mode:
+            # [일반 모드] : jacket.jpg 존재 여부 확인 후 전체 이미지 처리 실행
+            try:
+                res = cls.get_response(jacket_url)
+                if res and res.status_code == 200:
+                    poster_url = jacket_url
+            except Exception as e:
+                logger.warning(f"[{cls.site_name}] Failed to check jacket.jpg for {code_part}: {e}")
+
+            image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+            if image_mode == 'image_server':
+                try:
+                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
+                    base_path_part = base_save_format.format(label=entity.label)
+                    year_part = str(entity.year) if entity.year else "0000"
+                    final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), year_part)
+                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
+                except Exception as e:
+                    logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+
+            try:
+                raw_image_urls = {
+                    'poster': poster_url,
+                    'pl': landscape_url,
+                }
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+            except Exception as e:
+                logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
+        else:
+            # [파일처리 모드] : 네트워크 요청 없이 기본 URL만 추가
+            logger.debug(f"[{cls.site_name}] FP Meta Mode: Skipping full image processing for {code}.")
+            entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
+            entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
 
         # 나머지 메타데이터 파싱
         title_node = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')
@@ -186,17 +194,13 @@ class SiteCarib(SiteAvBase):
         entity.studio = 'Caribbeancom'
 
         # 부가영상 or 예고편
-        if not fp_meta_mode and cls.config['use_extras']:
+        if not fp_meta_mode and cls.config.get('use_extras'):
             try:
-                if cls.config.get('use_extras'):
-                    thumb_url = next((t.value for t in entity.thumb if t.aspect == 'landscape'), '') # 랜드스케이프를 썸네일로
-                    video_url = cls.make_video_url(f'https://smovie.caribbeancom.com/sample/movies/{code_part}/480p.mp4')
-                    if video_url:
-                        trailer_title = entity.tagline if entity.tagline else entity.title
-                        entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
-            except Exception: pass
-        elif fp_meta_mode:
-            # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
-            pass
+                video_url = cls.make_video_url(f'https://smovie.caribbeancom.com/sample/movies/{code_part}/480p.mp4')
+                if video_url:
+                    trailer_title = entity.tagline if entity.tagline else entity.title
+                    entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url))
+            except Exception as e:
+                logger.error(f"[{cls.site_name}] Trailer processing error: {e}")
 
         return entity

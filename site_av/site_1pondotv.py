@@ -2,7 +2,7 @@ import re
 import os
 import traceback
 from ..entity_av import EntityAVSearch
-from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings)
+from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
@@ -20,8 +20,10 @@ class Site1PondoTv(SiteAvBase):
     def search(cls, keyword, manual=False):
         try:
             ret = {}
-            if re.search('(\\d{6}[_-]\\d+)', keyword, re.I) is not None:
-                code = re.search('(\\d{6}[_-]\\d+)', keyword, re.I).group().replace('-', '_')
+            # 품번 형식(010123_001)을 먼저 찾음
+            code_match = re.search(r'(\d{6}[_-]\d+)', keyword, re.I)
+            if code_match:
+                code = code_match.group(1).replace('-', '_')
             else:
                 return {'ret': 'success', 'data': []}
 
@@ -48,12 +50,14 @@ class Site1PondoTv(SiteAvBase):
                 try:
                     if cls.config.get('use_proxy'):
                         item.image_url = cls.make_image_url(item.image_url)
-                except Exception as e_img: 
+                except Exception as e_img:
                     logger.error(f"Image processing error in manual search: {e_img}")
             else:
                 item.title_ko = item.title
 
-            item.ui_code = f'1pon-{code}'
+            item.ui_code = cls._parse_ui_code_uncensored(keyword)
+            if not item.ui_code: # 파싱 실패 시 폴백
+                item.ui_code = f'1PON-{code}'
 
             if '1pon' in keyword.lower():
                 item.score = 100
@@ -122,8 +126,11 @@ class Site1PondoTv(SiteAvBase):
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
 
-        entity.ui_code = f'1pon-{code[2:]}'
+        entity.ui_code = cls._parse_ui_code_uncensored(f'1pon-{code_part}')
+        if not entity.ui_code: entity.ui_code = f'1pon-{code_part}'
+
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
+        entity.label = "1PON" # 이미지 서버 경로 포맷팅을 위해
 
         entity.premiered = json_data.get('Release')
 
@@ -139,39 +146,47 @@ class Site1PondoTv(SiteAvBase):
         except (ValueError, TypeError, IndexError):
             entity.year = 0
 
-        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-        if image_mode == 'image_server':
-            module_type = 'jav_uncensored'
-            local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-            server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-            base_save_format = cls.MetadataSetting.get(f'{module_type}_image_server_save_format')
-
-            label = entity.ui_code.split('-')[0].upper()
-            year_part = str(entity.year) if entity.year else "0000"
-
-            base_path_part = base_save_format.format(label=label)
-            final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), year_part)
-            
-            entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-            entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-
         gallery_data = json_data.get('Gallery')
         arts_urls = []
         if isinstance(gallery_data, list):
             arts_urls = [f"{SITE_BASE_URL}{p}" for p in gallery_data if p and isinstance(p, str) and p.startswith('/')]
 
-        # 썸네일
-        try:
-            raw_image_urls = {
-                'poster': json_data.get('MovieThumb'),
-                'pl': json_data.get('ThumbUltra'),
-                'ps': None,
-                'arts': arts_urls,
-                'specific_poster_candidates': []
-            }
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
-        except Exception as e:
-            logger.exception(f"1Pondo: Error during image processing delegation for {code}: {e}")
+        poster_url = json_data.get('MovieThumb')
+        landscape_url = json_data.get('ThumbUltra')
+
+        if not fp_meta_mode:
+            # [일반 모드] : 전체 이미지 처리 파이프라인 실행
+            image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+            if image_mode == 'image_server':
+                try:
+                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
+                    base_path_part = base_save_format.format(label=entity.label)
+                    year_part = str(entity.year) if entity.year else "0000"
+                    final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), year_part)
+                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
+                except Exception as e:
+                    logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+
+            try:
+                raw_image_urls = {
+                    'poster': poster_url,
+                    'pl': landscape_url,
+                    'arts': arts_urls,
+                }
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+            except Exception as e:
+                logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
+        else:
+            # [파일처리 모드] : 원본 URL만 추가하고 무거운 처리는 생략
+            logger.debug(f"[{cls.site_name}] FP Meta Mode: Skipping full image processing for {code}.")
+            if poster_url:
+                entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
+            if landscape_url:
+                entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
+            entity.fanart = arts_urls
 
         entity.tagline = cls.trans(json_data.get('Title', ''))
 
@@ -202,18 +217,17 @@ class Site1PondoTv(SiteAvBase):
         entity.studio = '1Pondo'
 
         # 부가영상 or 예고편
-        if not fp_meta_mode and cls.config['use_extras']:
+        if not fp_meta_mode and cls.config.get('use_extras'):
             try:
                 sample_files = json_data.get('SampleFiles')
-                if cls.config.get('use_extras') and isinstance(sample_files, list) and sample_files:
-                    thumb_url = next((t.value for t in entity.thumb if t.aspect == 'poster'), '')
-                    video_url = cls.make_video_url(sample_files[-1].get('URL'))
-                    if video_url:
-                        trailer_title = entity.tagline if entity.tagline else entity.title
-                        entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url, thumb=thumb_url))
-            except Exception: pass
-        elif fp_meta_mode:
-            # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
-            pass
+                if isinstance(sample_files, list) and sample_files:
+                    video_url_data = next((f for f in sample_files if f.get('FileSize') and f.get('URL')), None)
+                    if video_url_data:
+                        video_url = cls.make_video_url(video_url_data['URL'])
+                        if video_url:
+                            trailer_title = entity.tagline if entity.tagline else entity.title
+                            entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url))
+            except Exception as e:
+                logger.error(f"[{cls.site_name}] Trailer processing error: {e}")
 
         return entity
