@@ -1,6 +1,10 @@
+import os
 import functools
-import redis
 from typing import Iterable
+
+import redis
+
+from plugin import *
 
 setting = {
     'filepath' : __file__,
@@ -25,17 +29,13 @@ setting = {
     ]
 }
 
-
-from plugin import *
-
 P = create_plugin_instance(setting)
 
 try:
     from .mod_site import ModuleSite
     P.set_module_list([ModuleSite])
 except Exception as e:
-    P.logger.error(f'Exception:{str(e)}')
-    P.logger.error(traceback.format_exc())
+    P.logger.exception("모듈 로딩 실패")
 
 logger = P.logger
 
@@ -47,8 +47,8 @@ try:
     redis_port = F.config.get('redis_port') or os.environ.get('REDIS_PORT') or 6379
     # decode_responses=True
     REDIS_CONN = redis.Redis(host='localhost', port=redis_port, decode_responses=True)
-except:
-    logger.error(traceback.format_exc())
+except Exception:
+    logger.exception("redis 연결 실패")
     REDIS_CONN = None
 
 
@@ -96,5 +96,5 @@ try:
     '''
     for key in scan_iter(f'{REDIS_KEY_PLUGIN}:*'):
         REDIS_CONN.delete(key)
-except:
-    P.logger.error(traceback.format_exc())
+except Exception:
+    logger.exception("redis 플러그인 데이터 초기화 실패")

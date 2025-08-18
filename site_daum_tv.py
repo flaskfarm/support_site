@@ -64,8 +64,7 @@ class SiteDaumTv(SiteDaum):
                 ret['ret'] = 'success'
                 ret['data'] = data
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"{keyword=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
@@ -82,8 +81,8 @@ class SiteDaumTv(SiteDaum):
 
         try:
             root = SiteDaum.get_tree(url)
-        except:
-            logger.error(traceback.format_exc())
+        except Exception:
+            logger.exception(f"{code=} {title=}")
             return {'ret':'fail'}
 
         home_data = cls.get_show_info_on_home(root)
@@ -156,8 +155,8 @@ class SiteDaumTv(SiteDaum):
 
                     #logger.debug(f'{actor.role=} {actor.name=} {actor.thumb=}')
                     show.actor.append(actor)
-                except:
-                    logger.error(traceback.format_exc())
+                except Exception:
+                    logger.exception(f"{code=} {title=}")
 
             staff_elements = actor_root.xpath('//div[@data-tab="제작"]//ul/li/div')
             for element in staff_elements:
@@ -184,8 +183,8 @@ class SiteDaumTv(SiteDaum):
                             staff.thumb = thumb_url
                     #logger.debug(f'{staff.role=} {staff.name=} {staff.thumb=}')
                     show.actor.append(staff)
-                except:
-                    logger.error(traceback.format_exc())
+                except Exception:
+                    logger.exception(f"{code=} {title=}")
 
         '''
         회차
@@ -239,8 +238,8 @@ class SiteDaumTv(SiteDaum):
                             break
                         last_ep_no = page_last_episode_no
                         last_ep_url = page_last_episode_url
-                    except:
-                        logger.error(traceback.format_exc())
+                    except Exception:
+                        logger.exception(f"{code=} {title=}")
         else:
             logger.warning(f'No episodes infomation: {show.title}')
 
@@ -261,10 +260,10 @@ class SiteDaumTv(SiteDaum):
                             index = int(index)
                             premiered = cls.parse_date_text(premiered)
                             show.extra_info['episodes'][index]['daum']['premiered'] = premiered.strftime('%Y-%m-%d')
-                        except:
+                        except Exception:
                             pass
-                except:
-                    logger.error(traceback.format_exc())
+                except Exception:
+                    logger.exception(f"{code=} {title=}")
 
         # 감상하기
         ott_root = cls.get_info_tab('감상하기', root)
@@ -294,8 +293,8 @@ class SiteDaumTv(SiteDaum):
                         wavve_id = query.get('programid')
                         if wavve_id:
                             show.extra_info['wavve_id'] = wavve_id
-                except:
-                    logger.error(traceback.format_exc())
+                except Exception:
+                    logger.exception(f"{code=} {title=}")
 
         '''
         metadata/mod_ktv.py:
@@ -318,7 +317,7 @@ class SiteDaumTv(SiteDaum):
             entity = EntityEpisode(cls.site_name, episode_url)
             query = dict(urllib.parse.parse_qsl(episode_url))
         except Exception as e:
-            logger.error(traceback.format_exc())
+            logger.exception(f"{episode_code=}")
             ret['ret'] = 'exception'
             ret['data'] = repr(e)
             return ret
@@ -337,8 +336,8 @@ class SiteDaumTv(SiteDaum):
                 entity.showtitle = show_title_elements[0].text.strip()
                 query = dict(urllib.parse.parse_qsl(show_title_elements[0].attrib['href']))
                 show_id = query.get('spId')
-            except:
-                logger.error(traceback.format_exc())
+            except Exception:
+                logger.exception(f"{episode_code=}")
 
         # 회차
         entity.episode = -1
@@ -379,8 +378,8 @@ class SiteDaumTv(SiteDaum):
                 weekday = cls.weekdays[date.weekday()] if date else None
                 title_date = date.strftime("%Y.%m.%d.") if date else ' '.join(date_text).strip()
                 date_in_title = f'{title_date}({weekday})' if weekday else title_date
-            except:
-                logger.error(traceback.format_exc())
+            except Exception:
+                logger.exception(f"{episode_code=}")
 
 
         # 제목
@@ -439,9 +438,8 @@ class SiteDaumTv(SiteDaum):
             except UnicodeEncodeError:
                 #logger.warning(f'Is it English? {name_text}')
                 return
-        except:
-            logger.error(traceback.format_exc())
-            logger.error(f'{name=}')
+        except Exception:
+            logger.exception(f"{name=}")
 
     @classmethod
     def get_default_tv_query(cls, **kwds: dict) -> dict[str, str | None]:
