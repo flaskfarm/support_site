@@ -196,7 +196,7 @@ class SiteDmm(SiteAvBase):
 
                 # 2. item.ui_code 파싱 및 설정
                 cid_part_for_parse = item.code[len(cls.module_char)+len(cls.site_char):]
-                parsed_ui_code, label_for_score_item, num_raw_for_score_item = cls._parse_ui_code_from_cid(cid_part_for_parse, item.content_type)
+                parsed_ui_code, label_for_score_item, num_raw_for_score_item = cls._parse_ui_code(cid_part_for_parse, item.content_type)
                 item.ui_code = parsed_ui_code.upper()
 
                 # 제목 접두사 추가
@@ -217,7 +217,7 @@ class SiteDmm(SiteAvBase):
                 if label_for_score_item and num_raw_for_score_item:
                     item_code_for_strict_compare = label_for_score_item + num_raw_for_score_item.zfill(5)
                     item_ui_code_base_for_score = label_for_score_item + num_raw_for_score_item
-                elif item.ui_code: # _parse_ui_code_from_cid가 결과를 못냈을 경우의 폴백
+                elif item.ui_code: # _parse_ui_code가 결과를 못냈을 경우의 폴백
                     cleaned_ui_code_for_score = item.ui_code.replace("-","").lower()
                     # cleaned_ui_code_for_score에서 레이블과 숫자 분리 시도 (간단화)
                     temp_match_score = re.match(r'([a-z]+)(\d+)', cleaned_ui_code_for_score)
@@ -251,9 +251,11 @@ class SiteDmm(SiteAvBase):
                 elif len(keyword_processed_parts_for_score) > 0 and \
                     (keyword_processed_parts_for_score[0] in item.code.lower() or \
                     (len(keyword_processed_parts_for_score) > 1 and keyword_processed_parts_for_score[1] in item.code.lower())):
-                    current_score_val = 60
+                    current_score_val = 70
                 else: 
-                    current_score_val = 20
+                    current_score_val = 60
+                if not item.score:
+                    item.score = 20
 
                 item.score = current_score_val
                 if current_score_val < 100 and score > 20: score -= 5 # 다음 아이템의 기본 점수 감소
@@ -297,12 +299,11 @@ class SiteDmm(SiteAvBase):
                 item_dict['site_key'] = cls.site_name
 
                 ui_code_for_label_check = item_dict.get('ui_code', "")
-                if ui_code_for_label_check and cls.config['priority_labels']: # priority_label_setting_str은 함수 파라미터
-                    label_to_check = cls.get_label_from_ui_code(ui_code_for_label_check)
-                    if label_to_check:
-                        if label_to_check in cls.config['priority_labels']:
-                            item_dict['is_priority_label_site'] = True
-                            # logger.debug(f"DMM Search: Item '{ui_code_for_label_check}' matched PrioLabel '{label_to_check}'. Flag set True.")
+                if ui_code_for_label_check and cls.config.get('priority_labels_set'): 
+                    label_to_check = ui_code_for_label_check.split('-', 1)[0]
+                    if label_to_check in cls.config['priority_labels_set']:
+                        item_dict['is_priority_label_site'] = True
+                        # logger.debug(f"DMM Search: Item '{ui_code_for_label_check}' matched PrioLabel '{label_to_check}'. Flag set True.")
 
                 ret_temp_before_filtering.append(item_dict) # 최종적으로 수정된 딕셔너리를 리스트에 추가
             except Exception as e_inner_loop_dmm:
@@ -426,11 +427,11 @@ class SiteDmm(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
             if entity_result_val_final: 
                 ret["ret"] = "success"; 
                 ret["data"] = entity_result_val_final
@@ -445,7 +446,7 @@ class SiteDmm(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False):
 
         cached_data = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = None # kwargs.get('ps_url')
@@ -488,7 +489,7 @@ class SiteDmm(SiteAvBase):
         # === 1. 타입별 데이터 소스 분기 ===
         if entity.content_type == 'videoa' or entity.content_type == 'vr':
             # --- 새로운 방식: videoa/vr은 GraphQL API 호출 ---
-            logger.debug(f"DMM Info (API): Getting info for {code} (type: {entity.content_type})")
+            # logger.debug(f"DMM Info (API): Getting info for {code} (type: {entity.content_type})")
 
             try:
                 # --- 사전 작업: 브라우저의 API 호출 순서 모방 ---
@@ -506,18 +507,18 @@ class SiteDmm(SiteAvBase):
                 # 1. IP 정보 확인 API 호출
                 payload_root = {"operationName":"Root","query":"query Root {\n  ipInfo {\n    countryCode\n    accessStatus\n    __typename\n  }\n}","variables":{}}
                 cls.get_response(api_url, method='POST', headers=headers, json=payload_root)
-                logger.debug("DMM Info (API): Step 1/3 'Root' API call completed.")
+                # logger.debug("DMM Info (API): Step 1/3 'Root' API call completed.")
 
                 # 2. 점검 상태 확인 API 호출
                 payload_maintenance = {"operationName":"Maintenance","query":"query Maintenance {\n  maintenance(service: PPV) {\n    description\n    startAt\n    endAt\n    __typename\n  }\n}","variables":{}}
                 cls.get_response(api_url, method='POST', headers=headers, json=payload_maintenance)
-                logger.debug("DMM Info (API): Step 2/3 'Maintenance' API call completed.")
+                # logger.debug("DMM Info (API): Step 2/3 'Maintenance' API call completed.")
 
                 # 3. 본편 데이터 요청 API 호출
                 query_content = "query ContentPageData($id: ID!, $isLoggedIn: Boolean!, $isAmateur: Boolean!, $isAnime: Boolean!, $isAv: Boolean!, $isCinema: Boolean!, $isSP: Boolean!) {\n  ppvContent(id: $id) {\n    ...ContentData\n    __typename\n  }\n  reviewSummary(contentId: $id) {\n    ...ReviewSummary\n    __typename\n  }\n  ...basketCountFragment\n}\nfragment ContentData on PPVContent {\n  id\n  floor\n  title\n  isExclusiveDelivery\n  releaseStatus\n  description\n  notices\n  isNoIndex\n  isAllowForeign\n  announcements {\n    body\n    __typename\n  }\n  featureArticles {\n    link {\n      url\n      text\n      __typename\n    }\n    __typename\n  }\n  packageImage {\n    largeUrl\n    mediumUrl\n    __typename\n  }\n  sampleImages {\n    number\n    imageUrl\n    largeImageUrl\n    __typename\n  }\n  products {\n    ...ProductData\n    __typename\n  }\n  mostPopularContentImage {\n    ... on ContentSampleImage {\n      __typename\n      largeImageUrl\n      imageUrl\n    }\n    ... on PackageImage {\n      __typename\n      largeUrl\n      mediumUrl\n    }\n    __typename\n  }\n  priceSummary {\n    lowestSalePrice\n    lowestPrice\n    campaign {\n      title\n      id\n      endAt\n      __typename\n    }\n    __typename\n  }\n  weeklyRanking: ranking(term: Weekly)\n  monthlyRanking: ranking(term: Monthly)\n  wishlistCount\n  sample2DMovie {\n    fileID\n    __typename\n  }\n  sampleMovie {\n    has2d\n    hasVr\n    __typename\n  }\n  ...AmateurAdditionalContentData @include(if: $isAmateur)\n  ...AnimeAdditionalContentData @include(if: $isAnime)\n  ...AvAdditionalContentData @include(if: $isAv)\n  ...CinemaAdditionalContentData @include(if: $isCinema)\n  __typename\n}\nfragment ProductData on PPVProduct {\n  id\n  priority\n  deliveryUnit {\n    id\n    priority\n    streamMaxQualityGroup\n    downloadMaxQualityGroup\n    __typename\n  }\n  priceInclusiveTax\n  sale {\n    priceInclusiveTax\n    __typename\n  }\n  expireDays\n  utilization @include(if: $isLoggedIn) {\n    isTVODRentalPlayable\n    status\n    __typename\n  }\n  licenseType\n  shopName\n  availableCoupon {\n    name\n    expirationPolicy {\n      ... on ProductCouponExpirationAt {\n        expirationAt\n        __typename\n      }\n      ... on ProductCouponExpirationDay {\n        expirationDays\n        __typename\n      }\n      __typename\n    }\n    expirationAt\n    discountedPrice\n    minPayment\n    destinationUrl\n    __typename\n  }\n  __typename\n}\nfragment AmateurAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  amateurActress {\n    id\n    name\n    imageUrl\n    age\n    waist\n    bust\n    bustCup\n    height\n    hip\n    relatedContents {\n      id\n      title\n      __typename\n    }\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment PlayableInfo on PlayableInfo {\n  playableDevices {\n    deviceDeliveryUnits {\n      id\n      deviceDeliveryQualities {\n        isDownloadable\n        isStreamable\n        __typename\n      }\n      __typename\n    }\n    device\n    name\n    priority\n    __typename\n  }\n  deviceGroups {\n    id\n    devices {\n      deviceDeliveryUnits {\n        deviceDeliveryQualities {\n          isStreamable\n          isDownloadable\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n  vrViewingType\n  __typename\n}\nfragment AnimeAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment AvAdditionalContentData on PPVContent {\n  deliveryStartDate\n  makerReleasedAt\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    isBookmarked @include(if: $isLoggedIn)\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  contentType\n  relatedWords\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment CinemaAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  authors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment ReviewSummary on ReviewSummary {\n  average\n  total\n  withCommentTotal\n  distributions {\n    total\n    withCommentTotal\n    rating\n    __typename\n  }\n  __typename\n}\nfragment basketCountFragment on Query {\n  basketCount: legacyBasket @include(if: $isSP) {\n    total\n    __typename\n  }\n  __typename\n}"
                 payload_content = {"operationName":"ContentPageData", "query":query_content, "variables":{"id":cid_part,"isAmateur":False,"isAnime":False,"isAv":True,"isCinema":False,"isLoggedIn":False,"isSP":False}}
                 res = cls.get_response(api_url, method='POST', headers=headers, json=payload_content)
-                logger.debug("DMM Info (API): Step 3/3 'ContentPageData' API call completed.")
+                logger.debug(f"DMM Info (API): Step 3/3 'ContentPageData' API call completed: {code} (type: {entity.content_type})")
 
                 if res.status_code != 200:
                     logger.error(f"DMM API Error: Status {res.status_code} for {code} on ContentPageData call."); return None
@@ -564,7 +565,7 @@ class SiteDmm(SiteAvBase):
                 if plot_val: entity.plot = cls.trans(plot_val)
 
                 id_to_parse = content.get('makerContentId') or cid_part
-                parsed_ui_code, _, _ = cls._parse_ui_code_from_cid(id_to_parse, entity.content_type)
+                parsed_ui_code, _, _ = cls._parse_ui_code(id_to_parse, entity.content_type)
                 entity.ui_code = parsed_ui_code
                 ui_code_for_image = entity.ui_code.lower()
                 entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
@@ -657,7 +658,7 @@ class SiteDmm(SiteAvBase):
                         if value_text_all_dvd:
                             logger.debug(f"DMM Info: Parsed '品番' value from page: '{key_dvd}' for {code}.")
 
-                            parsed_ui_code_page, _, _ = cls._parse_ui_code_from_cid(value_text_all_dvd, entity.content_type)
+                            parsed_ui_code_page, _, _ = cls._parse_ui_code(value_text_all_dvd, entity.content_type)
                             entity.ui_code = parsed_ui_code_page
 
                             ui_code_for_image = parsed_ui_code_page.lower()
@@ -1041,209 +1042,86 @@ class SiteDmm(SiteAvBase):
     ################################################
     # region 전용 UTIL
 
-    @classmethod
-    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
-        if not ui_code_str or not isinstance(ui_code_str, str): return ""
-        ui_code_upper = ui_code_str.upper()
-
-        # PTN_ID와 유사한 패턴으로 ID 계열 레이블 먼저 확인 (예: "16ID-045" -> "16ID")
-        id_match = re.match(r'^(\d*[A-Z]+ID)', ui_code_upper) # 예: 16ID, 25ID, ID (숫자 없거나, 있거나)
-        if id_match:
-            return id_match.group(1)
-        
-        # 일반적인 경우 (하이픈 앞부분)
-        if '-' in ui_code_upper:
-            return ui_code_upper.split('-', 1)[0]
-        
-        # 하이픈 없는 경우 (예: HAGE001)
-        match_alpha_prefix = re.match(r'^([A-Z]+)', ui_code_upper)
-        if match_alpha_prefix:
-            return match_alpha_prefix.group(1)
-            
-        return ui_code_upper # 최후의 경우 전체 반환
-
-
-    @classmethod
-    def _parse_ui_code_from_cid(cls, cid_part_raw: str, content_type: str) -> tuple:
-        
-        # 1. 설정 로드
-        # 2. CID 전처리
-        processed_cid = cid_part_raw.lower()
-        processed_cid = re.sub(r'^[hn]_\d', '', processed_cid)
-        suffix_strip_match = re.match(r'^(.*\d+)([a-z]+)$', processed_cid, re.I)
-        if suffix_strip_match:
-            processed_cid = suffix_strip_match.group(1)
-            logger.debug(f"SITE_DMM: Stripped suffix. CID is now: '{processed_cid}'")
-
-        # 3. 파싱 변수 초기화
-        final_label_part, final_num_part, rule_applied = "", "", False
-
-        # --- 고급 규칙 (유형 0) ---
-        for line in cls.config['dmm_parser_rules']['type0_rules']:
-            line = line.strip()
-            if not line or line.startswith('#'): continue
-            
-            parts = line.split('=>')
-            if len(parts) != 3:
-                logger.warning(f"Invalid advanced rule format: {line}")
-                continue
-            
-            pattern, label_group_idx_str, num_group_idx_str = parts[0].strip(), parts[1].strip(), parts[2].strip()
-            try:
-                label_group_idx = int(label_group_idx_str)
-                num_group_idx = int(num_group_idx_str)
-                
-                match = re.match(pattern, processed_cid, re.I)
-                if match:
-                    groups = match.groups()
-                    # 사용자가 입력한 인덱스가 유효한지 확인
-                    if len(groups) >= label_group_idx and len(groups) >= num_group_idx:
-                        # 사용자가 입력한 인덱스를 기반으로 바로 값을 가져옴 (1을 빼서 0-based로 변환)
-                        final_label_part = groups[label_group_idx - 1]
-                        final_num_part = groups[num_group_idx - 1]
-                        rule_applied = True
-                        logger.debug(f"SITE_DMM: Matched Advanced Rule. Pattern: '{pattern}' -> Label: '{final_label_part}', Num: '{final_num_part}'")
-                        break
-            except (ValueError, IndexError) as e:
-                logger.error(f"Error applying advanced rule: {line} - {e}")
-        if rule_applied:
-            pass
-
-        # --- 나머지 규칙들 (고급 규칙이 적용되지 않았을 때만 실행) ---
-        if not rule_applied:
-            # 1. 레이블이 문자로 끝나고 그 뒤에 숫자가 오는 명확한 패턴을 먼저 시도
-            clear_pattern_match = re.match(r'^([a-zA-Z\d]*[a-zA-Z])(\d+)$', processed_cid)
-            if clear_pattern_match:
-                remaining_for_label, extracted_num_part = clear_pattern_match.groups()
-            else:
-                # 2. 위 패턴이 실패하면, 기존의 길이 기반 숫자 추출을 폴백으로 사용
-                expected_num_len = 5 if content_type in ['videoa', 'vr'] else 3
-                num_match = re.match(rf'^(.*?)(\d{{{expected_num_len}}})$', processed_cid)
-                if num_match:
-                    remaining_for_label, extracted_num_part = num_match.groups()
-                else:
-                    # 3. 길이 기반도 실패하면, 가장 일반적인 숫자 분리
-                    general_num_match = re.match(r'^(.*?)(\d+)$', processed_cid)
-                    if general_num_match:
-                        remaining_for_label, extracted_num_part = general_num_match.groups()
-                    else:
-                        remaining_for_label, extracted_num_part = processed_cid, ""
-            
-            final_num_part = extracted_num_part
-
-            # --- 유형 1: 3자리 숫자 + 레이블 ---
-            if not rule_applied and cls.config['dmm_parser_rules']['type1_labels']:
-                label_pattern = '|'.join(re.escape(label) for label in cls.config['dmm_parser_rules']['type1_labels'])
-                match = re.match(r'^.*?(\d{3})(' + label_pattern + r')$', remaining_for_label, re.I)
-                if match:
-                    final_label_part = match.group(1) + match.group(2)
-                    rule_applied = True
-                    logger.debug(f"SITE_DMM: Matched Type 1. Remaining '{remaining_for_label}' -> Label '{final_label_part}'")
-
-            # --- 유형 2: 레이블 + 2자리 숫자 ---
-            if not rule_applied and cls.config['dmm_parser_rules']['type2_labels']:
-                label_pattern = '|'.join(re.escape(label) for label in cls.config['dmm_parser_rules']['type2_labels'])
-                match = re.match(r'^.*?(' + label_pattern + r')(\d{2})$', remaining_for_label, re.I)
-                if match:
-                    series_num, pure_alpha_label = match.group(2), match.group(1)
-                    final_label_part = series_num + pure_alpha_label
-                    rule_applied = True
-                    logger.debug(f"SITE_DMM: Matched Type 2. Remaining '{remaining_for_label}' -> Label '{final_label_part}'")
-
-            # --- 유형 3: 2자리 숫자 + 레이블 ---
-            if not rule_applied and cls.config['dmm_parser_rules']['type3_labels']:
-                label_pattern = '|'.join(re.escape(label) for label in cls.config['dmm_parser_rules']['type3_labels'])
-                match = re.match(r'^.*?(\d{2})(' + label_pattern + r')$', remaining_for_label, re.I)
-                if match:
-                    final_label_part = match.group(1) + match.group(2)
-                    rule_applied = True
-                    logger.debug(f"SITE_DMM: Matched Type 3. Remaining '{remaining_for_label}' -> Label '{final_label_part}'")
-
-            # --- 유형 4: 1자리 숫자 + 레이블 ---
-            if not rule_applied and cls.config['dmm_parser_rules']['type4_labels']:
-                label_pattern = '|'.join(re.escape(label) for label in cls.config['dmm_parser_rules']['type4_labels'])
-                match = re.match(r'^.*?(\d{1})(' + label_pattern + r')$', remaining_for_label, re.I)
-                if match:
-                    final_label_part = match.group(1) + match.group(2)
-                    rule_applied = True
-                    logger.debug(f"SITE_DMM: Matched Type 4. Remaining '{remaining_for_label}' -> Label '{final_label_part}'")
-
-            # --- 일반 처리 ---
-            if not rule_applied:
-                alpha_match = re.search(r'([a-zA-Z].*)', remaining_for_label, re.I)
-                if alpha_match:
-                    final_label_part = alpha_match.group(1)
-                else:
-                    final_label_part = remaining_for_label
-                logger.debug(f"SITE_DMM: No special rule. General parse on '{remaining_for_label}' -> Label '{final_label_part}'")
-
-        # 6. 최종 값 조합
-        score_label_part = final_label_part.lower()
-        label_ui_part = final_label_part.upper().strip('-') # 후행 하이픈 제거
-        label_num_raw_for_score = final_num_part
-        num_stripped = final_num_part.lstrip('0') or "0"
-        label_num_ui_final = num_stripped.zfill(3)
-
-        if label_ui_part and label_num_ui_final:
-            ui_code_final = f"{label_ui_part}-{label_num_ui_final}"
-        else:
-            ui_code_final = label_ui_part or cid_part_raw.upper()
-        
-        logger.debug(f"SITE_DMM: _parse_ui_code_from_cid result for '{cid_part_raw}' -> UI Code: '{ui_code_final}'")
-        return ui_code_final, score_label_part, label_num_raw_for_score
-
-
-   
-
-
-
 
     # 검색용 키워드 반환
     @classmethod
     def __get_keyword_for_url(cls, temp_keyword, is_retry):
-        # 재시도에 필요한 부분을 담을 변수 초기화
-        label_part_for_retry = ""
-        num_part_for_retry = ""
         keyword_for_url = ""
 
-        # --- 2. "ID 계열" 품번 특별 처리 (DMM 검색 형식으로 변환) ---
-        match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
-        if match_id_prefix:
-            label_series = match_id_prefix.group(1) 
-            num_part = match_id_prefix.group(2)
-            keyword_for_url = label_series + "id" + num_part.zfill(5)
-            return keyword_for_url, "", ""
-        
-        match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
-        if match_series_id_prefix:
-            label_series = match_series_id_prefix.group(1)
-            num_part = match_series_id_prefix.group(2)
-            keyword_for_url = label_series + "id" + num_part.zfill(5)
+        # --- ID 레이블 특별 처리 (DMM 검색 최적화) ---
+
+        # Case 1: '16id-045', '16id-0045' 같은 형식. 문자열 전체가 이 패턴과 일치해야 함.
+        match1 = re.match(r'^(\d{2})(id)[-_]?(\d{3,4})$', temp_keyword)
+        if match1:
+            series, _, number = match1.groups()
+            # DMM 검색 형식('id' + 시리즈 + 번호)으로 재조합. 번호는 패딩 불필요.
+            keyword_for_url = f"id{series}{number}"
+            logger.debug(f"DMM Keyword Gen (ID Special Case 1): Optimized '{temp_keyword}' -> '{keyword_for_url}'")
             return keyword_for_url, "", ""
 
-        # --- 3. ID 계열이 아닌 일반 품번 처리 (DMM 검색 형식으로 변환) ---
+        # Case 2: '55id16045' 같은 DMM CID 형식. 문자열 전체가 이 패턴과 일치해야 함.
+        match2 = re.match(r'^\d{2}id\d{5}$', temp_keyword)
+        if match2:
+            # 이 형식은 이미 DMM 검색에 최적화되어 있으므로, 그대로 사용.
+            keyword_for_url = temp_keyword
+            logger.debug(f"DMM Keyword Gen (ID Special Case 2): Using '{temp_keyword}' as is.")
+            return keyword_for_url, "", ""
+
+        # --- ID 레이블이 아닌 경우, 기존의 일반 검색어 생성 로직 수행 ---
+
+        # 전역 파서를 사용하여 일반적인 품번을 먼저 정규화 시도
+        parsed_ui_code, _label_for_score, _num_raw_for_score = cls._parse_ui_code(temp_keyword, 'unknown')
+
+        # 파싱 결과가 있고, 하이픈을 포함하는 '레이블-숫자' 형태인지 확인
+        if parsed_ui_code and '-' in parsed_ui_code:
+            parts = parsed_ui_code.split('-')
+            label_part = parts[0]
+            num_part = parts[1]
+
+            # cpz69-h005 와 같은 케이스 처리
+            if num_part.isdigit():
+                padding_length = 3 if is_retry else 5
+                keyword_for_url = label_part.lower() + num_part.zfill(padding_length)
+            else:
+                keyword_for_url = label_part.lower() + num_part.lower()
+
+            logger.debug(f"DMM Keyword Gen: Parsed '{temp_keyword}' -> '{parsed_ui_code}' -> Search keyword '{keyword_for_url}'")
+            # _parse_ui_code가 재시도를 위한 정보는 제공하지 않으므로, 빈 값을 반환
+            return keyword_for_url, "", ""
+
+        # --- _parse_ui_code가 유효한 결과를 내지 못했을 경우, 기존의 일반 로직을 폴백으로 사용 ---
+
+        logger.debug(f"DMM Keyword Gen: Parsing failed for '{temp_keyword}', using generic fallback.")
+
+        label_part_for_retry = ""
+        num_part_for_retry = ""
+
         temp_parts_for_url_gen = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
         temp_parts_for_url_gen = [part for part in temp_parts_for_url_gen if part]
 
-        padding_length = 3 if is_retry else 5 # 재시도 여부에 따라 패딩 길이 결정
+        padding_length = 3 if is_retry else 5
 
         if len(temp_parts_for_url_gen) == 2:
-            # 재시도에 사용하기 위해 레이블과 숫자 부분을 변수에 저장
             label_part_for_retry = temp_parts_for_url_gen[0]
             num_part_for_retry = temp_parts_for_url_gen[1]
-            keyword_for_url = label_part_for_retry + num_part_for_retry.zfill(padding_length)
+
+            if num_part_for_retry.isdigit():
+                keyword_for_url = label_part_for_retry + num_part_for_retry.zfill(padding_length)
+            else:
+                keyword_for_url = label_part_for_retry + num_part_for_retry
+
         elif len(temp_parts_for_url_gen) == 1:
             single_part = temp_parts_for_url_gen[0]
             match_label_num = re.match(r'^([a-z0-9]+?)(\d+)$', single_part, re.I)
             if match_label_num:
-                # 재시도에 사용하기 위해 레이블과 숫자 부분을 변수에 저장
                 label_part_for_retry = match_label_num.group(1)
                 num_part_for_retry = match_label_num.group(2)
                 keyword_for_url = label_part_for_retry + num_part_for_retry.zfill(padding_length)
             else: 
                 keyword_for_url = single_part
-        else: # 0개 또는 3개 이상 파트 (일반적이지 않음)
-            keyword_for_url = "".join(temp_parts_for_url_gen) # 일단 모두 합침
+
+        else:
+            keyword_for_url = "".join(temp_parts_for_url_gen)
 
         return keyword_for_url, label_part_for_retry, num_part_for_retry
 
@@ -1301,6 +1179,24 @@ class SiteDmm(SiteAvBase):
         cls.config['age_verified'] = False
         return cls.config['age_verified']
 
+
+    # --- 삭제할 코드 ---
+    @classmethod
+    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
+        if not ui_code_str or not isinstance(ui_code_str, str):
+            return ""
+
+        # ui_code는 '레이블-숫자' 형식으로 정규화되어 있다고 가정한다.
+        # 따라서, 하이픈(-) 앞부분을 잘라내는 것만으로 충분하다.
+        if '-' in ui_code_str:
+            return ui_code_str.split('-', 1)[0].upper()
+
+        # 만약 _parse_ui_code가 어떤 이유로든 하이픈 없는 코드를 반환했다면,
+        # 전체를 레이블로 간주하는 것이 가장 안전한 폴백이다.
+        # 예: 'hage001' -> 'HAGE001' (기존 로직은 'HAGE'만 반환했음)
+        return ui_code_str.upper()
+
+
     # endregion UTIL
     ################################################
 
@@ -1312,13 +1208,6 @@ class SiteDmm(SiteAvBase):
     def set_config(cls, db):
         super().set_config(db)
         cls.config.update({
-            "dmm_parser_rules": {
-                "type0_rules": db.get_list(f"jav_censored_{cls.site_name}_parser_type0_rules", "\n"),
-                "type1_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type1_labels", ","),
-                "type2_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type2_labels", ","),
-                "type3_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type3_labels", ","),
-                "type4_labels": db.get_list(f"jav_censored_{cls.site_name}_parser_type4_labels", ","),
-            },
             # 포스터 예외처리1. 설정된 레이블은 저화질 썸네일을 포스터로 사용
             "ps_force_labels_list": set(db.get_list(f"jav_censored_{cls.site_name}_small_image_to_poster", ",")),
             # 포스터 예외처리2. 가로 이미지 크롭이 필요한 경우 그 위치를 수동 지정
@@ -1330,6 +1219,12 @@ class SiteDmm(SiteAvBase):
             "age_verified": False,  # 나이 인증 여부
         })
 
+        cls.config['ps_force_labels_set'] = {
+            lbl.strip().upper() for lbl in cls.config.get('ps_force_labels_list', []) if lbl.strip()
+        }
+        cls.config['priority_labels_set'] = {
+            lbl.strip().upper() for lbl in cls.config.get('priority_labels', []) if lbl.strip()
+        }
 
     # endregion SiteAvBase 메서드 오버라이드
     ################################################

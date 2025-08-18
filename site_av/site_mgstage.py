@@ -10,7 +10,6 @@ from .site_av_base import SiteAvBase
 
 SITE_BASE_URL = "https://www.mgstage.com"
 PTN_SEARCH_PID = re.compile(r"\/product_detail\/(?P<code>.*?)\/")
-PTN_SEARCH_REAL_NO = re.compile(r"^(?P<label_part>\d*[a-zA-Z]+[0-9]*)\-(?P<no>\d+)$")
 PTN_TEXT_SUB = [
     re.compile(r"【(?<=【)(?:MGSだけのおまけ映像付き|期間限定).*(?=】)】(:?\s?\+\d+分\s?)?"),
     re.compile(r"※通常版\+\d+分の特典映像付のスペシャルバージョン！"),
@@ -36,28 +35,25 @@ class SiteMgstage(SiteAvBase):
     def search(cls, keyword, do_trans, manual):
         ret = {}
         try:
-            temp_keyword = keyword.strip().upper()
-            temp_keyword = re.sub(r'[_]?CD\d+$', '', temp_keyword)
-            temp_keyword = temp_keyword.strip(' _-')
-            
-            data = []
-            tmps = temp_keyword.split('-')
-            
-            search_keyword_for_mgs = temp_keyword
-            if len(tmps) == 2:
-                input_label, code_part = tmps
+            # 1. 입력된 키워드를 전역 파서로 우선 정규화
+            normalized_ui_code, _, _ = cls._parse_ui_code(keyword)
+
+            search_keyword_for_mgs = normalized_ui_code # 기본 검색어는 정규화된 품번
+
+            # 2. MGS_LABEL_MAP을 사용한 레이블 변환 시도
+            if '-' in normalized_ui_code:
+                input_label, code_part = normalized_ui_code.split('-', 1)
                 
-                # MGS_LABEL_MAP에서 변환할 레이블 목록을 가져옴
-                mgs_labels_to_try = MGS_LABEL_MAP.get(input_label)
+                mgs_labels_to_try = MGS_LABEL_MAP.get(input_label.upper())
                 if mgs_labels_to_try:
-                    mgs_label = mgs_labels_to_try[0] # 첫 번째 것을 대표로 사용
+                    mgs_label = mgs_labels_to_try[0]
                     if codelen := MGS_CODE_LEN.get(mgs_label):
                         try: code_part = str(int(code_part)).zfill(codelen)
                         except ValueError: pass
                     search_keyword_for_mgs = f"{mgs_label}-{code_part}"
                     logger.debug(f"MGStage Search: Mapping '{keyword}' to '{search_keyword_for_mgs}' for search.")
 
-            data = cls.__search(search_keyword_for_mgs, do_trans, manual)
+            data = cls.__search(search_keyword_for_mgs, normalized_ui_code, do_trans, manual)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"; ret["data"] = str(exception)
@@ -67,11 +63,7 @@ class SiteMgstage(SiteAvBase):
 
 
     @classmethod
-    def __search(cls, keyword, do_trans, manual):
-
-        temp_keyword = keyword.strip().lower()
-        temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
-        keyword_for_url = temp_keyword.strip(' _-')
+    def __search(cls, keyword_for_url, original_ui_code, do_trans, manual):
 
         url = f"{SITE_BASE_URL}/search/cSearch.php?search_word={keyword_for_url}&x=0&y=0&type=top"
         logger.debug(f"MGStage Search URL: {url}")
@@ -80,23 +72,57 @@ class SiteMgstage(SiteAvBase):
         if tree is None:
             logger.warning(f"MGStage Search ({cls.module_char}): Failed to get tree for URL: {url}")
             return []
+
         lists = tree.xpath('//div[@class="search_list"]/div/ul/li')
-        # logger.debug("mgs search kwd=%s len=%d", keyword_for_url, len(lists))
 
         ret = []
+        # 비교 기준이 될 검색 키워드를 미리 파싱
+        kw_ui_code, _, _ = cls._parse_ui_code(original_ui_code)
+
         for node in lists[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
+
+                # 1. 링크에서 PID(제품 ID) 추출
                 tag = node.xpath(".//a")[0]
                 href = tag.attrib["href"].lower()
                 match = PTN_SEARCH_PID.search(href)
                 if not match: 
                     continue
+
+                pid_from_link = match.group("code").upper()
+
+                # 2. 전역 파서로 검색어와 결과 품번을 모두 정규화
+                kw_ui_code, kw_label_part, kw_num_part = cls._parse_ui_code(original_ui_code)
+                item_ui_code, item_label_part, item_num_part = cls._parse_ui_code(pid_from_link)
                 
-                item.code = cls.module_char + cls.site_char + match.group("code").upper()
-                if any(exist_item["code"] == item.code for exist_item in ret):
+                item.ui_code = item_ui_code
+                item.code = cls.module_char + cls.site_char + pid_from_link
+
+                # 3. 정규화된 품번으로 점수 계산 (5자리 패딩으로 통일)
+                kw_std_code = kw_label_part.lower() + kw_num_part.zfill(5) if kw_num_part.isdigit() else kw_label_part.lower() + kw_num_part
+                item_std_code = item_label_part.lower() + item_num_part.zfill(5) if item_num_part.isdigit() else item_label_part.lower() + item_num_part
+
+                if kw_std_code.lower() == item_std_code.lower():
+                    item.score = 100
+                elif kw_ui_code.lower().replace('-', '') == item.ui_code.lower().replace('-', ''):
+                    item.score = 95
+                else:
+                    # 검색어의 레이블/숫자와 결과의 레이블/숫자를 비교하여 부분 점수 부여
+                    kw_label, kw_num = kw_ui_code.split('-', 1) if '-' in kw_ui_code else (kw_ui_code, "")
+                    item_label, item_num = item.ui_code.split('-', 1) if '-' in item.ui_code else (item.ui_code, "")
+                    if kw_label.lower() == item_label.lower() and kw_num in item_num:
+                        item.score = 80
+                    else:
+                        item.score = 60
+                if not item.score:
+                    item.score = 20
+
+                # 4. 중복 아이템 체크 (ui_code 기준)
+                if any(exist_item["ui_code"] == item.ui_code for exist_item in ret):
                     continue
 
+                # 5. 나머지 정보 파싱 (이미지, 제목 등)
                 tag_img = node.xpath(".//img")[0]
                 item.image_url = tag_img.attrib["src"]
                 if item.code and item.image_url:
@@ -106,55 +132,42 @@ class SiteMgstage(SiteAvBase):
                 title = tag_title.text_content()
                 for ptn in PTN_TEXT_SUB:
                     title = ptn.sub("", title)
-                item.title = item.title_ko = title.strip()
+                item.title = title.strip()
 
+                # 6. manual 모드 및 번역 처리
                 if manual:
-                    try:
-                        if cls.config['use_proxy']:
-                            item.image_url = cls.make_image_url(item.image_url)
-                    except Exception as e_img: 
-                        logger.error(f"MGSTAGE Search: ImgProcErr (manual):{e_img}")
+                    if cls.config.get('use_proxy') and item.image_url:
+                        item.image_url = cls.make_image_url(item.image_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = cls.trans(item.title)
 
-                match_ui_code = PTN_SEARCH_REAL_NO.search(item.code[2:])
-                if match_ui_code:
-                    item.ui_code = match_ui_code.group("label_part").upper() + "-" + match_ui_code.group("no")
-                else:
-                    item.ui_code = item.code[2:]
-                
-                normalized_keyword = keyword_for_url.upper().replace('-', '')
-                normalized_ui_code = item.ui_code.upper().replace('-', '')
-
-                if normalized_keyword == normalized_ui_code:
-                    item.score = 100
-                elif normalized_keyword in normalized_ui_code:
-                    item.score = 90
-                else:
-                    item.score = 70 - (len(ret) * 10)
-                if item.score < 0: item.score = 0
-
+                # 7. 최종 딕셔너리 생성 및 추가
                 item_dict = item.as_dict()
                 item_dict['is_priority_label_site'] = False
                 item_dict['site_key'] = cls.site_name
 
-                if item_dict.get('ui_code') and cls.config['priority_labels']:
-                    label_to_check = cls.get_label_from_ui_code(item_dict['ui_code'])
-                    if label_to_check and label_to_check in cls.config['priority_labels']:
+                if item_dict.get('ui_code') and cls.config.get('priority_labels_set'):
+                    label_to_check = item_dict['ui_code'].split('-', 1)[0]
+                    if label_to_check in cls.config['priority_labels_set']:
                         item_dict['is_priority_label_site'] = True
+
                 ret.append(item_dict)
+
             except Exception as e:
                 logger.exception(f"개별 검색 결과 처리 중 예외: {e}")
 
         sorted_result = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
+
         if sorted_result:
             log_count = min(len(sorted_result), 5)
             logger.debug(f"MGS Search: Top {log_count} results for '{keyword_for_url}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
                 logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
+
         return sorted_result
-    
+
+
     # endregion SEARCH
     ################################################
     
@@ -163,11 +176,11 @@ class SiteMgstage(SiteAvBase):
     # region INFO
     
     @classmethod
-    def info(cls, code, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
             if entity_result_val_final: 
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -182,7 +195,7 @@ class SiteMgstage(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False):
         cached_data = cls._ps_url_cache.get(code, {}) 
         ps_url_from_search_cache = cached_data.get('ps')
 
@@ -219,24 +232,19 @@ class SiteMgstage(SiteAvBase):
                 value_node_instance = value_node_outer[0]
 
                 if "品番" in key_text:
-                    official_code = value_text_content.strip().upper()
-                    pure_label = cls.get_label_from_ui_code(official_code)
-                    if pure_label in cls.config['maintain_series_number_labels']:
-                        final_ui_code = official_code
-                    else:
-                        match = PTN_SEARCH_REAL_NO.search(official_code)
-                        if match:
-                            final_ui_code = f"{pure_label}-{match.group('no')}"
-                        else:
-                            final_ui_code = official_code
-                    
-                    entity.ui_code = final_ui_code
-                    entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
-                    label_for_tag = official_code.split('-', 1)[0]
+                    official_code = value_text_content.strip()
+
+                    # --- 전역 파서를 사용하여 최종 ui_code 결정 ---
+                    final_ui_code, _, _ = cls._parse_ui_code(official_code)
+                    entity.ui_code = final_ui_code.upper()
+
+                    entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+
+                    label_for_tag = entity.ui_code.split('-', 1)[0]
                     if entity.tag is None: entity.tag = []
                     if label_for_tag and label_for_tag not in entity.tag:
                         entity.tag.append(label_for_tag)
-                    
+
                 elif "商品発売日" in key_text:
                     if "----" not in value_text_content: temp_shohin_hatsubai = value_text_content.replace("/", "-")
                 elif "配信開始日" in key_text:
@@ -275,7 +283,7 @@ class SiteMgstage(SiteAvBase):
             if entity.premiered:
                 try: entity.year = int(entity.premiered[:4])
                 except (ValueError, IndexError): pass
-            
+
             rating_nodes = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
             if rating_nodes:
                 rating_match = PTN_RATING.search(rating_nodes[0])
@@ -338,11 +346,11 @@ class SiteMgstage(SiteAvBase):
             pass
 
         if entity.originaltitle:
-            try: 
+            try:
                 entity = cls.shiroutoname_info(entity)
-            except Exception as e_shirouto_proc: 
-                logger.exception(f"MGStage (Ama): Shiroutoname error: {e_shirouto_proc}")
-            
+            except Exception as e_shirouto:
+                logger.exception(f"MGStage (Ama): Shiroutoname error: {e_shirouto}")
+
         logger.info(f"MGStage ({cls.module_char}): __info finished for {code}. UI Code: {entity.ui_code}")
         return entity
 
@@ -383,6 +391,7 @@ class SiteMgstage(SiteAvBase):
     ################################################
     # region 전용 UTIL
 
+    # --- 삭제할 코드 ---
     @classmethod
     def get_label_from_ui_code(cls, ui_code_str: str) -> str:
         if not ui_code_str or not isinstance(ui_code_str, str): return ""
@@ -409,17 +418,12 @@ class SiteMgstage(SiteAvBase):
     def set_config(cls, db):
         super().set_config(db)
         cls.config.update({
-            # 포스터 예외처리1. 설정된 레이블은 저화질 썸네일을 포스터로 사용
             "ps_force_labels_list": db.get_list(f"jav_censored_{cls.site_name}_small_image_to_poster", ","),
-
-            # 포스터 예외처리2. 가로 이미지 크롭이 필요한 경우 그 위치를 수동 지정
             "crop_mode": db.get_list(f"jav_censored_{cls.site_name}_crop_mode", ","),
-            # 지정 레이블 최우선 검색
             "priority_labels": db.get_list(f"jav_censored_{cls.site_name}_priority_search_labels", ","),
-            "maintain_series_number_labels": db.get_list(f"jav_censored_{cls.site_name}_maintain_series_number_labels", ","),
         })
-        cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
-        cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config['ps_force_labels_list'] if lbl.strip()}
+        cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('ps_force_labels_list', []) if lbl.strip()}
+        cls.config['priority_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('priority_labels', []) if lbl.strip()}
 
     # endregion SiteAvBase 메서드 오버라이드
     ################################################

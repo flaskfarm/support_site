@@ -53,51 +53,45 @@ class SiteJavbus(SiteAvBase):
             return []
 
         ret = []
+        kw_ui_code, kw_label_part, kw_num_part = cls._parse_ui_code(temp_keyword)
+
         for node in tree.xpath('//a[@class="movie-box"]')[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
                 item.image_url = cls.__fix_url(node.xpath(".//img/@src")[0])
                 tag = node.xpath(".//date")
                 item.ui_code = tag[0].text_content().strip()
-                
+
                 code_from_url = node.attrib["href"].split("/")[-1]
                 item.code = cls.module_char + cls.site_char + code_from_url
 
                 item.desc = "발매일: " + tag[1].text_content().strip()
                 item.year = int(item.desc[-10:-6])
                 item.title = node.xpath(".//span/text()")[0].strip()
-                
-                # --- 점수 계산 로직 ---
-                # 1. 키워드 표준화
-                kw_match = re.match(r'^(\d*)?([a-zA-Z]+)-?(\d+)', temp_keyword)
-                kw_std_code = ""
-                kw_core_code = ""
-                if kw_match:
-                    kw_prefix, kw_label, kw_num = kw_match.groups()
-                    kw_prefix = kw_prefix if kw_prefix else ""
-                    kw_std_code = f"{kw_prefix}{kw_label}{kw_num.zfill(5)}".lower()
-                    kw_core_code = f"{kw_label}{kw_num.zfill(5)}".lower()
-                
-                # 2. 아이템 코드 표준화
-                item_match = re.match(r'^(\d*)?([a-zA-Z]+)-?(\d+)', item.ui_code.lower())
-                item_std_code = ""
-                item_core_code = ""
-                if item_match:
-                    item_prefix, item_label, item_num = item_match.groups()
-                    item_prefix = item_prefix if item_prefix else ""
-                    item_std_code = f"{item_prefix}{item_label}{item_num.zfill(5)}".lower()
-                    item_core_code = f"{item_label}{item_num.zfill(5)}".lower()
 
-                # 3. 점수 부여
-                if kw_std_code and item_std_code:
-                    if kw_std_code == item_std_code:
-                        item.score = 100 # 시리즈 넘버까지 완벽 일치 (또는 둘 다 없을 때)
-                    elif kw_core_code == item_core_code:
-                        item.score = 80 # 시리즈 넘버는 다르지만, 핵심은 일치
+                # --- ui_code 파싱 및 점수 계산 로직 ---
+                raw_ui_code_from_page = node.xpath(".//date")[0].text_content().strip()
+                item_ui_code, item_label_part, item_num_part = cls._parse_ui_code(raw_ui_code_from_page)
+                item.ui_code = item_ui_code
+
+                # --- 비교용 표준 코드 생성 (5자리 패딩으로 통일) ---
+                kw_std_code = kw_label_part + kw_num_part.zfill(5) if kw_num_part.isdigit() else kw_label_part + kw_num_part
+                item_std_code = item_label_part + item_num_part.zfill(5) if item_num_part.isdigit() else item_label_part + item_num_part
+
+                if kw_std_code.lower() == item_std_code.lower():
+                    item.score = 100
+                elif kw_ui_code.lower() == item.ui_code.lower():
+                    item.score = 95 # 하이픈 유무 차이
+                else:
+                    # 부분 일치 점수
+                    kw_parts = set(kw_ui_code.lower().replace('-', ' ').split())
+                    item_parts = set(item.ui_code.lower().replace('-', ' ').split())
+                    if kw_parts.issubset(item_parts):
+                        item.score = 80
                     else:
                         item.score = 60
-                else:
-                    item.score = 20 # 표준화 실패 시
+                if not item.score:
+                    item.score = 20
 
                 if manual:
                     if cls.config['use_proxy']:
@@ -135,11 +129,11 @@ class SiteJavbus(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
             if entity_result_val_final:
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -154,7 +148,7 @@ class SiteJavbus(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False):
         try:
             # === 1. 페이지 로딩 및 기본 Entity 생성 ===
             original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
@@ -171,36 +165,22 @@ class SiteJavbus(SiteAvBase):
 
             # === 2. 메타데이터 파싱 ===
             info_node = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")[0]
-            
-            base_ui_code = original_code_for_url.split('_')[0].upper()
+
+            # 페이지에서 "識別碼" (식별 코드)를 가져옴
             ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/span[not(@class='header')]//text()")
             if not ui_code_val_nodes:
                 ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/text()[normalize-space()]")
             raw_ui_code_from_page = "".join(ui_code_val_nodes).strip()
-            if not base_ui_code and raw_ui_code_from_page:
-                base_ui_code = raw_ui_code_from_page.upper()
 
-            final_ui_code = base_ui_code
-            keyword = None
-            if keyword and base_ui_code and cls.config['maintain_series_number_labels']:
-                kw_match = re.match(r'^(\d+)([a-zA-Z].*)', keyword.upper())
-                if kw_match:
-                    kw_prefix, kw_core = kw_match.groups()
-                    kw_core = kw_core.replace('-', '')
-                    jb_match = re.match(r'^(\d*)?([A-Z]+-?\d+)', base_ui_code)
-                    if jb_match:
-                        jb_core = jb_match.group(2).replace('-', '')
-                        jb_label_match = re.match(r'(\D+)', jb_core)
-                        if jb_label_match and jb_label_match.group(1) in cls.config['maintain_series_number_labels']:
-                            final_ui_code = f"{kw_prefix}{base_ui_code}"
-            
+            # 전역 파서를 사용하여 최종 ui_code 생성
+            final_ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+
             entity.ui_code = final_ui_code
             entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
-            ui_code_for_image = entity.ui_code.lower()
 
             h3_text = tree.xpath("normalize-space(//div[@class='container']/h3/text())")
-            if h3_text.upper().startswith(base_ui_code):
-                entity.tagline = cls.trans(h3_text[len(base_ui_code):].strip())
+            if h3_text.upper().startswith(entity.ui_code):
+                entity.tagline = cls.trans(h3_text[len(entity.ui_code):].strip())
             else:
                 entity.tagline = cls.trans(h3_text)
 
@@ -218,7 +198,7 @@ class SiteJavbus(SiteAvBase):
                 if key in ["類別", "演員"]: continue
                 value = "".join(header_span[0].xpath("./following-sibling::node()/text()")).strip()
                 if not value or value == "----": continue
-                
+
                 if key == "發行日期":
                     if value != "0000-00-00": entity.premiered, entity.year = value, int(value[:4])
                 elif key == "長度":
@@ -288,15 +268,11 @@ class SiteJavbus(SiteAvBase):
                 logger.exception(f"JavBus: Error during image processing delegation for {code}: {e}")
 
             # === 4. Shiroutoname 보정 처리 ===
-            if entity.ui_code:
-                try: 
+            if entity.originaltitle:
+                try:
                     entity = cls.shiroutoname_info(entity)
-                    if entity.ui_code.upper() != original_code_for_url.split('_')[0].upper():
-                        new_code_value = entity.ui_code.lower()
-                        if '_' in original_code_for_url:
-                            new_code_value += '_' + original_code_for_url.split('_')[1]
-                        entity.code = cls.module_char + cls.site_char + new_code_value
-                except Exception as e_shirouto: logger.exception(f"JavBus: Shiroutoname error: {e_shirouto}")
+                except Exception as e_shirouto:
+                    logger.exception(f"JavBus: Shiroutoname error: {e_shirouto}")
 
             logger.info(f"JavBus: __info finished for {code}. UI Code: {entity.ui_code}")
             return entity
@@ -370,12 +346,12 @@ class SiteJavbus(SiteAvBase):
     def set_config(cls, db):
         super().set_config(db)
         cls.config.update({
-            "ps_force_labels_list": set(db.get_list(f"jav_censored_{cls.site_name}_small_image_to_poster", ",")),
+            "ps_force_labels_list": db.get_list(f"jav_censored_{cls.site_name}_small_image_to_poster", ","),
             "crop_mode": db.get_list(f"jav_censored_{cls.site_name}_crop_mode", ","),
-            "maintain_series_number_labels": db.get_list(f"jav_censored_{cls.site_name}_maintain_series_number_labels", ","),
+            "priority_labels": db.get_list(f"jav_censored_{cls.site_name}_priority_search_labels", ","),
         })
-        cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
-        cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config['ps_force_labels_list'] if lbl.strip()}
+        cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('ps_force_labels_list', []) if lbl.strip()}
+        cls.config['priority_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('priority_labels', []) if lbl.strip()}
 
 
     @classmethod
