@@ -495,6 +495,10 @@ class SiteAvBase:
             # 사이트별 설정 (각 모듈 타입에 맞는 값을 사용)
             "use_proxy": db.get_bool(use_proxy_key),
             "proxy_url": db.get(proxy_url_key),
+
+            "special_parser_rules": {
+                "custom_rules": db.get_list("jav_censored_special_parser_custom_rules", "\n"),
+            }
         })
 
 
@@ -1565,6 +1569,101 @@ class SiteAvBase:
 
     ################################################
     # region 유틸
+
+
+    @classmethod
+    def _parse_ui_code(cls, cid_part_raw: str, content_type: str = 'unknown') -> tuple:
+        if not cls.config or 'special_parser_rules' not in cls.config:
+            logger.warning("UI Code Parser rules not loaded in config. Parsing may be incorrect.")
+            label = cid_part_raw.upper().split('-')[0] if '-' in cid_part_raw else cid_part_raw.upper()
+            return cid_part_raw.upper(), cid_part_raw.lower(), "", label, label[0] if label else ""
+
+        # CID 전처리
+        processed_cid = cid_part_raw.lower().strip()
+        processed_cid = re.sub(r'^[hn]_\d', '', processed_cid)
+        suffix_strip_match = re.match(r'^(.*\d+)([a-z]+)$', processed_cid, re.I)
+        if suffix_strip_match:
+            processed_cid = suffix_strip_match.group(1)
+
+        # 파싱 변수 초기화
+        final_label_part, final_num_part, rule_applied = "", "", False
+        parser_rules = cls.config['special_parser_rules']
+
+        # --- 고급 규칙 ---
+        for line in parser_rules['custom_rules']:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            parts = line.split('=>')
+            if len(parts) != 2:
+                logger.warning(f"Invalid advanced rule format (expected 'pattern => template'): {line}")
+                continue
+
+            pattern, template = parts[0].strip(), parts[1].strip()
+
+            try:
+                match = re.match(pattern, processed_cid, re.I)
+                if match:
+                    template_parts = template.split('|')
+                    if len(template_parts) != 2:
+                        logger.warning(f"Invalid template format (expected 'label_template|number_template'): {template}")
+                        continue
+
+                    label_template, num_template = template_parts
+
+                    groups = match.groups()
+                    final_label_part = label_template.format(*groups)
+                    final_num_part = num_template.format(*groups)
+
+                    rule_applied = True
+                    logger.debug(f"UI Code Parser: Matched Advanced Rule. Pattern: '{pattern}', Template: '{template}' -> Label: '{final_label_part}', Num: '{final_num_part}'")
+                    break
+            except (re.error, IndexError) as e:
+                logger.error(f"Error applying advanced rule: '{line}' - {e}")
+
+        # --- Custom Rule이 매칭되지 않은 경우, 일반 분리 로직 실행 ---
+        if not final_label_part and not final_num_part: # rule_applied 대신 명시적 확인
+            # 1. 레이블과 숫자를 최대한 분리
+            clear_pattern_match = re.match(r'^([a-zA-Z\d]*[a-zA-Z])(\d+)$', processed_cid)
+            if clear_pattern_match:
+                remaining_for_label, final_num_part = clear_pattern_match.groups()
+            else:
+                remaining_for_label, final_num_part = processed_cid, ""
+
+            # 2. 분리된 레이블 부분에서 숫자 접두사를 제거
+            alpha_part_match = re.search(r'([a-zA-Z].*)', remaining_for_label)
+            if alpha_part_match:
+                final_label_part = alpha_part_match.group(1)
+            else:
+                # 숫자만 있는 레이블 파트 등 예외 케이스 처리
+                final_label_part = remaining_for_label
+
+        # === 최종 값 조합 ===
+        label_ui_part = final_label_part.upper().strip('-')
+
+        # --- 숫자 부분 처리 분기 ---
+        if final_num_part.isdigit():
+            # 숫자만 있는 경우: lstrip과 zfill로 3자리 패딩 적용
+            num_stripped = final_num_part.lstrip('0') or "0"
+            num_ui_part = num_stripped.zfill(3)
+        else:
+            # 문자가 섞인 경우: 원본 그대로 사용 (대소문자만 정리)
+            num_ui_part = final_num_part.upper().strip('-')
+
+        # 최종 UI 코드 조합
+        if label_ui_part and num_ui_part:
+            ui_code_final = f"{label_ui_part}-{num_ui_part}"
+        else:
+            ui_code_final = label_ui_part or cid_part_raw.upper()
+        
+        # 반환값 준비
+        score_label_part = final_label_part.lower()
+        score_num_raw_part = final_num_part # 점수 계산용은 항상 원본 숫자 파트 사용
+
+        logger.debug(f"UI Code Parser: Parsed '{cid_part_raw}' -> Final UI Code: '{ui_code_final}'")
+        return ui_code_final, score_label_part, score_num_raw_part
+
 
     @classmethod
     def shiroutoname_info(cls, entity):

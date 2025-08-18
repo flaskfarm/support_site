@@ -6,7 +6,6 @@ from copy import deepcopy
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from ..setup import P, logger
-from .site_dmm import SiteDmm
 from .site_av_base import SiteAvBase
 from ..constants import AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 
@@ -40,16 +39,13 @@ class SiteJav321(SiteAvBase):
     @classmethod
     def __search(cls, keyword, do_trans, manual):
         original_keyword = keyword
-        temp_keyword = keyword.strip().lower()
-        temp_keyword = re.sub(r'[-_]?cd\d*$', '', temp_keyword, flags=re.I)
-        keyword_for_url = temp_keyword.strip('-_ ')
+        # 전역 파서를 사용하여 검색 키워드를 우선 정규화
+        kw_ui_code, _, _ = cls._parse_ui_code(original_keyword)
+        keyword_for_url = kw_ui_code
 
-        logger.debug(f"Jav321 Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
-        
-        res = cls.get_response(
-            f"{SITE_BASE_URL}/search",
-            post_data={"sn": keyword_for_url}
-        )
+        logger.debug(f"Jav321 Search: original='{original_keyword}', parsed_kw='{kw_ui_code}', url_kw='{keyword_for_url}'")
+
+        res = cls.get_response(f"{SITE_BASE_URL}/search", post_data={"sn": keyword_for_url})
 
         if res is None:
             logger.error(f"Jav321 Search: Failed to get response for keyword '{keyword_for_url}'.")
@@ -58,37 +54,26 @@ class SiteJav321(SiteAvBase):
         if not res.history or not res.url.startswith(SITE_BASE_URL + "/video/"):
             logger.debug(f"Jav321 Search: No direct match or multiple results for keyword '{keyword_for_url}'. Final URL: {res.url}")
             return []
-        
+
         ret = []
         try:
             item = EntityAVSearch(cls.site_name)
-            
+
             code_from_url_path = res.url.split("/")[-1]
             item.code = cls.module_char + cls.site_char + code_from_url_path
 
-            # --- 점수 계산 로직 ---
-            # 1. 검색어와 아이템 코드를 각각 파싱
-            _, search_label_part, search_num_part = cls._parse_jav321_ui_code(original_keyword, cls.config['maintain_series_number_labels'])
-            
-            item.ui_code, item_label_part, item_num_part = cls._parse_jav321_ui_code(code_from_url_path, cls.config['maintain_series_number_labels'])
+            # --- 점수 계산 로직 (DMM 스타일 표준화) ---
+            kw_ui_code, kw_label_part, kw_num_part = cls._parse_ui_code(original_keyword)
+            item_ui_code, item_label_part, item_num_part = cls._parse_ui_code(code_from_url_path)
+            item.ui_code = item_ui_code
 
-            # 2. 비교용 표준 품번 생성 (숫자 부분을 5자리로 패딩)
-            search_full_code = f"{search_label_part}{search_num_part.zfill(5)}"
-            item_full_code = f"{item_label_part}{item_num_part.zfill(5)}"
-            
-            search_pure_alpha_match = re.search(r'[a-zA-Z]+', search_label_part)
-            item_pure_alpha_match = re.search(r'[a-zA-Z]+', item_label_part)
-            search_pure_code = ""
-            item_pure_code = ""
-            if search_pure_alpha_match:
-                search_pure_code = f"{search_pure_alpha_match.group(0).lower()}{search_num_part.zfill(5)}"
-            if item_pure_alpha_match:
-                item_pure_code = f"{item_pure_alpha_match.group(0).lower()}{item_num_part.zfill(5)}"
-            
+            kw_std_code = kw_label_part + kw_num_part.zfill(5) if kw_num_part.isdigit() else kw_label_part + kw_num_part
+            item_std_code = item_label_part + item_num_part.zfill(5) if item_num_part.isdigit() else item_label_part + item_num_part
+
             # 3. 점수 부여
-            if search_full_code == item_full_code:
+            if kw_std_code.lower() == item_std_code.lower():
                 item.score = 100
-            elif search_pure_code and item_pure_code and search_pure_code == item_pure_code:
+            elif kw_ui_code.lower() == item_ui_code.lower():
                 item.score = 80
             else:
                 item.score = 60
@@ -108,9 +93,9 @@ class SiteJav321(SiteAvBase):
                 elif onerror_attr: 
                     parsed_onerror_url = cls._process_jav321_url_from_attribute(onerror_attr)
                     if parsed_onerror_url: raw_ps_url = parsed_onerror_url
-            
+
             item.image_url = cls._process_jav321_url_from_attribute(raw_ps_url) if raw_ps_url else ""
-            
+
             date_tags = tree.xpath(f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()')
             date_str = date_tags[0].lstrip(":").strip() if date_tags and date_tags[0].lstrip(":").strip() else "1900-01-01"
             item.desc = f"발매일: {date_str}"
@@ -119,7 +104,7 @@ class SiteJav321(SiteAvBase):
 
             title_tags = tree.xpath(f"{base_xpath}/div[1]/h3/text()")
             item.title = title_tags[0].strip() if title_tags else "제목 없음"
-            
+
             if manual:
                 if cls.config['use_proxy']:
                     item.image_url = cls.make_image_url(item.image_url)
@@ -127,17 +112,26 @@ class SiteJav321(SiteAvBase):
             else:
                 item.title_ko = cls.trans(item.title)
 
-            if item.code:
-                if item.image_url: 
-                    cls._ps_url_cache[item.code] = item.image_url
-                item_dict = item.as_dict()
-                ret.append(item_dict)
+            item_dict = item.as_dict()
+
+            # --- 우선순위 레이블 처리 로직 추가 ---
+            item_dict['is_priority_label_site'] = False
+            item_dict['site_key'] = cls.site_name
+
+            if item_dict.get('ui_code') and cls.config.get('priority_labels_set'):
+                label_to_check = item_dict['ui_code'].split('-', 1)[0]
+                if label_to_check in cls.config['priority_labels_set']:
+                    item_dict['is_priority_label_site'] = True
+
+            ret.append(item_dict)
+
         except Exception as e_item_search:
             logger.exception(f"Jav321 Search: Error processing single direct match: {e_item_search}")
 
         if ret:
             logger.debug(f"Score={item.score}, Code={item.code}, UI Code={item.ui_code}, Title='{item.title_ko}'")
         return ret
+
 
     # endregion SEARCH
     ################################################
@@ -147,11 +141,11 @@ class SiteJav321(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
             if entity_result_val_final:
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -166,7 +160,7 @@ class SiteJav321(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False):
         url_pid = code[2:]
         url = f"{SITE_BASE_URL}/video/{url_pid}"
         tree = None
@@ -187,17 +181,13 @@ class SiteJav321(SiteAvBase):
 
         try:
             # === 2. 메타데이터 파싱 ===
-            if '-' in url_pid:
-                entity.ui_code, _, _ = cls._parse_jav321_ui_code(url_pid, maintain_series_labels_set=cls.config['maintain_series_number_labels'])
-            else:
-                entity.ui_code, _, _ = cls._parse_jav321_ui_code(url_pid)
-
-            ui_code_for_image = entity.ui_code.lower()
+            # --- `_parse_ui_code`를 사용하여 ui_code 초기화 ---
+            url_pid = code[2:]
+            entity.ui_code, _, _ = cls._parse_ui_code(url_pid)
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
-            logger.debug(f"Jav321 Info: Initial identifier from URL ('{url_pid}') parsed as: {ui_code_for_image}")
+            logger.debug(f"Jav321 Info: Initial identifier from URL ('{url_pid}') parsed as: {entity.ui_code}")
 
-            identifier_parsed = bool(ui_code_for_image)
-            raw_h3_title_text = ""
+            identifier_parsed = True # URL에서 파싱했으므로 True로 시작
 
             tagline_h3_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[1]/h3')
             if tagline_h3_nodes:
@@ -225,14 +215,14 @@ class SiteJav321(SiteAvBase):
                     if not current_key: continue
 
                     if current_key == "品番":
-                        pid_value_nodes = b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]")
-                        pid_value_raw = pid_value_nodes[0].strip() if pid_value_nodes else ""
-                        if not identifier_parsed and pid_value_raw:
-                            entity.ui_code, _, _ = cls._parse_jav321_ui_code(pid_value_raw, maintain_series_labels_set=cls.config['maintain_series_number_labels'])
-                            ui_code_for_image = entity.ui_code
-                            entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
-                            identifier_parsed = True
-                            logger.warning(f"Jav321 Info: Fallback identifier from '品番': {ui_code_for_image}")
+                        pid_value_raw = (b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0].strip()
+                        if pid_value_raw:
+                            # --- 페이지의 "品番"도 전역 파서로 재확인/교정 ---
+                            parsed_pid, _, _ = cls._parse_ui_code(pid_value_raw)
+                            if entity.ui_code.replace('-', '') != parsed_pid.replace('-', ''):
+                                logger.warning(f"Jav321 Info: UI code mismatch! URL='{entity.ui_code}', Page='{parsed_pid}'. Using value from page.")
+                                entity.ui_code = parsed_pid
+                                entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
                         actor_a_tags = b_tag_key_node.xpath("./following-sibling::a[contains(@href, '/star/')]")
@@ -343,11 +333,13 @@ class SiteJav321(SiteAvBase):
                 pass
 
             if entity.originaltitle:
-                try: entity = cls.shiroutoname_info(entity)
-                except Exception as e_shirouto: logger.exception(f"Jav321: Exception during Shiroutoname call for {entity.originaltitle}: {e_shirouto}")
-            
+                try:
+                    entity = cls.shiroutoname_info(entity)
+                except Exception as e_shirouto:
+                    logger.exception(f"Jav321: Shiroutoname error: {e_shirouto}")
+
             logger.info(f"Jav321: __info finished for {code}. UI Code: {ui_code_for_image}")
-            
+
             return entity
 
         except Exception as e_main:
@@ -481,7 +473,7 @@ class SiteJav321(SiteAvBase):
             #if dmm_parser_rules is None: dmm_parser_rules = {}
 
             # 'videoa'를 우선 시도하고, 실패 시 'dvd'로 폴백
-            ui_code_videoa, label_videoa, num_videoa = SiteDmm._parse_ui_code_from_cid(
+            ui_code_videoa, label_videoa, num_videoa = cls._parse_ui_code(
                 code_str, 'videoa')
             
             # videoa 파싱이 성공적이면 바로 반환
@@ -490,36 +482,9 @@ class SiteJav321(SiteAvBase):
             
             # videoa 파싱 실패 시, dvd 파싱 시도
             logger.debug(f"Jav321 Parser: 'videoa' parsing failed for '{code_str}'. Falling back to 'dvd' type.")
-            ui_code_dvd, label_dvd, num_dvd = SiteDmm._parse_ui_code_from_cid(
+            ui_code_dvd, label_dvd, num_dvd = cls._parse_ui_code(
                 code_str, 'dvd')
             return ui_code_dvd, label_dvd, num_dvd
-
-
-    @classmethod
-    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
-        if not ui_code_str or not isinstance(ui_code_str, str): 
-            return ""
-        ui_code_upper = ui_code_str.upper()
-
-        # ID 계열 레이블 먼저 확인 (예: "16ID-045" -> "16ID")
-        id_match = re.match(r'^(\d*[A-Z]+ID)', ui_code_upper) 
-        if id_match:
-            return id_match.group(1)
-
-        # 일반적인 경우 (하이픈 앞부분)
-        if '-' in ui_code_upper:
-            label_part = ui_code_upper.split('-', 1)[0]
-            # 숫자 접두사 제거 (예: 436ABF -> ABF)
-            pure_alpha_match = re.search(r'([A-Z]+)', label_part)
-            if pure_alpha_match: return pure_alpha_match.group(1)
-            return label_part
-
-        # 하이픈 없는 경우 (예: HAGE001 -> HAGE)
-        match_alpha_prefix = re.match(r'^([A-Z]+)', ui_code_upper)
-        if match_alpha_prefix:
-            return match_alpha_prefix.group(1)
-
-        return ui_code_upper
 
 
     @classmethod
@@ -567,6 +532,34 @@ class SiteJav321(SiteAvBase):
         return processed_url
 
 
+    # --- 삭제할 코드 ---
+    @classmethod
+    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
+        if not ui_code_str or not isinstance(ui_code_str, str): 
+            return ""
+        ui_code_upper = ui_code_str.upper()
+
+        # ID 계열 레이블 먼저 확인 (예: "16ID-045" -> "16ID")
+        id_match = re.match(r'^(\d*[A-Z]+ID)', ui_code_upper) 
+        if id_match:
+            return id_match.group(1)
+
+        # 일반적인 경우 (하이픈 앞부분)
+        if '-' in ui_code_upper:
+            label_part = ui_code_upper.split('-', 1)[0]
+            # 숫자 접두사 제거 (예: 436ABF -> ABF)
+            pure_alpha_match = re.search(r'([A-Z]+)', label_part)
+            if pure_alpha_match: return pure_alpha_match.group(1)
+            return label_part
+
+        # 하이픈 없는 경우 (예: HAGE001 -> HAGE)
+        match_alpha_prefix = re.match(r'^([A-Z]+)', ui_code_upper)
+        if match_alpha_prefix:
+            return match_alpha_prefix.group(1)
+
+        return ui_code_upper
+
+
     # endregion UTILITY METHODS
     ################################################
 
@@ -578,17 +571,12 @@ class SiteJav321(SiteAvBase):
     def set_config(cls, db):
         super().set_config(db)
         cls.config.update({
-            # 포스터 예외처리1. 설정된 레이블은 저화질 썸네일을 포스터로 사용
             "ps_force_labels_list": db.get_list(f"jav_censored_{cls.site_name}_small_image_to_poster", ","),
-
-            # 포스터 예외처리2. 가로 이미지 크롭이 필요한 경우 그 위치를 수동 지정
             "crop_mode": db.get_list(f"jav_censored_{cls.site_name}_crop_mode", ","),
-            # 지정 레이블 최우선 검색
             "priority_labels": db.get_list(f"jav_censored_{cls.site_name}_priority_search_labels", ","),
-            "maintain_series_number_labels": db.get_list(f"jav_censored_{cls.site_name}_maintain_series_number_labels", ","),
         })
-        cls.config['maintain_series_number_labels'] = {lbl.strip().upper() for lbl in cls.config['maintain_series_number_labels'] if lbl.strip()}
-        cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config['ps_force_labels_list'] if lbl.strip()}
+        cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('ps_force_labels_list', []) if lbl.strip()}
+        cls.config['priority_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('priority_labels', []) if lbl.strip()}
 
 
     # endregion SiteAvBase 메서드 오버라이드
