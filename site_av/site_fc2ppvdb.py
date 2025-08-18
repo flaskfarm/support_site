@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from lxml import html
 
 from ..entity_av import EntityAVSearch
-from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityThumb)
+from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
@@ -23,6 +23,7 @@ class SiteFc2ppvdb(SiteAvBase):
     ppvdb_default_cookies = {}
     _block_release_time_fc2ppvdb = 0 # 차단 해제 시간 저장 (타임스탬프)
     _last_retry_after_value = 0 # 마지막으로 받은 Retry-After 값 (로그용)
+
 
     @classmethod
     def search(cls, keyword, manual=False):
@@ -54,7 +55,11 @@ class SiteFc2ppvdb(SiteAvBase):
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code
-            item.ui_code = f'FC2-{code}'
+
+            item.ui_code = cls._parse_ui_code_uncensored(keyword)
+            if not item.ui_code: # 파싱 실패 시 폴백
+                item.ui_code = f'FC2-{code}'
+
             item.score = 100
 
             info_block_xpath_base = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]'
@@ -97,12 +102,11 @@ class SiteFc2ppvdb(SiteAvBase):
     @classmethod
     def info(cls, code, fp_meta_mode=False):
         ret = {}
-        entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
-            if entity_result_val_final:
+            entity = cls.__info(code, fp_meta_mode=fp_meta_mode)
+            if entity:
                 ret['ret'] = 'success'
-                ret['data'] = entity_result_val_final
+                ret['data'] = entity.as_dict()
             else:
                 ret['ret'] = 'error'
                 ret["data"] = f"Failed to get fc2 info for {code}"
@@ -141,8 +145,12 @@ class SiteFc2ppvdb(SiteAvBase):
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
 
-        entity.ui_code = f'FC2-{code_part}'
+        entity.ui_code = cls._parse_ui_code_uncensored(f'fc2-{code_part}')
+        if not entity.ui_code: # 파싱 실패 시 폴백
+            entity.ui_code = f'FC2-{code_part}'
+
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
+        entity.label = "FC2"
 
         info_base_xpath = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[2]'
         info_element = tree.xpath(info_base_xpath)
@@ -179,42 +187,39 @@ class SiteFc2ppvdb(SiteAvBase):
         for item_genre in genre_elements:
             entity.genre.append(cls.trans(item_genre.strip()))
 
-        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-        if image_mode == 'image_server':
-            module_type = 'jav_uncensored'
-            local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-            server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-            base_save_format = cls.MetadataSetting.get(f'{module_type}_image_server_save_format')
-
-            label = "FC2"
-            # 1. code_part (순수 숫자 품번)를 7자리로 패딩
-            padded_code = code_part.zfill(7)
-            # 2. 패딩된 코드의 '앞 3자리'를 하위 폴더 이름으로 사용
-            code_prefix_part = padded_code[:3]
-
-            base_path_part = base_save_format.format(label=label)
-            final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), code_prefix_part)
-
-            entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-            entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-
         poster_url = ""
         poster_elements = tree.xpath('/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[1]/a/img/@src')
         if poster_elements:
             poster_url = f"{SITE_BASE_URL}{poster_elements[0]}" if poster_elements[0].startswith('/') else poster_elements[0]
 
-        # 썸네일
-        try:
-            raw_image_urls = {
-                'poster': poster_url,
-                'pl': None,
-                'ps': None,
-                'arts': [],
-                'specific_poster_candidates': []
-            }
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
-        except Exception as e:
-            logger.exception(f"Heyzo: Error during image processing delegation for {code}: {e}")
+        if not fp_meta_mode:
+            # [일반 모드] : 전체 이미지 처리 파이프라인 실행
+            image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+            if image_mode == 'image_server':
+                try:
+                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
+                    base_path_part = base_save_format.format(label=entity.label) 
+                    padded_code = code_part.zfill(7)
+                    code_prefix_part = padded_code[:3]
+                    final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), code_prefix_part)
+                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
+                    logger.debug(f"[{cls.site_name}] Custom image server path set for {entity.ui_code}: {entity.image_server_target_folder}")
+                except Exception as e:
+                    logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+
+            try:
+                raw_image_urls = {'poster': poster_url}
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+            except Exception as e:
+                logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
+        else:
+            # [파일처리 모드] : 원본 포스터 URL만 추가하고 무거운 처리는 생략
+            logger.debug(f"[{cls.site_name}] FP Meta Mode: Skipping full image processing for {code}.")
+            if poster_url:
+                entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
 
         return entity
 

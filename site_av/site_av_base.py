@@ -498,6 +498,9 @@ class SiteAvBase:
 
             "special_parser_rules": {
                 "custom_rules": db.get_list("jav_censored_special_parser_custom_rules", "\n"),
+            },
+            "uncensored_parser_rules": {
+                "custom_rules": db.get_list("jav_uncensored_special_parser_custom_rules", "\n"),
             }
         })
 
@@ -1663,6 +1666,84 @@ class SiteAvBase:
 
         logger.debug(f"UI Code Parser: Parsed '{cid_part_raw}' -> Final UI Code: '{ui_code_final}'")
         return ui_code_final, score_label_part, score_num_raw_part
+
+
+    @classmethod
+    def _parse_ui_code_uncensored(cls, cid_part_raw: str) -> str:
+        """
+        Uncensored 품번을 파싱하고 표준화된 UI 코드를 반환합니다.
+        (예: 'fc2-ppv-1234567' -> 'FC2-1234567')
+        """
+        if not cls.config or 'special_parser_rules' not in cls.config:
+            logger.warning("Uncensored UI Code Parser rules not loaded. Using raw value.")
+            return cid_part_raw.upper()
+
+        processed_cid = cid_part_raw.lower().strip()
+        # 파일 확장자 및 불필요한 괄호/대괄호 제거 전처리
+        processed_cid = re.sub(r'\.\w+$', '', processed_cid) # .mkv, .mp4 등 제거
+        processed_cid = re.sub(r'[\[\(].*?[\]\)]', '', processed_cid).strip() # [H264], (1080p) 등 제거
+
+        final_label_part, final_num_part, rule_applied = "", "", False
+        parser_rules = cls.config.get('uncensored_parser_rules', {}).get('custom_rules', [])
+
+        # --- 특수 규칙 적용 ---
+        for line in parser_rules:
+            line = line.strip()
+            if not line or line.startswith('#'): continue
+
+            parts = line.split('=>')
+            if len(parts) != 2:
+                logger.warning(f"Invalid advanced rule format (expected 'pattern => template'): {line}")
+                continue
+
+            pattern, template = parts[0].strip(), parts[1].strip()
+            try:
+                match = re.match(pattern, processed_cid, re.I)
+                if match:
+                    template_parts = template.split('|')
+                    if len(template_parts) != 2: continue
+
+                    label_template, num_template = template_parts
+                    groups = match.groups()
+                    final_label_part = label_template.format(*groups).strip()
+                    final_num_part = num_template.format(*groups).strip()
+                    rule_applied = True
+                    logger.debug(f"Uncensored Parser: Matched Rule '{pattern}' -> Label:'{final_label_part}', Num:'{final_num_part}'")
+                    break
+            except Exception as e:
+                logger.error(f"Error applying uncensored rule: '{line}' - {e}")
+
+        # --- 특수 규칙이 적용되지 않은 경우 기본 분리 로직 실행 ---
+        if not rule_applied:
+            # 일반적인 품번 형태
+            default_pattern = r'^([a-z0-9]+?)[-_]?((?:\d{6}[-_]\d{2,3})|(?:\d{4,7}))(.*)$'
+            match = re.match(default_pattern, processed_cid)
+
+            if match:
+                # 그룹 1: 레이블, 그룹 2: 번호, 그룹 3: 찌꺼기
+                final_label_part = match.group(1)
+                final_num_part = match.group(2)
+                if match.group(3):
+                    logger.debug(f"Uncensored Parser (Default): Discarded trailing part: '{match.group(3)}'")
+            else:
+                # 위 패턴으로 분리 실패 시, 최후의 폴백 로직
+                last_separator_match = re.match(r'^(.*)[-_](.*?)$', processed_cid)
+                if last_separator_match:
+                    final_label_part, final_num_part = last_separator_match.groups()
+                else:
+                    final_label_part, final_num_part = processed_cid, ""
+
+        # --- 최종 UI 코드 조합 ---
+        label_ui_part = final_label_part.upper().strip('-_ ')
+        num_ui_part = final_num_part.upper().strip('-_ ')
+
+        if label_ui_part and num_ui_part:
+            ui_code_final = f"{label_ui_part}-{num_ui_part}"
+        else:
+            ui_code_final = label_ui_part or cid_part_raw.upper()
+
+        logger.debug(f"Uncensored Parser: Parsed '{cid_part_raw}' -> Final UI Code: '{ui_code_final}'")
+        return ui_code_final
 
 
     @classmethod
