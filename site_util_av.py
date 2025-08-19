@@ -8,11 +8,6 @@ from urllib.parse import urlparse, quote_plus
 import traceback
 
 try:
-    import imagehash
-except ImportError:
-    os.system("pip install imagehash")
-    import imagehash
-try:
     import requests_cache
 except ImportError:
     os.system("pip install requests-cache")
