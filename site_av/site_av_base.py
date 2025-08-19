@@ -494,6 +494,7 @@ class SiteAvBase:
             "trans_option": db.get(f'{common_config_prefix}_trans_option'),
             "use_extras": db.get_bool(f'{common_config_prefix}_use_extras'),
             "max_arts": db.get_int(f'{common_config_prefix}_art_count'),
+            "use_imagehash": db.get_bool(f'{common_config_prefix}_use_imagehash'),
 
             # 사이트별 설정 (각 모듈 타입에 맞는 값을 사용)
             "use_proxy": db.get_bool(use_proxy_key),
@@ -953,10 +954,17 @@ class SiteAvBase:
                     im_sm_obj = cls.imopen(ps_url)
                     if im_sm_obj:
                         for candidate_url in poster_candidates_simple:
-                            im_lg_obj = cls.imopen(candidate_url)
-                            if im_lg_obj and cls.is_portrait_high_quality_image(im_lg_obj) and cls.is_hq_poster(im_sm_obj, im_lg_obj):
-                                final_image_sources['poster_source'] = candidate_url; break
-                            if im_lg_obj: im_lg_obj.close()
+                            im_lg_obj = None # finally 블록을 위해 미리 선언
+                            try:
+                                im_lg_obj = cls.imopen(candidate_url)
+
+                                if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
+                                    logger.debug(f"Found ideal poster (visually same as thumbnail): {candidate_url}")
+                                    final_image_sources['poster_source'] = candidate_url
+                                    break
+                            finally:
+                                if im_lg_obj: im_lg_obj.close()
+
                         im_sm_obj.close()
 
                 if not final_image_sources['poster_source']:
@@ -1641,7 +1649,7 @@ class SiteAvBase:
         # --- Custom Rule이 매칭되지 않은 경우, 일반 분리 로직 실행 ---
         if not final_label_part and not final_num_part: # rule_applied 대신 명시적 확인
             # 1. 레이블과 숫자를 최대한 분리
-            clear_pattern_match = re.match(r'^([a-zA-Z\d]*[a-zA-Z])(\d+)$', processed_cid)
+            clear_pattern_match = re.match(r'^(\d*[a-zA-Z]+)[-_]?(\d+)$', processed_cid)
             if clear_pattern_match:
                 remaining_for_label, final_num_part = clear_pattern_match.groups()
             else:
@@ -1660,11 +1668,16 @@ class SiteAvBase:
 
         # --- 숫자 부분 처리 분기 ---
         if final_num_part.isdigit():
-            # 숫자만 있는 경우: lstrip과 zfill로 3자리 패딩 적용
-            num_stripped = final_num_part.lstrip('0') or "0"
-            num_ui_part = num_stripped.zfill(3)
+            if len(final_num_part) <= 3:
+                # 3자리 이하의 짧은 품번: 기존 패딩 로직 유지
+                num_stripped = final_num_part.lstrip('0') or "0"
+                num_ui_part = num_stripped.zfill(3)
+            else:
+                # 4자리 이상의 긴 품번: 앞쪽의 0만 제거
+                num_ui_part = final_num_part.lstrip('0')
+                if not num_ui_part:
+                    num_ui_part = '0'
         else:
-            # 문자가 섞인 경우: 원본 그대로 사용 (대소문자만 정리)
             num_ui_part = final_num_part.upper().strip('-')
 
         # 최종 UI 코드 조합
@@ -1672,7 +1685,7 @@ class SiteAvBase:
             ui_code_final = f"{label_ui_part}-{num_ui_part}"
         else:
             ui_code_final = label_ui_part or cid_part_raw.upper()
-        
+
         # 반환값 준비
         score_label_part = final_label_part.lower()
         score_num_raw_part = final_num_part # 점수 계산용은 항상 원본 숫자 파트 사용
