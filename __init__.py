@@ -16,7 +16,6 @@ def check_packages(packages: Sequence[tuple[str, str]]) -> None:
 check_packages((
     ("xmltodict", "xmltodict"),
     ("lxml", "lxml"),
-    ("imagehash", "imagehash"),
     ("cloudscraper", "cloudscraper"),
     ("tmdbsimple", "tmdbsimple"),
     ("tvdb_api", "tvdb_api"),

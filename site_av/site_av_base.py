@@ -14,9 +14,6 @@ from lxml import html
 from flask import Response, abort, send_file
 from io import BytesIO
 from PIL import Image, UnidentifiedImageError
-from imagehash import dhash as hfun
-from imagehash import phash 
-from imagehash import average_hash
 from requests.adapters import HTTPAdapter
 
 # FF
@@ -40,6 +37,12 @@ except ImportError:
     os.system("pip install dateutils")
     from dateutil.parser import parse
 
+try:
+    from imagehash import dhash as hfun, phash, average_hash
+    _IMAGEHASH_AVAILABLE = True
+except ImportError:
+    _IMAGEHASH_AVAILABLE = False
+    hfun = phash = average_hash = None
 
 class SiteAvBase:
     site_name = None
@@ -879,6 +882,16 @@ class SiteAvBase:
             'is_user_poster': False, 'is_user_landscape': False,
             'processed_from_url': None,
         }
+
+        # imagehash 사용 조건 확인 및 ps_url 조정
+        use_advanced_comparison = _IMAGEHASH_AVAILABLE and cls.config.get('use_imagehash', False)
+
+        if ps_url and not use_advanced_comparison:
+            if not _IMAGEHASH_AVAILABLE:
+                logger.warning("imagehash library not found. Falling back to basic poster selection.")
+            else:
+                logger.debug("Imagehash is disabled by user setting. Falling back to basic poster selection.")
+            ps_url = None # ps_url을 비워서 비교 없는 로직을 타도록 유도
 
         should_process_poster = True
         should_process_landscape = True
