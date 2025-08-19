@@ -925,7 +925,7 @@ class SiteAvBase:
 
         # --- 3. 포스터 소스 결정 (필요한 경우에만) ---
         if should_process_poster:
-            logger.debug(f"Determining poster source for {ui_code} as no user/system file exists or rewrite is on.")
+            # logger.debug(f"Determining poster source for {ui_code} as no user/system file exists or rewrite is on.")
             
             if direct_poster_url:
                 # Case 1: Uncensored 등 이미 포스터가 확정된 경우
