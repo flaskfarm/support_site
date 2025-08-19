@@ -13,6 +13,13 @@ except ImportError:
     os.system("pip install requests-cache")
     import requests_cache
 
+try:
+    from imagehash import dhash as hfun, phash, average_hash
+    _IMAGEHASH_AVAILABLE = True
+except ImportError:
+    _IMAGEHASH_AVAILABLE = False
+    hfun = phash = average_hash = None
+
 import requests
 from lxml import html
 from PIL import Image
