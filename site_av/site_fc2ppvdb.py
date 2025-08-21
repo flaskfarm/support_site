@@ -195,7 +195,7 @@ class SiteFc2ppvdb(SiteAvBase):
         if not fp_meta_mode:
             # [일반 모드] : 전체 이미지 처리 파이프라인 실행
             image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-            if image_mode == 'image_server':
+            if image_mode == 'image_server' :
                 try:
                     local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
                     server_url = cls.MetadataSetting.get('jav_censored_image_server_url')

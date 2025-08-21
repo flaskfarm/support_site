@@ -465,6 +465,14 @@ class SiteAvBase:
         return Response(generate_content(), headers=response_headers)
 
 
+    _parsing_rules = {}
+
+    @classmethod
+    def set_parsing_rules(cls, rules):
+        cls._parsing_rules = rules if rules is not None else {}
+        # logger.debug(f"Global parsing rules updated. Generic: {len(cls._parsing_rules.get('generic_rules', []))}, Censored: {len(cls._parsing_rules.get('censored_special_rules', []))}")
+
+
     @classmethod
     def set_config(cls, db):
         if cls.session is None:
@@ -472,18 +480,18 @@ class SiteAvBase:
         else:
             cls.session.close()
             cls.session = cls.get_session()
-        
+
         cls.MetadataSetting = db
 
         # 모듈 종류(Censored/Uncensored)에 따라 설정 키 접두사를 결정
         module_type = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
-        
+
         # 공통 설정은 항상 jav_censored의 것을 따르도록 강제
         common_config_prefix = 'jav_censored'
 
         use_proxy_key = f"{module_type}_{cls.site_name}_use_proxy"
         proxy_url_key = f"{module_type}_{cls.site_name}_proxy_url"
-        
+
         # config 딕셔너리 구성
         if getattr(cls, 'config', None) is None:
             cls.config = {}
@@ -496,17 +504,24 @@ class SiteAvBase:
             "max_arts": db.get_int(f'{common_config_prefix}_art_count'),
             "use_imagehash": db.get_bool(f'{common_config_prefix}_use_imagehash'),
 
+            # 이미지 서버 관련 공통 설정
+            "image_server_local_path": db.get(f'{common_config_prefix}_image_server_local_path'),
+            "image_server_url": db.get(f'{common_config_prefix}_image_server_url'),
+            "image_server_rewrite": db.get_bool(f'{common_config_prefix}_image_server_rewrite'),
+            "censored_image_format": db.get('jav_censored_image_server_save_format'),
+            "uncensored_image_format": db.get('jav_uncensored_image_server_save_format'),
+
             # 사이트별 설정 (각 모듈 타입에 맞는 값을 사용)
             "use_proxy": db.get_bool(use_proxy_key),
             "proxy_url": db.get(proxy_url_key),
 
-            "special_parser_rules": {
-                "custom_rules": db.get_list("jav_censored_special_parser_custom_rules", "\n"),
-            },
-            "uncensored_parser_rules": {
-                "custom_rules": db.get_list("jav_uncensored_special_parser_custom_rules", "\n"),
-            }
+            "generic_parser_rules": cls._parsing_rules.get('generic_rules', []),
+            "censored_parser_rules": cls._parsing_rules.get('censored_special_rules', []),
+            "uncensored_parser_rules": cls._parsing_rules.get('uncensored_special_rules', []),
         })
+        # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
+        # uncensored_rules_count = len(cls.config.get('uncensored_parser_rules', {}).get('custom_rules', []))
+        # logger.debug(f"[{cls.site_name}] Config loaded. Censored rules: {censored_rules_count}, Uncensored rules: {uncensored_rules_count}")
 
 
     # endregion
@@ -727,7 +742,7 @@ class SiteAvBase:
 
     @classmethod
     def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache):
-        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+        image_mode = cls.config.get('image_mode')
         temp_filepath_to_clean = None
 
         try:
@@ -746,50 +761,66 @@ class SiteAvBase:
             }
 
             if image_mode == 'image_server' and entity.ui_code:
-                module_prefix = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
+                # entity에 미리 계산된 경로가 있는지 먼저 확인
+                pre_calculated_target_folder = getattr(entity, 'image_server_target_folder', None)
+                pre_calculated_url_prefix = getattr(entity, 'image_server_url_prefix', None)
 
-                # 경로는 항상 jav_censored 설정을 따름
-                base_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                url_base = cls.MetadataSetting.get('jav_censored_image_server_url')
+                target_folder = None
+                url_prefix = None
 
-                # 저장 형식(save_format)은 각 모듈의 설정을 따름
-                save_format = cls.MetadataSetting.get(f'{module_prefix}_image_server_save_format')
+                if pre_calculated_target_folder and pre_calculated_url_prefix:
+                    # Case 1: 사이트 모듈에서 이미 경로를 계산해 준 경우 (FC2, 1pondo 등)
+                    logger.debug(f"Using pre-calculated image server path from entity: {pre_calculated_target_folder}")
+                    target_folder = pre_calculated_target_folder
+                    url_prefix = pre_calculated_url_prefix
+                else:
+                    # Case 2: 경로가 없는 경우 (DMM, JavDB 등), 여기서 경로를 새로 계산
+                    logger.debug("No pre-calculated path found. Calculating image server path in SiteAvBase.")
+                    module_prefix = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
 
-                if base_path and url_base and save_format:
-                    base_label = getattr(entity, 'label', entity.ui_code.split('-')[0])
+                    base_path = cls.config.get('image_server_local_path')
+                    url_base = cls.config.get('image_server_url')
+                    save_format_key = 'censored_image_format' if cls.module_char == 'C' else 'uncensored_image_format'
+                    save_format = cls.config.get(save_format_key)
 
-                    label_full = base_label
-                    # '741'로 시작하는 특수 레이블은 규칙에서 제외
-                    if not base_label.upper().startswith('741'):
-                        numeric_prefix_match = re.match(r'^(\d+)([A-Z].*)', base_label.upper())
-                        if numeric_prefix_match:
-                            label_full = numeric_prefix_match.group(2)
-                            logger.debug(f"Numeric prefix label detected: '{base_label}'. Using '{label_full}' for path.")
+                    if base_path and url_base and save_format:
+                        base_label = getattr(entity, 'label', entity.ui_code.split('-')[0])
+                        label_full = base_label
 
-                    # --- label_1 (첫 글자) 결정 로직 ---
-                    label_first = ""
-                    # 1. 741로 시작하는 특수 품번 예외 처리
-                    if base_label.upper().startswith('741'):
-                        label_first = '09'
-                        # logger.debug(f"Special '741' prefix label detected: '{base_label}'. Using '09' for label_1.")
-                    # 2. entity에 이미 label_1이 설정된 경우 (DMM 등에서 파싱)
-                    elif getattr(entity, 'label_1', None):
-                        label_first = entity.label_1
-                    # 3. 그 외의 경우, 정제된 label_full의 첫 글자 사용
-                    elif label_full:
-                        label_first = label_full[0]
+                        # '741'로 시작하는 특수 레이블은 규칙에서 제외
+                        if not base_label.upper().startswith('741'):
+                            numeric_prefix_match = re.match(r'^(\d+)([A-Z].*)', base_label.upper())
+                            if numeric_prefix_match:
+                                label_full = numeric_prefix_match.group(2)
+                                # logger.debug(f"Numeric prefix label detected: '{base_label}'. Using '{label_full}' for path.")
 
-                    try:
-                        # KeyError 방지를 위해 format_map 사용
-                        format_map = {'label': label_full, 'label_1': label_first}
-                        sub_path = save_format.format_map(format_map).strip('/\\')
-                    except KeyError as e:
-                        logger.warning(f"Image server save_format error for '{save_format}'. Key {e} not found. Falling back to default.")
-                        # 폴백: Uncensored는 레이블, Censored는 첫 글자 사용
-                        sub_path = label_full if cls.module_char == 'U' else label_first
+                        # --- label_1 (첫 글자) 결정 로직 ---
+                        label_first = ""
+                        # 1. 741로 시작하는 특수 품번 예외 처리
+                        if base_label.upper().startswith('741'):
+                            label_first = '09'
+                            # logger.debug(f"Special '741' prefix label detected: '{base_label}'. Using '09' for label_1.")
+                        # 2. entity에 이미 label_1이 설정된 경우 (DMM 등에서 파싱)
+                        elif getattr(entity, 'label_1', None):
+                            label_first = entity.label_1
+                        # 3. 그 외의 경우, 정제된 label_full의 첫 글자 사용
+                        elif label_full:
+                            label_first = label_full[0]
 
-                    target_folder = os.path.join(base_path, sub_path)
-                    url_prefix = f"{url_base.rstrip('/')}/{sub_path}"
+                        try:
+                            # KeyError 방지를 위해 format_map 사용
+                            format_map = {'label': label_full, 'label_1': label_first}
+                            sub_path = save_format.format_map(format_map).strip('/\\')
+                        except KeyError as e:
+                            logger.warning(f"Image server save_format error for '{save_format}'. Key {e} not found. Falling back to default.")
+                            # 폴백: Uncensored는 레이블, Censored는 첫 글자 사용
+                            sub_path = label_full if cls.module_char == 'U' else label_first
+
+                        target_folder = os.path.join(base_path, sub_path)
+                        url_prefix = f"{url_base.rstrip('/')}/{sub_path}"
+
+                if target_folder and url_prefix:
+                    # 최종 결정된 경로를 decision_data에 할당
                     decision_data['image_server_paths'] = {'target_folder': target_folder, 'url_prefix': url_prefix}
 
                     # 사용자 및 시스템 파일 존재 여부 확인
@@ -808,12 +839,10 @@ class SiteAvBase:
                         arts_count = len([f for f in os.listdir(target_folder) if f.startswith(f"{code_lower}_art_")])
                         decision_data['system_files_exist']['arts'] = arts_count
 
-                # 덮어쓰기 설정 (공통 설정 참조)
+                module_prefix = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
                 rewrite_str = cls.MetadataSetting.get(f'{module_prefix}_image_server_rewrite')
-                if rewrite_str is None: # 설정값이 아예 없는 경우, 공통 설정을 참조
+                if rewrite_str is None:
                     rewrite_str = cls.MetadataSetting.get('jav_censored_image_server_rewrite')
-
-                # 'True' 문자열일 때만 True로 판단, 그 외에는 False
                 decision_data['rewrite_flag'] = (rewrite_str == 'True')
 
             # --- 2. 이미지 소스 결정 위임 ---
@@ -1597,10 +1626,11 @@ class SiteAvBase:
 
     @classmethod
     def _parse_ui_code(cls, cid_part_raw: str, content_type: str = 'unknown') -> tuple:
-        if not cls.config or 'special_parser_rules' not in cls.config:
-            logger.warning("UI Code Parser rules not loaded in config. Parsing may be incorrect.")
-            label = cid_part_raw.upper().split('-')[0] if '-' in cid_part_raw else cid_part_raw.upper()
-            return cid_part_raw.upper(), cid_part_raw.lower(), "", label, label[0] if label else ""
+        if not cls.config or 'censored_parser_rules' not in cls.config:
+            logger.warning("Censored UI Code Parser rules not loaded in config.")
+            ui_code = cid_part_raw.upper()
+            label_part = ui_code.split('-')[0].lower() if '-' in ui_code else ui_code.lower()
+            return ui_code, label_part, ""
 
         # CID 전처리
         processed_cid = cid_part_raw.lower().strip()
@@ -1611,17 +1641,18 @@ class SiteAvBase:
 
         # 파싱 변수 초기화
         final_label_part, final_num_part, rule_applied = "", "", False
-        parser_rules = cls.config['special_parser_rules']
+        special_rules = cls.config.get('censored_parser_rules', [])
+        generic_rules = cls.config.get('generic_parser_rules', [])
+        all_rules = special_rules + generic_rules
 
-        # --- 고급 규칙 ---
-        for line in parser_rules['custom_rules']:
+        for line in all_rules:
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
 
             parts = line.split('=>')
             if len(parts) != 2:
-                logger.warning(f"Invalid advanced rule format (expected 'pattern => template'): {line}")
+                logger.warning(f"Invalid rule format (expected 'pattern => template'): {line}")
                 continue
 
             pattern, template = parts[0].strip(), parts[1].strip()
@@ -1631,52 +1662,30 @@ class SiteAvBase:
                 if match:
                     template_parts = template.split('|')
                     if len(template_parts) != 2:
-                        logger.warning(f"Invalid template format (expected 'label_template|number_template'): {template}")
-                        continue
+                        continue # 로그는 위에서 남겼으므로 생략
 
                     label_template, num_template = template_parts
-
                     groups = match.groups()
                     final_label_part = label_template.format(*groups)
                     final_num_part = num_template.format(*groups)
 
                     rule_applied = True
-                    logger.debug(f"UI Code Parser: Matched Advanced Rule. Pattern: '{pattern}', Template: '{template}' -> Label: '{final_label_part}', Num: '{final_num_part}'")
                     break
             except (re.error, IndexError) as e:
-                logger.error(f"Error applying advanced rule: '{line}' - {e}")
+                logger.error(f"Error applying rule: '{line}' - {e}")
 
-        # --- Custom Rule이 매칭되지 않은 경우, 일반 분리 로직 실행 ---
-        if not final_label_part and not final_num_part: # rule_applied 대신 명시적 확인
-            # 1. 레이블과 숫자를 최대한 분리
-            clear_pattern_match = re.match(r'^(\d*[a-zA-Z]+)[-_]?(\d+)$', processed_cid)
-            if clear_pattern_match:
-                remaining_for_label, final_num_part = clear_pattern_match.groups()
-            else:
-                remaining_for_label, final_num_part = processed_cid, ""
-
-            # 2. 분리된 레이블 부분에서 숫자 접두사를 제거
-            alpha_part_match = re.search(r'([a-zA-Z].*)', remaining_for_label)
-            if alpha_part_match:
-                final_label_part = alpha_part_match.group(1)
-            else:
-                # 숫자만 있는 레이블 파트 등 예외 케이스 처리
-                final_label_part = remaining_for_label
+        # 모든 규칙에 실패했을 경우의 최후의 폴백
+        if not rule_applied:
+            logger.debug(f"UI Code Parser: No rule matched for '{processed_cid}'. Falling back.")
+            final_label_part, final_num_part = processed_cid, ""
 
         # === 최종 값 조합 ===
         label_ui_part = final_label_part.upper().strip('-')
 
         # --- 숫자 부분 처리 분기 ---
         if final_num_part.isdigit():
-            if len(final_num_part) <= 3:
-                # 3자리 이하의 짧은 품번: 기존 패딩 로직 유지
-                num_stripped = final_num_part.lstrip('0') or "0"
-                num_ui_part = num_stripped.zfill(3)
-            else:
-                # 4자리 이상의 긴 품번: 앞쪽의 0만 제거
-                num_ui_part = final_num_part.lstrip('0')
-                if not num_ui_part:
-                    num_ui_part = '0'
+            num_stripped = final_num_part.lstrip('0') or "0"
+            num_ui_part = num_stripped.zfill(3)
         else:
             num_ui_part = final_num_part.upper().strip('-')
 
@@ -1690,7 +1699,7 @@ class SiteAvBase:
         score_label_part = final_label_part.lower()
         score_num_raw_part = final_num_part # 점수 계산용은 항상 원본 숫자 파트 사용
 
-        logger.debug(f"UI Code Parser: Parsed '{cid_part_raw}' -> Final UI Code: '{ui_code_final}'")
+        # logger.debug(f"UI Code Parser: Parsed '{cid_part_raw}' > '{pattern}' > Final: '{ui_code_final}'")
         return ui_code_final, score_label_part, score_num_raw_part
 
 
@@ -1700,26 +1709,29 @@ class SiteAvBase:
         Uncensored 품번을 파싱하고 표준화된 UI 코드를 반환합니다.
         (예: 'fc2-ppv-1234567' -> 'FC2-1234567')
         """
-        if not cls.config or 'special_parser_rules' not in cls.config:
-            logger.warning("Uncensored UI Code Parser rules not loaded. Using raw value.")
+        if not cls.config or 'uncensored_parser_rules' not in cls.config:
+            logger.warning("Uncensored UI Code Parser rules not loaded in config. Using raw value.")
             return cid_part_raw.upper()
 
         processed_cid = cid_part_raw.lower().strip()
-        # 파일 확장자 및 불필요한 괄호/대괄호 제거 전처리
-        processed_cid = re.sub(r'\.\w+$', '', processed_cid) # .mkv, .mp4 등 제거
-        processed_cid = re.sub(r'[\[\(].*?[\]\)]', '', processed_cid).strip() # [H264], (1080p) 등 제거
+        processed_cid = re.sub(r'\.\w+$', '', processed_cid)
+        processed_cid = re.sub(r'[\[\(].*?[\]\)]', '', processed_cid).strip()
 
         final_label_part, final_num_part, rule_applied = "", "", False
-        parser_rules = cls.config.get('uncensored_parser_rules', {}).get('custom_rules', [])
+        
+        special_rules = cls.config.get('uncensored_parser_rules', [])
+        generic_rules = cls.config.get('generic_parser_rules', [])
+        all_rules = special_rules + generic_rules
 
-        # --- 특수 규칙 적용 ---
-        for line in parser_rules:
+        logger.debug(f"[{cls.site_name}] _parse_ui_code_uncensored started for '{cid_part_raw}'. Using {len(special_rules)} special + {len(generic_rules)} generic rules.")
+
+        for line in all_rules:
             line = line.strip()
             if not line or line.startswith('#'): continue
 
             parts = line.split('=>')
             if len(parts) != 2:
-                logger.warning(f"Invalid advanced rule format (expected 'pattern => template'): {line}")
+                logger.warning(f"Invalid rule format (expected 'pattern => template'): {line}")
                 continue
 
             pattern, template = parts[0].strip(), parts[1].strip()
@@ -1739,27 +1751,10 @@ class SiteAvBase:
             except Exception as e:
                 logger.error(f"Error applying uncensored rule: '{line}' - {e}")
 
-        # --- 특수 규칙이 적용되지 않은 경우 기본 분리 로직 실행 ---
         if not rule_applied:
-            # 일반적인 품번 형태
-            default_pattern = r'^([a-z0-9]+?)[-_]?((?:\d{6}[-_]\d{2,3})|(?:\d{4,7}))(.*)$'
-            match = re.match(default_pattern, processed_cid)
+            logger.debug(f"Uncensored Parser: No rule matched for '{processed_cid}'. Falling back.")
+            final_label_part, final_num_part = processed_cid, ""
 
-            if match:
-                # 그룹 1: 레이블, 그룹 2: 번호, 그룹 3: 찌꺼기
-                final_label_part = match.group(1)
-                final_num_part = match.group(2)
-                if match.group(3):
-                    logger.debug(f"Uncensored Parser (Default): Discarded trailing part: '{match.group(3)}'")
-            else:
-                # 위 패턴으로 분리 실패 시, 최후의 폴백 로직
-                last_separator_match = re.match(r'^(.*)[-_](.*?)$', processed_cid)
-                if last_separator_match:
-                    final_label_part, final_num_part = last_separator_match.groups()
-                else:
-                    final_label_part, final_num_part = processed_cid, ""
-
-        # --- 최종 UI 코드 조합 ---
         label_ui_part = final_label_part.upper().strip('-_ ')
         num_ui_part = final_num_part.upper().strip('-_ ')
 
