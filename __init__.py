@@ -73,6 +73,7 @@ from .site_wavve import SiteWavveMovie, SiteWavveTv
 from .tool_imgur import ToolImgur
 from .tool_naver_cafe import ToolNaverCafe
 
+from .site_av.site_av_base import SiteAvBase
 
 from .site_av.site_avdbs import SiteAvdbs
 from .site_av.site_dmm import SiteDmm
