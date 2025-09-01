@@ -51,7 +51,7 @@ class SiteAvBase:
     
     session = None
     base_default_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
     }
@@ -302,7 +302,7 @@ class SiteAvBase:
             # 기본 인스턴스
             if new_instance or cls._cs_scraper_instance is None:
                 try:
-                    cls._cs_scraper_instance = cloudscraper.create_scraper(delay=5)
+                    cls._cs_scraper_instance = cloudscraper.create_scraper(sess=cls.session, delay=5)
                     logger.debug("Created new cloudscraper instance.")
                 except Exception as e_cs_create:
                     logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
@@ -316,16 +316,14 @@ class SiteAvBase:
     def get_response_cs(cls, url, **kwargs):
         """cloudscraper를 사용하여 HTTP GET 요청을 보내고 응답 객체를 반환합니다."""
         method = kwargs.pop("method", "GET").upper()
-        
         post_data = kwargs.pop("post_data", None)
         if post_data:
             method = "POST"
-            
+
         proxies = kwargs.pop("proxies", None)
         proxy_url = None
-        
+
         if proxies is None:
-            # kwargs로 프록시가 전달되지 않은 경우, cls.config에서 찾음
             if cls.config and cls.config.get('use_proxy', False):
                 proxy_url = cls.config.get('proxy_url')
                 if proxy_url:
@@ -333,9 +331,9 @@ class SiteAvBase:
         else:
             proxy_url = proxies.get("http", proxies.get("https"))
 
-        cookies = kwargs.pop("cookies", None)
-        headers = kwargs.pop("headers", cls.default_headers)
+        kwargs.pop("cookies", None) 
 
+        headers = kwargs.pop("headers", cls.default_headers)
         verify = kwargs.pop("verify", True)
 
         scraper = cls.get_cloudscraper_instance(no_verify=(not verify))
@@ -348,9 +346,9 @@ class SiteAvBase:
 
         try:
             if method == "POST":
-                res = scraper.post(url, data=post_data, cookies=cookies, proxies=proxies, **kwargs)
+                res = scraper.post(url, data=post_data, proxies=proxies, **kwargs)
             else: # GET
-                res = scraper.get(url, cookies=cookies, proxies=proxies, **kwargs)
+                res = scraper.get(url, proxies=proxies, **kwargs)
 
             if res.status_code == 429:
                 return res
@@ -503,6 +501,7 @@ class SiteAvBase:
             "use_extras": db.get_bool(f'{common_config_prefix}_use_extras'),
             "max_arts": db.get_int(f'{common_config_prefix}_art_count'),
             "use_imagehash": db.get_bool(f'{common_config_prefix}_use_imagehash'),
+            "selenium_url": db.get('jav_uncensored_selenium_url'),
 
             # 이미지 서버 관련 공통 설정
             "image_server_local_path": db.get(f'{common_config_prefix}_image_server_local_path'),

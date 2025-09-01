@@ -89,7 +89,7 @@ from .site_av.site_1pondotv import Site1PondoTv
 from .site_av.site_10musume import Site10Musume
 from .site_av.site_carib import SiteCarib
 from .site_av.site_heyzo import SiteHeyzo
-from .site_av.site_fc2ppvdb import SiteFc2ppvdb
+from .site_av.site_fc2com import SiteFc2com
 
 """
 from .site_fc2.site_7mmtv import Site7mmTv
