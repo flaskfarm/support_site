@@ -125,35 +125,55 @@ class SiteDmm(SiteAvBase):
                 item = EntityAVSearch(cls.site_name)
                 href = None; original_ps_url = None; content_type = "unknown" 
 
-                # 1. 기본적인 정보 파싱
+                # 1. 기본적인 정보 파싱 및 ID/CID 추출
                 title_link_tags_in_node = node.xpath('.//a[.//p[contains(@class, "text-link")]]') 
                 img_link_tags_in_node = node.xpath('.//a[./img[@alt="Product"]]')
 
-                primary_href_candidate = None
-                if title_link_tags_in_node and title_link_tags_in_node[0].attrib.get("href", "").lower().count('/cid=') > 0 :
-                    primary_href_candidate = title_link_tags_in_node[0].attrib.get("href", "").lower()
-                elif img_link_tags_in_node and img_link_tags_in_node[0].attrib.get("href", "").lower().count('/cid=') > 0 :
-                    primary_href_candidate = img_link_tags_in_node[0].attrib.get("href", "").lower()
+                href_candidates = []
+                if title_link_tags_in_node:
+                    href_candidates.append(title_link_tags_in_node[0].attrib.get("href", ""))
+                if img_link_tags_in_node:
+                    href_candidates.append(img_link_tags_in_node[0].attrib.get("href", ""))
 
-                if not primary_href_candidate:
-                    logger.debug("DMM Search Item: No primary link with cid found. Skipping.")
+                content_id_or_cid = None
+                href = None
+
+                query_id_pattern = re.compile(r'[?&]id=(?P<code>[^&?]+)')
+                path_cid_pattern = re.compile(r'/cid=(?P<code>[^/&?]+)')
+
+                for candidate_href in href_candidates:
+                    if not candidate_href: continue
+
+                    match = query_id_pattern.search(candidate_href)
+                    if match:
+                        content_id_or_cid = match.group('code')
+                        href = candidate_href
+                        break
+
+                    match = path_cid_pattern.search(candidate_href)
+                    if match:
+                        content_id_or_cid = match.group('code')
+                        href = candidate_href
+                        break
+
+                if not content_id_or_cid or not href:
+                    logger.debug("DMM Search Item: No link with 'id=' or 'cid=' found. Skipping.")
                     continue
 
-                href = primary_href_candidate
-                #logger.debug(f"DMM Search Item: Determined href for path check: '{href}'")
-
-                # 경로 필터링 (href 사용)
+                # 경로 필터링
                 try:
                     parsed_url = urlparse(href)
                     path_from_url = parsed_url.path
+                    hostname = parsed_url.hostname
                 except Exception as e_url_parse_item_loop:
                     logger.error(f"DMM Search Item: Failed to parse href '{href}': {e_url_parse_item_loop}")
                     continue
 
-                is_videoa_path = "digital/videoa/" in path_from_url
-                is_dvd_path = "mono/dvd/" in path_from_url
+                is_videoa_path = (hostname == 'video.dmm.co.jp' and '/av/content/' in href)
+                is_dvd_path = "mono/dvd/" in path_from_url # DVD 경로는 기존 로직 유지
+
                 if not (is_videoa_path or is_dvd_path):
-                    #logger.debug(f"DMM Search Item: Path ('{path_from_url}' from href '{href}') filtered. Skipping.")
+                    #logger.debug(f"DMM Search Item: URL ('{href}') filtered. Skipping.")
                     continue
 
                 # 작은 포스터(PS) URL 추출 (node 기준 상대 경로)
@@ -168,13 +188,16 @@ class SiteDmm(SiteAvBase):
                 item.image_url = original_ps_url
 
                 # content_type 결정
-                is_bluray = False
-                bluray_span = node.xpath('.//span[contains(@class, "text-blue-600") and contains(text(), "Blu-ray")]') # node 기준
-                if bluray_span: is_bluray = True
+                is_bluray = bool(node.xpath('.//span[contains(@class, "text-blue-600") and contains(text(), "Blu-ray")]'))
 
-                if is_bluray: content_type = 'bluray'
-                elif is_videoa_path: content_type = "videoa"
-                elif is_dvd_path: content_type = "dvd"
+                if is_bluray: 
+                    content_type = 'bluray'
+                elif is_videoa_path: 
+                    content_type = "videoa"
+                elif is_dvd_path: 
+                    content_type = "dvd"
+                else:
+                    content_type = "unknown"
                 item.content_type = content_type
 
                 # 제목 추출 (node 기준 상대 경로)
@@ -182,12 +205,8 @@ class SiteDmm(SiteAvBase):
                 raw_title = title_p_tags[0].text_content().strip() if title_p_tags else ""
                 item.title = raw_title
 
-                # 코드 추출 (href 사용)
-                match_cid_s = PTN_SEARCH_CID.search(href) 
-                if not match_cid_s: 
-                    logger.warning(f"DMM Search Item: Could not extract CID from href '{href}'. Skipping.")
-                    continue
-                item.code = cls.module_char + cls.site_char + match_cid_s.group("code")
+                # 코드 설정 (추출된 ID/CID 사용)
+                item.code = cls.module_char + cls.site_char + content_id_or_cid
 
                 # 중복 코드 체크
                 if any(i_s.get("code") == item.code and i_s.get("content_type") == item.content_type for i_s in ret_temp_before_filtering):
