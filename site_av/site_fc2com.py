@@ -90,7 +90,11 @@ class SiteFc2com(SiteAvBase):
             if manual and item.image_url and cls.config.get('use_proxy'):
                 item.image_url = cls.make_image_url(item.image_url)
 
+            title_for_log = (item.title[:57] + '...') if len(item.title) > 60 else item.title
+            logger.info(f"FC2.com: 검색 성공: [FC2-{item.ui_code}] {title_for_log}")
+
             return {'ret': 'success', 'data': [item.as_dict()]}
+
         except Exception as e:
             logger.error(f'[{cls.site_name} Search] Exception: {e}')
             logger.error(traceback.format_exc())
@@ -205,7 +209,7 @@ class SiteFc2com(SiteAvBase):
 
         if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
             proxy_url = cls.config["proxy_url"]
-            logger.info(f"[{cls.site_name}] Selenium using proxy: {proxy_url}")
+            logger.debug(f"[{cls.site_name}] Selenium using proxy: {proxy_url}")
             if '@' in proxy_url:
                 try:
                     import base64, zipfile
