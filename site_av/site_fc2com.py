@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import re
 import traceback
+import time
 from urllib.parse import urljoin, urlparse
+import base64
+import zipfile
+import socket
+from io import BytesIO
 
-# 병렬 처리를 위한 threading 라이브러리 임포트
-from threading import get_ident, Lock
-
-# Selenium 라이브러리가 있을 경우에만 관련 기능을 활성화
 try:
     from selenium import webdriver
     from selenium.webdriver.common.by import By
@@ -23,21 +24,21 @@ from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings,
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
-
 class SiteFc2com(SiteAvBase):
     site_name = 'fc2com'
     site_char = 'F'
     module_char = 'E'
 
-    SELENIUM_TIMEOUT = 30
+    SELENIUM_TIMEOUT = 5
+    CACHE_EXPIRATION_SECONDS = 120
+
     site_base_url = 'https://adult.contents.fc2.com'
     default_headers = SiteAvBase.base_default_headers.copy()
     default_headers['Referer'] = site_base_url + "/"
 
-    # 스레드별 드라이버와 접미사를 관리하기 위한 딕셔너리 및 Lock
-    _drivers = {}
-    _dynamic_suffixes = {}
-    _lock = Lock()
+    _dynamic_suffix = "?dref=search_id"
+    _page_source_cache = {}
+    _driver = None
 
     @classmethod
     def search(cls, keyword, manual=False):
@@ -48,24 +49,23 @@ class SiteFc2com(SiteAvBase):
             logger.warning(f"[{cls.site_name}] Selenium URL이 설정되지 않아 비활성화되었습니다.")
             return {'ret': 'no_match', 'data': []}
 
-        thread_id = get_ident() # 현재 스레드의 고유 ID 획득
-        driver = None
         try:
-            driver = cls._get_selenium_driver(thread_id)
-            dynamic_suffix = cls._ensure_dynamic_suffix(driver)
+            driver = cls._get_selenium_driver()
 
             match = re.search(r'(\d{6,7})', keyword)
-            if not match:
-                return {'ret': 'success', 'data': []}
+            if not match: return {'ret': 'success', 'data': []}
 
             code_part = match.group(1)
-            search_url = f'{cls.site_base_url}/article/{code_part}/{dynamic_suffix}'
+            search_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
 
             detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
-            tree, _ = cls._get_page_content(driver, search_url, wait_for_locator=detail_page_wait_locator)
+            tree, page_source_text = cls._get_page_content(driver, search_url, wait_for_locator=detail_page_wait_locator)
 
-            if tree is None:
-                return {'ret': 'no_match', 'data': []}
+            if page_source_text:
+                cls._page_source_cache[code_part] = (page_source_text, time.time())
+                logger.debug(f"[{cls.site_name}] Page source for '{code_part}' cached.")
+
+            if tree is None: return {'ret': 'no_match', 'data': []}
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code_part
@@ -74,11 +74,10 @@ class SiteFc2com(SiteAvBase):
 
             if h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
                 item.title = cls._extract_fc2com_title(h3_title[0])
-            else:
-                item.title = item.ui_code
+            else: item.title = item.ui_code
 
             if manual:
-                item.title_ko = "(UI 테스트에서는 번역을 제공하지 않습니다) " + item.title
+                item.title_ko = item.title
 
             if date_text := tree.xpath('//p[contains(text(), "Sale Day")]/text()'):
                 if match_year := re.search(r'(\d{4})/\d{2}/\d{2}', date_text[0]):
@@ -90,44 +89,52 @@ class SiteFc2com(SiteAvBase):
             if manual and item.image_url and cls.config.get('use_proxy'):
                 item.image_url = cls.make_image_url(item.image_url)
 
-            title_for_log = (item.title[:57] + '...') if len(item.title) > 60 else item.title
-            logger.info(f"FC2.com: 검색 성공: [FC2-{item.ui_code}] {title_for_log}")
+            title_for_log = (item.title[:77] + '...') if len(item.title) > 80 else item.title
+            logger.info(f"FC2.com: 검색 성공: [{item.ui_code}] {title_for_log}")
 
             return {'ret': 'success', 'data': [item.as_dict()]}
-
         except Exception as e:
             logger.error(f'[{cls.site_name} Search] Exception: {e}')
             logger.error(traceback.format_exc())
+
+            cls._quit_selenium_driver()
             return {'ret': 'exception', 'data': str(e)}
-        finally:
-            cls._quit_selenium_driver(thread_id)
+
 
     @classmethod
     def info(cls, code, fp_meta_mode=False):
-        if not is_selenium_available:
-            return {'ret': 'error', 'data': 'Selenium library is not installed.'}
-        if not cls.config.get('selenium_url'):
-            return {'ret': 'error', 'data': 'Selenium URL is not set.'}
+        if not is_selenium_available or not cls.config.get('selenium_url'):
+            return {'ret': 'error'}
 
-        thread_id = get_ident()
         try:
-            driver = cls._get_selenium_driver(thread_id)
-            entity = cls.__info(driver, code, fp_meta_mode)
+            entity = cls.__info(code, fp_meta_mode)
             return {'ret': 'success', 'data': entity.as_dict()} if entity else {'ret': 'error'}
         except Exception as e:
-            logger.exception(f"[{cls.site_name} info] error: {e}")
+            logger.exception(f"[{cls.site_name} info] Unhandled exception: {e}")
+            cls._quit_selenium_driver()
             return {'ret': 'exception', 'data': str(e)}
-        finally:
-            cls._quit_selenium_driver(thread_id)
+
 
     @classmethod
-    def __info(cls, driver, code, fp_meta_mode=False):
-        dynamic_suffix = cls._ensure_dynamic_suffix(driver)
+    def __info(cls, code, fp_meta_mode=False):
         code_part = code[len(cls.module_char) + len(cls.site_char):]
-        info_url = f'{cls.site_base_url}/article/{code_part}/{dynamic_suffix}'
+        tree = None
 
-        detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
-        tree, _ = cls._get_page_content(driver, info_url, wait_for_locator=detail_page_wait_locator)
+        if code_part in cls._page_source_cache:
+            cached_source, timestamp = cls._page_source_cache[code_part]
+            if (time.time() - timestamp) < cls.CACHE_EXPIRATION_SECONDS:
+                logger.debug(f"[{cls.site_name} Info] Using valid cache for '{code_part}'.")
+                tree = html.fromstring(cached_source)
+                del cls._page_source_cache[code_part]
+            else:
+                logger.debug(f"[{cls.site_name} Info] Cache for '{code_part}' has expired.")
+                del cls._page_source_cache[code_part]
+
+        if tree is None:
+            driver = cls._get_selenium_driver()
+            info_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
+            detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
+            tree, _ = cls._get_page_content(driver, info_url, wait_for_locator=detail_page_wait_locator)
 
         if tree is None: return None
 
@@ -159,10 +166,10 @@ class SiteFc2com(SiteAvBase):
 
         raw_image_urls = {'poster': None, 'arts': []}
         if poster_src := tree.xpath('//div[contains(@class, "items_article_MainitemThumb")]//img/@src | //div[contains(@class, "items_article_MainitemThumb")]//img/@data-src'):
-            raw_image_urls['poster'] = cls._normalize_url(poster_src[0], info_url, upgrade_size=True)
+            raw_image_urls['poster'] = cls._normalize_url(poster_src[0], cls.site_base_url, upgrade_size=True)
 
         for art_src in tree.xpath('//section[contains(@class, "items_article_SampleImages")]//a/@href'):
-            raw_image_urls['arts'].append(cls._normalize_url(art_src, info_url, upgrade_size=True))
+            raw_image_urls['arts'].append(cls._normalize_url(art_src, cls.site_base_url, upgrade_size=True))
 
         if not fp_meta_mode:
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
@@ -173,24 +180,26 @@ class SiteFc2com(SiteAvBase):
 
         if not fp_meta_mode and cls.config['use_extras']:
             if video_src := tree.xpath('//video[contains(@id, "sample_video")]/@src'):
-                trailer_url = cls._normalize_url(video_src[0], info_url, upgrade_size=False)
+                trailer_url = cls._normalize_url(video_src[0], cls.site_base_url, upgrade_size=False)
                 if url := cls.make_video_url(trailer_url):
                     entity.extras.append(EntityExtra("trailer", entity.tagline, "mp4", url))
 
         return entity
 
 
-    #
-    # --- Selenium 및 헬퍼 메서드 ---
-    #
     @classmethod
-    def _get_selenium_driver(cls, thread_id):
-        with cls._lock:
-            if thread_id in cls._drivers:
-                return cls._drivers[thread_id]
+    def _get_selenium_driver(cls):
+        if cls._driver is not None:
+            try:
+                _ = cls._driver.current_url
+                return cls._driver
+            except Exception as e:
+                logger.warning(f"[{cls.site_name}] Existing driver is not responding, creating a new one. Reason: {e}")
+                cls._quit_selenium_driver()
 
         if not is_selenium_available:
-            raise Exception("Selenium 라이브러리가 설치되어 있지 않습니다.")
+            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다.")
+
         selenium_url = cls.config.get('selenium_url')
         if not selenium_url:
             raise Exception("Selenium 서버 URL이 설정되지 않았습니다.")
@@ -207,13 +216,18 @@ class SiteFc2com(SiteAvBase):
         options.add_argument("--disable-infobars")
         options.add_argument('--disable-blink-features=AutomationControlled')
 
+        class SeleniumTimeoutException(Exception):
+            pass
+
+        def handler(signum, frame):
+            raise SeleniumTimeoutException("Selenium 드라이버 생성 시간이 초과되었습니다.")
+
         if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
             proxy_url = cls.config["proxy_url"]
-            logger.debug(f"[{cls.site_name}] Selenium using proxy: {proxy_url}")
+            # logger.debug(f"[{cls.site_name}] Selenium using proxy: {proxy_url}")
+
             if '@' in proxy_url:
                 try:
-                    import base64, zipfile
-                    from io import BytesIO
                     parsed_proxy = urlparse(proxy_url)
                     proxy_host = parsed_proxy.hostname
                     proxy_port = parsed_proxy.port
@@ -249,7 +263,7 @@ class SiteFc2com(SiteAvBase):
                                 host: "{proxy_host}",
                                 port: parseInt({proxy_port})
                             }},
-                            bypassList: ["localhost", "127.0.0.1", "{selenium_url.split(':')[1].strip('//')}"]
+                            bypassList: ["localhost", "127.0.0.1", "{urlparse(selenium_url).hostname}"]
                         }}
                     }};
                     chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
@@ -276,86 +290,62 @@ class SiteFc2com(SiteAvBase):
                     extension_b64 = base64.b64encode(zip_buffer.getvalue()).decode('utf-8')
                     options.add_encoded_extension(extension_b64)
                     logger.debug(f"[{cls.site_name}] Proxy authentication extension created and added.")
-
                 except Exception as e:
                     logger.error(f"[{cls.site_name}] Failed to create proxy auth extension, falling back: {e}")
                     options.add_argument(f'--proxy-server={proxy_url}')
             else:
                 options.add_argument(f'--proxy-server={proxy_url}')
 
+        original_timeout = socket.getdefaulttimeout()
+        socket_timeout = 10
         try:
-            logger.debug(f"[{cls.site_name}] Creating new Selenium driver for thread ID: {thread_id}")
+            # 드라이버 생성 과정에만 10초 타임아웃 적용
+            socket.setdefaulttimeout(socket_timeout)
+
+            logger.debug(f"[{cls.site_name}] Connecting to Selenium at: {selenium_url} (10s socket timeout)")
             driver = webdriver.Remote(command_executor=selenium_url, options=options)
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-            with cls._lock:
-                cls._drivers[thread_id] = driver
-            return driver
-        except Exception as e:
-            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패 (thread: {thread_id}): {e}")
+            cls._driver = driver
+            return cls._driver
+
+        except (socket.timeout, TimeoutError) as e:
+            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 시간이 {socket_timeout}초를 초과했습니다: {e}")
+            cls._quit_selenium_driver()
+            raise WebDriverException("Selenium 서버 연결 시간 초과") from e
+        except WebDriverException as e:
+            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패: {e}")
+            cls._quit_selenium_driver()
             raise
+        finally:
+            socket.setdefaulttimeout(original_timeout)
+
 
     @classmethod
-    def _quit_selenium_driver(cls, thread_id):
-        with cls._lock:
-            driver = cls._drivers.pop(thread_id, None)
-            cls._dynamic_suffixes.pop(thread_id, None)
-
-        if driver:
-            logger.debug(f"[{cls.site_name}] Quitting Selenium driver for thread ID: {thread_id}")
+    def _quit_selenium_driver(cls):
+        if cls._driver is not None:
             try:
-                driver.quit()
+                cls._driver.quit()
             except Exception as e:
-                logger.warning(f"[{cls.site_name}] Exception during driver.quit(): {e}")
+                pass
+            finally:
+                cls._driver = None
+
 
     @classmethod
     def _get_page_content(cls, driver, url, wait_for_locator):
-        timeout = cls.SELENIUM_TIMEOUT
         driver.get(url)
-        WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
-        return html.fromstring(driver.page_source), driver.page_source
+        WebDriverWait(driver, cls.SELENIUM_TIMEOUT).until(EC.presence_of_element_located(wait_for_locator))
+        page_source = driver.page_source
+        if "お探しのページは見つかりませんでした。" in page_source:
+            return None, page_source
+        return html.fromstring(page_source), page_source
 
-    @classmethod
-    def _ensure_dynamic_suffix(cls, driver):
-        thread_id = driver.session_id
-        with cls._lock:
-            if thread_id in cls._dynamic_suffixes:
-                return cls._dynamic_suffixes[thread_id]
-
-        logger.debug(f"[{cls.site_name}] Fetching dynamic suffix for session: {thread_id[:8]}...")
-
-        # 연령 확인 자동화
-        #if not driver.get_cookie('wei6H'):
-        #    driver.get(cls.site_base_url)
-        #    try:
-        #        age_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//a[@data-button="yes"]')))
-        #        age_button.click()
-        #        WebDriverWait(driver, 5).until(lambda d: d.get_cookie('wei6H') is not None)
-        #        logger.debug(f"[{cls.site_name}] Age verification successful for session: {thread_id[:8]}.")
-        #    except TimeoutException:
-        #        logger.debug(f"[{cls.site_name}] Age confirmation button not found.")
-
-        list_page_wait_locator = (By.XPATH, '//section[contains(@class, "c-neoItem-1000")]')
-        tree, _ = cls._get_page_content(driver, cls.site_base_url, wait_for_locator=list_page_wait_locator)
-
-        suffix = "?dref=search_id" # 기본값
-        if tree is not None:
-            for href in tree.xpath('//a[starts-with(@href, "/article/")]/@href'):
-                if '?dref=' in href:
-                    suffix = f"?{urlparse(href).query}"; break
-            if suffix == "?dref=search_id": # dref 못 찾았으면 tag 찾기
-                for href in tree.xpath('//a[starts-with(@href, "/article/")]/@href'):
-                    if '?tag=' in href:
-                        suffix = f"?{urlparse(href).query}"; break
-
-        logger.debug(f"[{cls.site_name}] Found suffix '{suffix}' for session: {thread_id[:8]}.")
-        with cls._lock:
-            cls._dynamic_suffixes[thread_id] = suffix
-        return suffix
 
     @staticmethod
     def _extract_fc2com_title(h3_element):
         return ' '.join(h3_element.xpath(".//text()")).strip() if h3_element is not None else ""
+
 
     @classmethod
     def _normalize_url(cls, src, base_url, upgrade_size=True):
@@ -366,10 +356,9 @@ class SiteFc2com(SiteAvBase):
             if match := re.search(r'/w(\d+)/', src):
                 if int(match.group(1)) < 600:
                     normalized_src = src.replace(f'/w{match.group(1)}/', '/w600/')
-                    logger.debug(f"[{cls.site_name}] Image URL width upgraded: {src} -> {normalized_src}")
 
         if normalized_src.startswith('//'): return 'https:' + normalized_src
-        if normalized_src.startswith('/'): return urljoin(base_url, normalized_src)
+        if normalized_src.startswith('/'): return urljoin(base_url, src)
         return normalized_src
 
     @classmethod
