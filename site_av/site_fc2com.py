@@ -3,6 +3,7 @@ import re
 import traceback
 import time
 from urllib.parse import urljoin, urlparse
+from threading import Lock
 import base64
 import zipfile
 import socket
@@ -38,7 +39,7 @@ class SiteFc2com(SiteAvBase):
 
     _dynamic_suffix = "?dref=search_id"
     _page_source_cache = {}
-    _driver = None
+    _cache_lock = Lock() # 캐시 딕셔너리 접근을 보호하기 위한 Lock
 
     @classmethod
     def search(cls, keyword, manual=False):
@@ -49,11 +50,13 @@ class SiteFc2com(SiteAvBase):
             logger.warning(f"[{cls.site_name}] Selenium URL이 설정되지 않아 비활성화되었습니다.")
             return {'ret': 'no_match', 'data': []}
 
+        driver = None
         try:
             driver = cls._get_selenium_driver()
 
             match = re.search(r'(\d{6,7})', keyword)
-            if not match: return {'ret': 'success', 'data': []}
+            if not match:
+                return {'ret': 'success', 'data': []}
 
             code_part = match.group(1)
             search_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
@@ -62,10 +65,12 @@ class SiteFc2com(SiteAvBase):
             tree, page_source_text = cls._get_page_content(driver, search_url, wait_for_locator=detail_page_wait_locator)
 
             if page_source_text:
-                cls._page_source_cache[code_part] = (page_source_text, time.time())
+                with cls._cache_lock:
+                    cls._page_source_cache[code_part] = (page_source_text, time.time())
                 logger.debug(f"[{cls.site_name}] Page source for '{code_part}' cached.")
 
-            if tree is None: return {'ret': 'no_match', 'data': []}
+            if tree is None:
+                return {'ret': 'no_match', 'data': []}
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code_part
@@ -74,7 +79,8 @@ class SiteFc2com(SiteAvBase):
 
             if h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
                 item.title = cls._extract_fc2com_title(h3_title[0])
-            else: item.title = item.ui_code
+            else:
+                item.title = item.ui_code
 
             if manual:
                 item.title_ko = item.title
@@ -96,22 +102,24 @@ class SiteFc2com(SiteAvBase):
         except Exception as e:
             logger.error(f'[{cls.site_name} Search] Exception: {e}')
             logger.error(traceback.format_exc())
-
-            cls._quit_selenium_driver()
             return {'ret': 'exception', 'data': str(e)}
+        finally:
+            if driver:
+                cls._quit_selenium_driver(driver)
 
 
     @classmethod
     def info(cls, code, fp_meta_mode=False):
-        if not is_selenium_available or not cls.config.get('selenium_url'):
-            return {'ret': 'error'}
+        if not is_selenium_available:
+            return {'ret': 'error', 'data': 'Selenium library is not installed.'}
+        if not cls.config.get('selenium_url'):
+            return {'ret': 'error', 'data': 'Selenium URL is not set.'}
 
         try:
             entity = cls.__info(code, fp_meta_mode)
             return {'ret': 'success', 'data': entity.as_dict()} if entity else {'ret': 'error'}
         except Exception as e:
-            logger.exception(f"[{cls.site_name} info] Unhandled exception: {e}")
-            cls._quit_selenium_driver()
+            logger.exception(f"[{cls.site_name} info] Unhandled exception in info: {e}")
             return {'ret': 'exception', 'data': str(e)}
 
 
@@ -119,22 +127,28 @@ class SiteFc2com(SiteAvBase):
     def __info(cls, code, fp_meta_mode=False):
         code_part = code[len(cls.module_char) + len(cls.site_char):]
         tree = None
+        driver = None
 
-        if code_part in cls._page_source_cache:
-            cached_source, timestamp = cls._page_source_cache[code_part]
-            if (time.time() - timestamp) < cls.CACHE_EXPIRATION_SECONDS:
-                logger.debug(f"[{cls.site_name} Info] Using valid cache for '{code_part}'.")
-                tree = html.fromstring(cached_source)
-                del cls._page_source_cache[code_part]
-            else:
-                logger.debug(f"[{cls.site_name} Info] Cache for '{code_part}' has expired.")
-                del cls._page_source_cache[code_part]
+        with cls._cache_lock:
+            if code_part in cls._page_source_cache:
+                cached_source, timestamp = cls._page_source_cache[code_part]
+                if (time.time() - timestamp) < cls.CACHE_EXPIRATION_SECONDS:
+                    logger.debug(f"[{cls.site_name} Info] Using valid cache for '{code_part}'.")
+                    tree = html.fromstring(cached_source)
+                    del cls._page_source_cache[code_part]
+                else:
+                    logger.debug(f"[{cls.site_name} Info] Cache for '{code_part}' has expired.")
+                    del cls._page_source_cache[code_part]
 
         if tree is None:
-            driver = cls._get_selenium_driver()
-            info_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
-            detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
-            tree, _ = cls._get_page_content(driver, info_url, wait_for_locator=detail_page_wait_locator)
+            try:
+                driver = cls._get_selenium_driver()
+                info_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
+                detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
+                tree, _ = cls._get_page_content(driver, info_url, wait_for_locator=detail_page_wait_locator)
+            finally:
+                if driver:
+                    cls._quit_selenium_driver(driver)
 
         if tree is None: return None
 
@@ -189,16 +203,8 @@ class SiteFc2com(SiteAvBase):
 
     @classmethod
     def _get_selenium_driver(cls):
-        if cls._driver is not None:
-            try:
-                _ = cls._driver.current_url
-                return cls._driver
-            except Exception as e:
-                logger.warning(f"[{cls.site_name}] Existing driver is not responding, creating a new one. Reason: {e}")
-                cls._quit_selenium_driver()
-
         if not is_selenium_available:
-            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다.")
+            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다. (pip install 'selenium<4.10')")
 
         selenium_url = cls.config.get('selenium_url')
         if not selenium_url:
@@ -216,42 +222,21 @@ class SiteFc2com(SiteAvBase):
         options.add_argument("--disable-infobars")
         options.add_argument('--disable-blink-features=AutomationControlled')
 
-        class SeleniumTimeoutException(Exception):
-            pass
-
-        def handler(signum, frame):
-            raise SeleniumTimeoutException("Selenium 드라이버 생성 시간이 초과되었습니다.")
-
         if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
             proxy_url = cls.config["proxy_url"]
             # logger.debug(f"[{cls.site_name}] Selenium using proxy: {proxy_url}")
-
             if '@' in proxy_url:
                 try:
                     parsed_proxy = urlparse(proxy_url)
-                    proxy_host = parsed_proxy.hostname
-                    proxy_port = parsed_proxy.port
-                    proxy_user = parsed_proxy.username
-                    proxy_pass = parsed_proxy.password
-                    proxy_scheme = parsed_proxy.scheme if parsed_proxy.scheme else 'http'
+                    proxy_host, proxy_port = parsed_proxy.hostname, parsed_proxy.port
+                    proxy_user, proxy_pass = parsed_proxy.username, parsed_proxy.password
+                    proxy_scheme = parsed_proxy.scheme or 'http'
 
                     manifest_json = """
                     {
-                        "version": "1.0.0",
-                        "manifest_version": 2,
-                        "name": "Chrome Proxy",
-                        "permissions": [
-                            "proxy",
-                            "tabs",
-                            "unlimitedStorage",
-                            "storage",
-                            "<all_urls>",
-                            "webRequest",
-                            "webRequestBlocking"
-                        ],
-                        "background": {
-                            "scripts": ["background.js"]
-                        }
+                        "version": "1.0.0", "manifest_version": 2, "name": "Chrome Proxy",
+                        "permissions": [ "proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking" ],
+                        "background": { "scripts": ["background.js"] }
                     }
                     """
                     background_js = f"""
@@ -259,27 +244,16 @@ class SiteFc2com(SiteAvBase):
                         mode: "fixed_servers",
                         rules: {{
                             singleProxy: {{
-                                scheme: "{proxy_scheme}",
-                                host: "{proxy_host}",
-                                port: parseInt({proxy_port})
+                                scheme: "{proxy_scheme}", host: "{proxy_host}", port: parseInt({proxy_port})
                             }},
                             bypassList: ["localhost", "127.0.0.1", "{urlparse(selenium_url).hostname}"]
                         }}
                     }};
                     chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
                     function callbackFn(details) {{
-                        return {{
-                            authCredentials: {{
-                                username: "{proxy_user}",
-                                password: "{proxy_pass}"
-                            }}
-                        }};
+                        return {{ authCredentials: {{ username: "{proxy_user}", password: "{proxy_pass}" }} }};
                     }}
-                    chrome.webRequest.onAuthRequired.addListener(
-                        callbackFn,
-                        {{urls: ["<all_urls>"]}},
-                        ['blocking']
-                    );
+                    chrome.webRequest.onAuthRequired.addListener(callbackFn,{{urls: ["<all_urls>"]}},['blocking']);
                     """
 
                     zip_buffer = BytesIO()
@@ -289,7 +263,6 @@ class SiteFc2com(SiteAvBase):
 
                     extension_b64 = base64.b64encode(zip_buffer.getvalue()).decode('utf-8')
                     options.add_encoded_extension(extension_b64)
-                    logger.debug(f"[{cls.site_name}] Proxy authentication extension created and added.")
                 except Exception as e:
                     logger.error(f"[{cls.site_name}] Failed to create proxy auth extension, falling back: {e}")
                     options.add_argument(f'--proxy-server={proxy_url}')
@@ -297,39 +270,29 @@ class SiteFc2com(SiteAvBase):
                 options.add_argument(f'--proxy-server={proxy_url}')
 
         original_timeout = socket.getdefaulttimeout()
-        socket_timeout = 10
         try:
-            # 드라이버 생성 과정에만 10초 타임아웃 적용
-            socket.setdefaulttimeout(socket_timeout)
-
-            logger.debug(f"[{cls.site_name}] Connecting to Selenium at: {selenium_url} (10s socket timeout)")
+            socket.setdefaulttimeout(10)
+            logger.debug(f"[{cls.site_name}] Connecting to Selenium at: {selenium_url} (10s timeout)")
             driver = webdriver.Remote(command_executor=selenium_url, options=options)
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-            cls._driver = driver
-            return cls._driver
-
+            return driver
         except (socket.timeout, TimeoutError) as e:
-            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 시간이 {socket_timeout}초를 초과했습니다: {e}")
-            cls._quit_selenium_driver()
+            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 시간이 10초를 초과했습니다: {e}")
             raise WebDriverException("Selenium 서버 연결 시간 초과") from e
         except WebDriverException as e:
             logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패: {e}")
-            cls._quit_selenium_driver()
             raise
         finally:
             socket.setdefaulttimeout(original_timeout)
 
 
     @classmethod
-    def _quit_selenium_driver(cls):
-        if cls._driver is not None:
+    def _quit_selenium_driver(cls, driver):
+        if driver:
             try:
-                cls._driver.quit()
+                driver.quit()
             except Exception as e:
-                pass
-            finally:
-                cls._driver = None
+                logger.warning(f"[{cls.site_name}] Exception during driver.quit(): {e}")
 
 
     @classmethod
@@ -360,6 +323,7 @@ class SiteFc2com(SiteAvBase):
         if normalized_src.startswith('//'): return 'https:' + normalized_src
         if normalized_src.startswith('/'): return urljoin(base_url, src)
         return normalized_src
+
 
     @classmethod
     def set_config(cls, db):
