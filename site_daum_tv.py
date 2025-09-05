@@ -97,10 +97,8 @@ class SiteDaumTv(SiteDaum):
         show.genre = [home_data['genre']]
         show.episode = home_data['episode']
 
-        term: datetime = cls.parse_date_text(home_data['broadcast_term'])
-        if term:
-            show.premiered = term.strftime('%Y-%m-%d') if term else home_data['broadcast_term']
-            show.year = term.year if term else 1900
+        show.year = home_data.get('year') or ''
+        show.premiered = home_data.get('premiered') or ''
 
         # 포스터
         show.thumb.append(EntityThumb(aspect='poster', value=home_data['image_url'], site='daum', score=-10))

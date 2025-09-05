@@ -221,6 +221,7 @@ class EntitySearchItemTvDaum(object):
         self.broadcast_term = ''
         self.series = []
         self.equal_name = []
+        self.premiered = ''
 
         self.genre = ''
         self.episode = -1
@@ -242,6 +243,7 @@ class EntitySearchItemTvDaum(object):
         tmp += 'series : %s\n' % self.series
 
         tmp += f'genre: {self.genre}\n'
+        tmp += f'premiered: {self.premiered}\n'
 
         return tmp
 
@@ -264,7 +266,7 @@ class EntitySearchItemTvDaum(object):
             'equal_name' : self.equal_name,
             'genre' : self.genre,
             'episode' : self.episode,
-
+            'premiered' : self.premiered
         }
 
 
