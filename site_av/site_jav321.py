@@ -94,7 +94,12 @@ class SiteJav321(SiteAvBase):
                     parsed_onerror_url = cls._process_jav321_url_from_attribute(onerror_attr)
                     if parsed_onerror_url: raw_ps_url = parsed_onerror_url
 
-            item.image_url = cls._process_jav321_url_from_attribute(raw_ps_url) if raw_ps_url else ""
+            processed_ps_url = cls._process_jav321_url_from_attribute(raw_ps_url) if raw_ps_url else ""
+            item.image_url = processed_ps_url
+
+            if item.code and processed_ps_url:
+                cls._ps_url_cache[item.code] = processed_ps_url
+                # logger.debug(f"Jav321 Search: Cached PS URL for {item.code}: {processed_ps_url}")
 
             date_tags = tree.xpath(f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()')
             date_str = date_tags[0].lstrip(":").strip() if date_tags and date_tags[0].lstrip(":").strip() else "1900-01-01"

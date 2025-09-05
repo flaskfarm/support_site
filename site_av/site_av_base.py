@@ -769,12 +769,12 @@ class SiteAvBase:
 
                 if pre_calculated_target_folder and pre_calculated_url_prefix:
                     # Case 1: 사이트 모듈에서 이미 경로를 계산해 준 경우 (FC2, 1pondo 등)
-                    logger.debug(f"Using pre-calculated image server path from entity: {pre_calculated_target_folder}")
+                    # logger.debug(f"Using pre-calculated image server path from entity: {pre_calculated_target_folder}")
                     target_folder = pre_calculated_target_folder
                     url_prefix = pre_calculated_url_prefix
                 else:
                     # Case 2: 경로가 없는 경우 (DMM, JavDB 등), 여기서 경로를 새로 계산
-                    logger.debug("No pre-calculated path found. Calculating image server path in SiteAvBase.")
+                    # logger.debug("No pre-calculated path found. Calculating image server path in SiteAvBase.")
                     module_prefix = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
 
                     base_path = cls.config.get('image_server_local_path')
