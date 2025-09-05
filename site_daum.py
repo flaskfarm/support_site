@@ -115,6 +115,7 @@ class SiteDaum(object):
                     if premired:
                         entity.broadcast_term = "~".join(parts)
                         entity.year = premired.year
+                        entity.premiered = premired.strftime("%Y-%m-%d")
                     else:
                         # 나머지 장르 취급
                         entity.genre = text
