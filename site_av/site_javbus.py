@@ -393,7 +393,7 @@ class SiteJavbus(SiteAvBase):
         # 이 값이 get_response_cs로 전달되어 no_verify 인스턴스를 선택하게 함
         kwargs['verify'] = False
 
-        logger.debug(f"Javbus: Using overridden get_response -> get_response_cs for URL: {url}")
+        # logger.debug(f"Javbus: Using overridden get_response -> get_response_cs for URL: {url}")
         return super().get_response_cs(url, **kwargs)
 
 
@@ -404,7 +404,7 @@ class SiteJavbus(SiteAvBase):
         get_response를 오버라이드한 이 클래스의 로직을 타도록 default_jav_image를 호출.
         kwargs를 통해 사용하지 않는 인자(예: site)를 받아 에러를 방지.
         """
-        logger.debug(f"Javbus: Using overridden jav_image (default_jav_image) for URL: {url}")
+        # logger.debug(f"Javbus: Using overridden jav_image (default_jav_image) for URL: {url}")
         return cls.default_jav_image(url, mode)
 
 
