@@ -186,13 +186,25 @@ class SiteJav321(SiteAvBase):
 
         try:
             # === 2. 메타데이터 파싱 ===
-            # --- `_parse_ui_code`를 사용하여 ui_code 초기화 ---
-            url_pid = code[2:]
-            entity.ui_code, _, _ = cls._parse_ui_code(url_pid)
-            entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
-            logger.debug(f"Jav321 Info: Initial identifier from URL ('{url_pid}') parsed as: {entity.ui_code}")
+            if not keyword:
+                try:
+                    cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
+                    keyword = cache.get(code)
+                    if keyword:
+                        logger.debug(f"[{cls.site_name} Info] Restored keyword '{keyword}' from cache for code '{code}'.")
+                except Exception as e:
+                    logger.warning(f"[{cls.site_name} Info] Failed to get keyword from cache: {e}")
 
-            identifier_parsed = True # URL에서 파싱했으므로 True로 시작
+            if keyword:
+                trusted_ui_code, _, _ = cls._parse_ui_code(keyword)
+                logger.debug(f"Jav321 Info: Using trusted UI code '{trusted_ui_code}' from keyword '{keyword}'.")
+            else:
+                url_pid = code[2:]
+                trusted_ui_code, _, _ = cls._parse_ui_code(url_pid)
+                logger.debug(f"Jav321 Info: No keyword. Using UI code '{trusted_ui_code}' from URL part '{url_pid}'.")
+
+            entity.ui_code = trusted_ui_code
+            entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
 
             tagline_h3_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[1]/h3')
             if tagline_h3_nodes:
@@ -222,12 +234,16 @@ class SiteJav321(SiteAvBase):
                     if current_key == "品番":
                         pid_value_raw = (b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0].strip()
                         if pid_value_raw:
-                            # --- 페이지의 "品番"도 전역 파서로 재확인/교정 ---
-                            parsed_pid, _, _ = cls._parse_ui_code(pid_value_raw)
-                            if entity.ui_code.replace('-', '') != parsed_pid.replace('-', ''):
-                                logger.warning(f"Jav321 Info: UI code mismatch! URL='{entity.ui_code}', Page='{parsed_pid}'. Using value from page.")
-                                entity.ui_code = parsed_pid
-                                entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+                            # 페이지의 품번은 검증용으로만 사용.
+                            parsed_pid_from_page, _, _ = cls._parse_ui_code(pid_value_raw)
+                            core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code.upper())
+                            core_page = re.sub(r'[^A-Z0-9]', '', parsed_pid_from_page.upper())
+
+                            if not (core_trusted in core_page or core_page in core_trusted):
+                                logger.warning(f"Jav321 Info: Significant UI code mismatch detected!")
+                                logger.warning(f"  - Trusted UI Code: {trusted_ui_code}")
+                                logger.warning(f"  - Page UI Code (for verification): {parsed_pid_from_page}")
+
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
                         actor_a_tags = b_tag_key_node.xpath("./following-sibling::a[contains(@href, '/star/')]")
@@ -291,10 +307,6 @@ class SiteJav321(SiteAvBase):
                 entity.tagline = cls.trans(cls._clean_value(tagline_candidate_text))
             elif raw_h3_title_text: 
                 entity.tagline = cls.trans(cls._clean_value(raw_h3_title_text))
-
-            if not identifier_parsed:
-                logger.error(f"Jav321: CRITICAL - Identifier parse failed for {code} from any source.")
-                return None
 
             if not entity.tagline and entity.title: entity.tagline = entity.title
             if not entity.plot and entity.tagline: entity.plot = entity.tagline 

@@ -251,24 +251,42 @@ class SiteJavdb(SiteAvBase):
             entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
 
             # === 2. 메타데이터 파싱 ===
-            raw_ui_code = ""
-            # 1. 'ID:' 패널 블록에서 품번을 먼저 시도
-            id_panel_block = tree.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()')
-            if id_panel_block:
-                raw_ui_code = id_panel_block[0].strip()
+            if not keyword:
+                try:
+                    keyword_cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache") # 'jav_censored_...'로 수정
+                    keyword = keyword_cache.get(code)
+                    if keyword:
+                        logger.debug(f"JavDB Info: Restored keyword '{keyword}' from cache for {code}.")
+                except Exception as e_cache:
+                    logger.warning(f"JavDB Info: Failed to get keyword from cache for {code}: {e_cache}")
 
-            # 2. 'ID:'가 없으면, h2 태그의 strong 부분에서 폴백
-            if not raw_ui_code:
-                h2_code_node = tree.xpath('//h2[@class="title is-4"]/strong[1]/text()')
-                if h2_code_node:
-                    raw_ui_code = h2_code_node[0].strip()
-            
-            # 3. 전역 파서로 파싱
-            final_ui_code, _, _ = cls._parse_ui_code(raw_ui_code)
+            # 페이지에서 품번을 추출하여 검증/폴백용으로 준비
+            raw_ui_code_from_page = ""
+            if id_panel_block := tree.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()'):
+                raw_ui_code_from_page = id_panel_block[0].strip()
+            elif h2_code_node := tree.xpath('//h2[@class="title is-4"]/strong[1]/text()'):
+                raw_ui_code_from_page = h2_code_node[0].strip()
 
-            # 4. 최종 ui_code 할당 (파싱 성공 시 파싱된 값, 실패 시 URL 내부 ID)
-            entity.ui_code = final_ui_code.upper() if final_ui_code else original_code_for_url.upper()
+            if keyword:
+                trusted_ui_code, _, _ = cls._parse_ui_code(keyword)
+                logger.debug(f"JavDB Info: Using trusted UI code '{trusted_ui_code}' from keyword '{keyword}'.")
+
+                # 페이지 품번과 교차 검증
+                if raw_ui_code_from_page:
+                    parsed_pid_from_page, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+                    core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code.upper())
+                    core_page = re.sub(r'[^A-Z0-9]', '', parsed_pid_from_page.upper())
+                    if not (core_trusted in core_page or core_page in core_trusted):
+                        logger.warning(f"JavDB Info: Significant UI code mismatch detected!")
+                        logger.warning(f"  - Trusted UI Code: {trusted_ui_code}")
+                        logger.warning(f"  - Page UI Code (for verification): {parsed_pid_from_page}")
+            else:
+                trusted_ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page if raw_ui_code_from_page else original_code_for_url)
+                logger.debug(f"JavDB Info: No keyword. Using UI code '{trusted_ui_code}' from page/URL.")
+
+            entity.ui_code = trusted_ui_code
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+
             current_ui_code_for_image = entity.ui_code.lower()
 
             if '-' in current_ui_code_for_image and current_ui_code_for_image.split('-',1)[0].upper() not in entity.tag:
