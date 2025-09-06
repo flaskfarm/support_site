@@ -166,17 +166,41 @@ class SiteJavbus(SiteAvBase):
             # === 2. 메타데이터 파싱 ===
             info_node = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")[0]
 
-            # 페이지에서 "識別碼" (식별 코드)를 가져옴
+            if not keyword:
+                try:
+                    cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
+                    keyword = cache.get(code)
+                    if keyword:
+                        logger.debug(f"[{cls.site_name} Info] Restored keyword '{keyword}' from cache for code '{code}'.")
+                except Exception as e:
+                    logger.warning(f"[{cls.site_name} Info] Failed to get keyword from cache: {e}")
+
+            # 페이지에서 "識別碼"를 가져와 검증/폴백용으로 준비
             ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/span[not(@class='header')]//text()")
             if not ui_code_val_nodes:
                 ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/text()[normalize-space()]")
             raw_ui_code_from_page = "".join(ui_code_val_nodes).strip()
 
-            # 전역 파서를 사용하여 최종 ui_code 생성
-            final_ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+            if keyword:
+                trusted_ui_code, _, _ = cls._parse_ui_code(keyword)
+                logger.debug(f"JavBus Info: Using trusted UI code '{trusted_ui_code}' from keyword '{keyword}'.")
 
-            entity.ui_code = final_ui_code
-            entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
+                # 페이지 품번과 교차 검증
+                if raw_ui_code_from_page:
+                    parsed_pid_from_page, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+                    core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code.upper())
+                    core_page = re.sub(r'[^A-Z0-9]', '', parsed_pid_from_page.upper())
+                    if not (core_trusted in core_page or core_page in core_trusted):
+                        logger.warning(f"JavBus Info: Significant UI code mismatch detected!")
+                        logger.warning(f"  - Trusted UI Code: {trusted_ui_code}")
+                        logger.warning(f"  - Page UI Code (for verification): {parsed_pid_from_page}")
+            else:
+                # keyword가 없으면 페이지 정보(폴백)를 신뢰.
+                trusted_ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+                logger.debug(f"JavBus Info: No keyword. Using UI code '{trusted_ui_code}' from page.")
+
+            entity.ui_code = trusted_ui_code
+            entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
 
             h3_text = tree.xpath("normalize-space(//div[@class='container']/h3/text())")
             if h3_text.upper().startswith(entity.ui_code):
