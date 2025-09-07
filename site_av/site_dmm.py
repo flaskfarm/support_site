@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import json
 import re
+import traceback
 from urllib.parse import urljoin, quote, urlencode, urlparse
-from lxml import html
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
@@ -14,7 +14,7 @@ from ..constants import AV_STUDIO, AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE
 SITE_BASE_URL = "https://www.dmm.co.jp"
 FANZA_AV_URL = "https://video.dmm.co.jp/av/"
 PTN_SEARCH_CID = re.compile(r"\/cid=(?P<code>.*?)\/")
-CONTENT_TYPE_PRIORITY = ['videoa', 'vr', 'dvd', 'bluray', 'unknown']
+CONTENT_TYPE_PRIORITY = ['videoa', 'vr', 'dvd', 'bluray', 'amateur', 'unknown']
 
 
 class SiteDmm(SiteAvBase):
@@ -76,8 +76,10 @@ class SiteDmm(SiteAvBase):
 
 
         # --- 검색 URL 생성 ---
-        search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': keyword_for_url }
-        search_url = f"{SITE_BASE_URL}/search/?{urlencode(search_params)}"
+        # search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': keyword_for_url }
+        # search_url = f"{SITE_BASE_URL}/search/?{urlencode(search_params)}"
+
+        search_url = f"{SITE_BASE_URL}/search/=/searchstr={quote(keyword_for_url)}/limit=120/sort=rankprofile/"
         logger.debug(f"DMM Search URL: {search_url}")
 
         search_headers = cls.get_request_headers(referer=FANZA_AV_URL)
@@ -120,7 +122,7 @@ class SiteDmm(SiteAvBase):
         ret_temp_before_filtering = []
         score = 60
 
-        for node in lists[:10]:
+        for node in lists[:30]:
             try:
                 item = EntityAVSearch(cls.site_name)
                 href = None; original_ps_url = None; content_type = "unknown" 
@@ -170,9 +172,10 @@ class SiteDmm(SiteAvBase):
                     continue
 
                 is_videoa_path = (hostname == 'video.dmm.co.jp' and '/av/content/' in href)
-                is_dvd_path = "mono/dvd/" in path_from_url # DVD 경로는 기존 로직 유지
+                is_dvd_path = "mono/dvd/" in path_from_url
+                is_amateur_path = (hostname == 'video.dmm.co.jp' and '/amateur/content/' in href)
 
-                if not (is_videoa_path or is_dvd_path):
+                if not (is_videoa_path or is_dvd_path or is_amateur_path):
                     #logger.debug(f"DMM Search Item: URL ('{href}') filtered. Skipping.")
                     continue
 
@@ -196,6 +199,8 @@ class SiteDmm(SiteAvBase):
                     content_type = "videoa"
                 elif is_dvd_path: 
                     content_type = "dvd"
+                elif is_amateur_path:
+                    content_type = "amateur"
                 else:
                     content_type = "unknown"
                 item.content_type = content_type
@@ -223,6 +228,7 @@ class SiteDmm(SiteAvBase):
                 if content_type == 'dvd': type_prefix = "[DVD] "
                 elif content_type == 'videoa': type_prefix = "[Digital] "
                 elif content_type == 'bluray': type_prefix = "[Blu-ray] "
+                elif content_type == 'amateur': type_prefix = "[Amateur] "
 
                 # 3. item.title 설정
                 title_p_tags_node = node.xpath('.//p[contains(@class, "text-link") and contains(@class, "line-clamp-2")]')
@@ -415,12 +421,21 @@ class SiteDmm(SiteAvBase):
 
         logger.debug(f"DMM Search: Variant filtering complete. Items after: {len(final_filtered_list)}")
 
-        # --- 3단계: 최종 결과 처리 ---
-        logger.debug(f"DMM Search: Filtered result count: {len(final_filtered_list)} for '{original_keyword}'")
-        
-        # 재시도 판단 및 실행 로직 (기존 위치에서 여기로 이동)
-        if not final_filtered_list and not is_retry and label_part_for_retry and num_part_for_retry:
-            logger.debug(f"DMM Search: No results after filtering for '{keyword_for_url}'. Retrying with 3-digit padding.")
+        # --- 3단계: 최종 결과 처리 및 재시도 판단 ---
+        should_retry = False
+        if not final_filtered_list:
+            should_retry = True
+            logger.debug("DMM Search: No results after filtering. Preparing to retry.")
+        else:
+            # 최고 점수 확인
+            max_score = max(item.get("score", 0) for item in final_filtered_list)
+            if max_score < 80:
+                should_retry = True
+                logger.debug(f"DMM Search: Max score is {max_score} (under 80). Preparing to retry for better results.")
+
+        # 재시도 실행 로직
+        if should_retry and not is_retry and label_part_for_retry and num_part_for_retry:
+            logger.debug(f"DMM Search: Retrying with 3-digit padding for '{original_keyword}'.")
             return cls.__search(
                 keyword=original_keyword,
                 do_trans=do_trans, 
@@ -428,13 +443,14 @@ class SiteDmm(SiteAvBase):
                 is_retry=True # 재시도임을 명시
             )
 
-        # 재시도하지 않는 경우, 최종 정렬하여 반환
         sorted_result = sorted(final_filtered_list, key=lambda k: k.get("score", 0), reverse=True)
+
         if sorted_result:
             log_count = min(len(sorted_result), 10)
-            logger.debug(f"DMM Search: Top {log_count} results for '{original_keyword}':")
+            log_prefix = "[RETRY RESULT]" if is_retry else "[INITIAL RESULT]"
+            logger.debug(f"DMM Search: {log_prefix} Top {log_count} results for '{original_keyword}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
-                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
+                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title')}'")
 
         return sorted_result
 
@@ -506,8 +522,8 @@ class SiteDmm(SiteAvBase):
         api_data = None
 
         # === 1. 타입별 데이터 소스 분기 ===
-        if entity.content_type == 'videoa' or entity.content_type == 'vr':
-            # --- 새로운 방식: videoa/vr은 GraphQL API 호출 ---
+        if entity.content_type in ['videoa', 'vr', 'amateur']:
+            # --- videoa/vr은 GraphQL API 호출 ---
             # logger.debug(f"DMM Info (API): Getting info for {code} (type: {entity.content_type})")
 
             try:
@@ -534,9 +550,21 @@ class SiteDmm(SiteAvBase):
                 # logger.debug("DMM Info (API): Step 2/3 'Maintenance' API call completed.")
 
                 # 3. 본편 데이터 요청 API 호출
+                # content_type에 따라 API 변수 동적 설정
+                variables = {
+                    "id": cid_part,
+                    "isLoggedIn": False,
+                    "isSP": False
+                }
+                if entity.content_type == 'amateur':
+                    variables.update({"isAmateur": True, "isAnime": False, "isAv": False, "isCinema": False})
+                else:  # videoa, vr
+                    variables.update({"isAmateur": False, "isAnime": False, "isAv": True, "isCinema": False})
+
                 query_content = "query ContentPageData($id: ID!, $isLoggedIn: Boolean!, $isAmateur: Boolean!, $isAnime: Boolean!, $isAv: Boolean!, $isCinema: Boolean!, $isSP: Boolean!) {\n  ppvContent(id: $id) {\n    ...ContentData\n    __typename\n  }\n  reviewSummary(contentId: $id) {\n    ...ReviewSummary\n    __typename\n  }\n  ...basketCountFragment\n}\nfragment ContentData on PPVContent {\n  id\n  floor\n  title\n  isExclusiveDelivery\n  releaseStatus\n  description\n  notices\n  isNoIndex\n  isAllowForeign\n  announcements {\n    body\n    __typename\n  }\n  featureArticles {\n    link {\n      url\n      text\n      __typename\n    }\n    __typename\n  }\n  packageImage {\n    largeUrl\n    mediumUrl\n    __typename\n  }\n  sampleImages {\n    number\n    imageUrl\n    largeImageUrl\n    __typename\n  }\n  products {\n    ...ProductData\n    __typename\n  }\n  mostPopularContentImage {\n    ... on ContentSampleImage {\n      __typename\n      largeImageUrl\n      imageUrl\n    }\n    ... on PackageImage {\n      __typename\n      largeUrl\n      mediumUrl\n    }\n    __typename\n  }\n  priceSummary {\n    lowestSalePrice\n    lowestPrice\n    campaign {\n      title\n      id\n      endAt\n      __typename\n    }\n    __typename\n  }\n  weeklyRanking: ranking(term: Weekly)\n  monthlyRanking: ranking(term: Monthly)\n  wishlistCount\n  sample2DMovie {\n    fileID\n    __typename\n  }\n  sampleMovie {\n    has2d\n    hasVr\n    __typename\n  }\n  ...AmateurAdditionalContentData @include(if: $isAmateur)\n  ...AnimeAdditionalContentData @include(if: $isAnime)\n  ...AvAdditionalContentData @include(if: $isAv)\n  ...CinemaAdditionalContentData @include(if: $isCinema)\n  __typename\n}\nfragment ProductData on PPVProduct {\n  id\n  priority\n  deliveryUnit {\n    id\n    priority\n    streamMaxQualityGroup\n    downloadMaxQualityGroup\n    __typename\n  }\n  priceInclusiveTax\n  sale {\n    priceInclusiveTax\n    __typename\n  }\n  expireDays\n  utilization @include(if: $isLoggedIn) {\n    isTVODRentalPlayable\n    status\n    __typename\n  }\n  licenseType\n  shopName\n  availableCoupon {\n    name\n    expirationPolicy {\n      ... on ProductCouponExpirationAt {\n        expirationAt\n        __typename\n      }\n      ... on ProductCouponExpirationDay {\n        expirationDays\n        __typename\n      }\n      __typename\n    }\n    expirationAt\n    discountedPrice\n    minPayment\n    destinationUrl\n    __typename\n  }\n  __typename\n}\nfragment AmateurAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  amateurActress {\n    id\n    name\n    imageUrl\n    age\n    waist\n    bust\n    bustCup\n    height\n    hip\n    relatedContents {\n      id\n      title\n      __typename\n    }\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment PlayableInfo on PlayableInfo {\n  playableDevices {\n    deviceDeliveryUnits {\n      id\n      deviceDeliveryQualities {\n        isDownloadable\n        isStreamable\n        __typename\n      }\n      __typename\n    }\n    device\n    name\n    priority\n    __typename\n  }\n  deviceGroups {\n    id\n    devices {\n      deviceDeliveryUnits {\n        deviceDeliveryQualities {\n          isStreamable\n          isDownloadable\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n  vrViewingType\n  __typename\n}\nfragment AnimeAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment AvAdditionalContentData on PPVContent {\n  deliveryStartDate\n  makerReleasedAt\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    isBookmarked @include(if: $isLoggedIn)\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  contentType\n  relatedWords\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment CinemaAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  authors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment ReviewSummary on ReviewSummary {\n  average\n  total\n  withCommentTotal\n  distributions {\n    total\n    withCommentTotal\n    rating\n    __typename\n  }\n  __typename\n}\nfragment basketCountFragment on Query {\n  basketCount: legacyBasket @include(if: $isSP) {\n    total\n    __typename\n  }\n  __typename\n}"
-                payload_content = {"operationName":"ContentPageData", "query":query_content, "variables":{"id":cid_part,"isAmateur":False,"isAnime":False,"isAv":True,"isCinema":False,"isLoggedIn":False,"isSP":False}}
+                payload_content = {"operationName":"ContentPageData", "query":query_content, "variables":variables}
                 res = cls.get_response(api_url, method='POST', headers=headers, json=payload_content)
+
                 logger.debug(f"DMM Info (API): Step 3/3 'ContentPageData' API call completed: {code} (type: {entity.content_type})")
 
                 if res.status_code != 200:
@@ -548,7 +576,7 @@ class SiteDmm(SiteAvBase):
             except Exception as e:
                 logger.exception(f"DMM API call sequence failed for {code}: {e}"); return None
 
-        elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
+        elif entity.content_type in ['dvd', 'bluray']:
             # --- 기존 방식: dvd/bluray는 HTML 페이지 파싱 ---
             logger.debug(f"DMM Info (HTML): Getting info for {code} (type: {entity.content_type})")
             detail_url = SITE_BASE_URL + f"/mono/dvd/-/detail/=/cid={cid_part}/"
@@ -566,7 +594,6 @@ class SiteDmm(SiteAvBase):
         identifier_parsed = False
         try:
             if api_data:
-                # --- 새로운 방식: JSON에서 데이터 매핑 ---
                 content = api_data.get('ppvContent')
                 review = api_data.get('reviewSummary', {})
 
@@ -579,9 +606,12 @@ class SiteDmm(SiteAvBase):
                     logger.debug(f"DMM Info (API): Content type updated to 'vr' for {code}")
 
                 title_val = content.get('title')
-                if title_val: entity.tagline = cls.trans(title_val)
+                if title_val: 
+                    entity.tagline = cls.trans(cls.A_P(title_val))
+
                 plot_val = content.get('description')
-                if plot_val: entity.plot = cls.trans(plot_val)
+                if plot_val: 
+                    entity.plot = cls.trans(cls.A_P(plot_val))
 
                 id_to_parse = content.get('makerContentId') or cid_part
                 parsed_ui_code, _, _ = cls._parse_ui_code(id_to_parse, entity.content_type)
@@ -610,10 +640,17 @@ class SiteDmm(SiteAvBase):
                         except (ValueError, TypeError):
                             logger.warning(f"DMM API: Could not parse rating value: {rating_val}")
 
-                actresses_list = content.get('actresses')
-                if actresses_list:
+                actors_list_raw = []
+                if entity.content_type == 'amateur':
+                    amateur_actress_obj = content.get('amateurActress')
+                    if amateur_actress_obj:
+                        actors_list_raw.append(amateur_actress_obj)
+                else:  # videoa, vr
+                    actors_list_raw = content.get('actresses', [])
+
+                if actors_list_raw:
                     actors = []
-                    for actress in actresses_list:
+                    for actress in actors_list_raw:
                         if isinstance(actress, dict) and actress.get('name'):
                             actors.append(EntityActor(actress['name']))
                     entity.actor = actors
@@ -650,9 +687,11 @@ class SiteDmm(SiteAvBase):
                                 entity.genre.append(g_ko)
 
             elif tree is not None:
-                # --- 기존 방식: HTML에서 데이터 파싱 (dvd/bluray) ---
+                # --- HTML에서 데이터 파싱 (dvd/bluray) ---
                 title_node_dvd = tree.xpath('//h1[@id="title"]')
-                if title_node_dvd: entity.tagline = cls.trans(title_node_dvd[0].text_content().strip())
+                if title_node_dvd:
+                    title_text_raw = title_node_dvd[0].text_content().strip()
+                    entity.tagline = cls.trans(cls.A_P(title_text_raw))
                 info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
                 table_rows_dvd = tree.xpath(info_table_xpath_dvd)
                 premiered_shouhin_dvd, premiered_hatsubai_dvd, premiered_haishin_dvd = None, None, None   
@@ -773,8 +812,9 @@ class SiteDmm(SiteAvBase):
                 plot_xpath_dvd_specific = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()'
                 plot_nodes_dvd_specific = tree.xpath(plot_xpath_dvd_specific)
                 if plot_nodes_dvd_specific:
-                    plot_text = "\n".join([p.strip() for p in plot_nodes_dvd_specific if p.strip()]).split("※")[0].strip()
-                    if plot_text: entity.plot = cls.trans(plot_text)
+                    plot_text_raw = "\n".join([p.strip() for p in plot_nodes_dvd_specific if p.strip()]).split("※")[0].strip()
+                    if plot_text_raw: 
+                        entity.plot = cls.trans(cls.A_P(plot_text_raw))
                 else: 
                     logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
 
@@ -821,6 +861,33 @@ class SiteDmm(SiteAvBase):
         elif fp_meta_mode:
             # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
             pass
+
+        # === 5. Landscape(PL) 이미지 폴백 로직 ===
+        try:
+            has_landscape = any(thumb.aspect == 'landscape' for thumb in entity.thumb)
+
+            if not has_landscape:
+                logger.debug(f"DMM Info ({entity.content_type}): No landscape image found for {code}. Applying fallback.")
+                
+                poster_thumb = next((thumb for thumb in entity.thumb if thumb.aspect == 'poster'), None)
+
+                # 1순위: 포스터 이미지가 있다면, 그것을 landscape으로 복사
+                if poster_thumb and poster_thumb.value:
+                    logger.debug("DMM PL Fallback: Using poster image as landscape.")
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=poster_thumb.value))
+
+                # 2순위: 포스터도 없고, 팬아트가 있다면, 첫 번째 팬아트를 landscape으로 사용
+                elif not poster_thumb and entity.fanart:
+                    logger.debug("DMM PL Fallback: No poster. Using first fanart image as landscape.")
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=entity.fanart[0]))
+
+                # 3순위: 아무 이미지도 없을 경우
+                else:
+                    logger.warning(f"DMM PL Fallback: No poster or fanart available to use as a fallback for {code}.")
+
+        except Exception as e_fallback:
+            logger.error(f"DMM Info: Error during landscape fallback logic for {code}: {e_fallback}")
+            logger.error(traceback.format_exc())
 
         logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}, SkipImage: {fp_meta_mode}")
         return entity
@@ -1087,17 +1154,17 @@ class SiteDmm(SiteAvBase):
             return keyword_for_url, "", ""
 
         # --- ID 레이블이 아닌 경우, 기존의 일반 검색어 생성 로직 수행 ---
-
-        # 전역 파서를 사용하여 일반적인 품번을 먼저 정규화 시도
         parsed_ui_code, _label_for_score, _num_raw_for_score = cls._parse_ui_code(temp_keyword, 'unknown')
 
-        # 파싱 결과가 있고, 하이픈을 포함하는 '레이블-숫자' 형태인지 확인
         if parsed_ui_code and '-' in parsed_ui_code:
             parts = parsed_ui_code.split('-')
             label_part = parts[0]
             num_part = parts[1]
 
-            # cpz69-h005 와 같은 케이스 처리
+            # 재시도용 정보도 여기서 채워줌 (핵심 수정)
+            label_part_for_retry = label_part
+            num_part_for_retry = num_part
+
             if num_part.isdigit():
                 padding_length = 3 if is_retry else 5
                 keyword_for_url = label_part.lower() + num_part.zfill(padding_length)
@@ -1105,8 +1172,8 @@ class SiteDmm(SiteAvBase):
                 keyword_for_url = label_part.lower() + num_part.lower()
 
             logger.debug(f"DMM Keyword Gen: Parsed '{temp_keyword}' -> '{parsed_ui_code}' -> Search keyword '{keyword_for_url}'")
-            # _parse_ui_code가 재시도를 위한 정보는 제공하지 않으므로, 빈 값을 반환
-            return keyword_for_url, "", ""
+            # 재시도 정보를 포함하여 반환하도록 변경
+            return keyword_for_url, label_part_for_retry, num_part_for_retry
 
         # --- _parse_ui_code가 유효한 결과를 내지 못했을 경우, 기존의 일반 로직을 폴백으로 사용 ---
 
