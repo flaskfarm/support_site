@@ -188,7 +188,8 @@ class Site1PondoTv(SiteAvBase):
                 entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
             entity.fanart = arts_urls
 
-        entity.tagline = cls.trans(json_data.get('Title', ''))
+        raw_tagline = json_data.get('Title', '')
+        entity.tagline = cls.trans(cls.A_P(raw_tagline))
 
         # actor
         actresses = json_data.get('ActressesJa', [])
@@ -211,7 +212,8 @@ class Site1PondoTv(SiteAvBase):
         except (ValueError, TypeError): pass
 
         # plot
-        entity.plot = cls.trans(json_data.get('Desc', ''))
+        raw_plot = json_data.get('Desc', '')
+        entity.plot = cls.trans(cls.A_P(raw_plot))
 
         # 제작사
         entity.studio = '1Pondo'

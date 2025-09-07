@@ -140,13 +140,15 @@ class SiteHeyzo(SiteAvBase):
 
             tmp['poster'] = f"https:{json_data['actor']['image']}" if 'actor' in json_data and 'image' in json_data['actor'] else None
             tmp['landscape'] = f"https:{json_data['image']}"
-            tmp['tagline'] = unicodedata.normalize('NFKC', json_data['name'])
+            raw_tagline = unicodedata.normalize('NFKC', json_data['name'])
+            tmp['tagline'] = cls.A_P(raw_tagline)
             tmp['premiered'] = str(parse(json_data['dateCreated']).date())
             tmp['year'] = parse(json_data['dateCreated']).year
             tmp['actor'] = [name.strip() for name in tree.xpath('//div[@id="movie"]//table[@class="movieInfo"]//tr[@class="table-actor"]//span/text()')]
             tmp['genre'] = tree.xpath('//tr[@class="table-tag-keyword-small"]//ul[@class="tag-keyword-list"]//li/a/text()')
             if json_data.get('description', '') != '':
-                tmp['plot'] = unicodedata.normalize('NFKC', json_data['description']).strip()
+                raw_plot = unicodedata.normalize('NFKC', json_data['description']).strip()
+                tmp['plot'] = cls.A_P(raw_plot)
             else:
                 tmp['plot'] = tmp['tagline']
 
@@ -160,14 +162,16 @@ class SiteHeyzo(SiteAvBase):
 
             tmp['poster'] = f'https://m.heyzo.com/contents/3000/{code_part}/images/thumbnail.jpg'
             tmp['landscape'] = f'https://m.heyzo.com/contents/3000/{code_part}/images/player_thumbnail.jpg'
-            tmp['tagline'] = m_tree.xpath('//div[@id="container"]/h1/text()')[0].strip()
+            raw_tagline_mobile = m_tree.xpath('//div[@id="container"]/h1/text()')[0].strip()
+            tmp['tagline'] = cls.A_P(raw_tagline_mobile)
             date_str = m_tree.xpath('//*[@id="moviedetail"]/div[2]/span/text()')[1].strip()
             tmp['premiered'] = str(parse(date_str).date())
             tmp['year'] = parse(date_str).year
             tmp['actor'] = m_tree.xpath('//*[@id="moviedetail"]/div[1]/strong/text()')[0].strip().split()
             tmp['genre'] = m_tree.xpath('//*[@id="keyword"]/ul//li/a/text()')
             try:
-                tmp['plot'] = m_tree.xpath('//*[@id="memo"]/text()')[0]
+                raw_plot_mobile = m_tree.xpath('//*[@id="memo"]/text()')[0]
+                tmp['plot'] = cls.A_P(raw_plot_mobile)
             except:
                 tmp['plot'] = tmp['tagline']
 

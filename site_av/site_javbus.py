@@ -203,10 +203,15 @@ class SiteJavbus(SiteAvBase):
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
 
             h3_text = tree.xpath("normalize-space(//div[@class='container']/h3/text())")
-            if h3_text.upper().startswith(entity.ui_code):
-                entity.tagline = cls.trans(h3_text[len(entity.ui_code):].strip())
+            cleaned_h3_text = cls.A_P(h3_text)
+            
+            if cleaned_h3_text.upper().startswith(entity.ui_code):
+                entity.tagline = cls.trans(cleaned_h3_text[len(entity.ui_code):].strip())
             else:
-                entity.tagline = cls.trans(h3_text)
+                entity.tagline = cls.trans(cleaned_h3_text)
+
+            if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
+                entity.plot = entity.tagline
 
             all_p_tags_in_info = info_node.xpath("./p")
             genre_header_p_node = actor_header_p_node = None

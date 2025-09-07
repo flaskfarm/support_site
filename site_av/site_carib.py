@@ -177,7 +177,9 @@ class SiteCarib(SiteAvBase):
 
         # 나머지 메타데이터 파싱
         title_node = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')
-        entity.tagline = cls.trans(title_node[0].strip()) if title_node else ""
+        if title_node:
+            cleaned_tagline = cls.A_P(title_node[0].strip())
+            entity.tagline = cls.trans(cleaned_tagline)
 
         for actor in tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()'):
             entity.actor.append(EntityActor(actor))
@@ -189,7 +191,9 @@ class SiteCarib(SiteAvBase):
             entity.genre.append(cls.get_translated_tag('uncen_tags', item))
 
         plot_node = tree.xpath('//p[@itemprop="description"]/text()')
-        entity.plot = cls.trans(plot_node[0]) if plot_node else ""
+        if plot_node:
+            cleaned_plot = cls.A_P(plot_node[0])
+            entity.plot = cls.trans(cleaned_plot)
 
         entity.studio = 'Caribbeancom'
 
