@@ -220,8 +220,9 @@ class SiteJav321(SiteAvBase):
             plot_div_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[3]/div')
             if plot_div_nodes:
                 plot_full_text = plot_div_nodes[0].text_content().strip()
-                if plot_full_text: 
-                    entity.plot = cls.trans(cls._clean_value(plot_full_text))
+                if plot_full_text:
+                    cleaned_plot = cls.A_P(cls._clean_value(plot_full_text))
+                    entity.plot = cls.trans(cleaned_plot)
 
             info_container_node_list = tree.xpath('//div[contains(@class, "panel-body")]//div[contains(@class, "col-md-9")]')
             if info_container_node_list:
@@ -304,9 +305,11 @@ class SiteJav321(SiteAvBase):
                 tagline_candidate_text = raw_h3_title_text
                 if raw_h3_title_text.upper().startswith(ui_code_for_image.upper()):
                     tagline_candidate_text = raw_h3_title_text[len(ui_code_for_image):].strip()
-                entity.tagline = cls.trans(cls._clean_value(tagline_candidate_text))
+                cleaned_tagline = cls.A_P(cls._clean_value(tagline_candidate_text))
+                entity.tagline = cls.trans(cleaned_tagline)
             elif raw_h3_title_text: 
-                entity.tagline = cls.trans(cls._clean_value(raw_h3_title_text))
+                cleaned_tagline = cls.A_P(cls._clean_value(raw_h3_title_text))
+                entity.tagline = cls.trans(cleaned_tagline)
 
             if not entity.tagline and entity.title: entity.tagline = entity.title
             if not entity.plot and entity.tagline: entity.plot = entity.tagline 

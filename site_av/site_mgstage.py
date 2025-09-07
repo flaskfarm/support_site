@@ -1,5 +1,6 @@
 import re
 import os
+from lxml import html
 
 from ..constants import MGS_CODE_LEN, MGS_LABEL_MAP, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO
 from ..entity_av import EntityAVSearch
@@ -217,8 +218,18 @@ class SiteMgstage(SiteAvBase):
             if h1_tags:
                 h1_text_raw = h1_tags[0]
                 for ptn in PTN_TEXT_SUB: h1_text_raw = ptn.sub("", h1_text_raw)
-                entity.tagline = cls.trans(h1_text_raw.strip())
-            
+                entity.tagline = cls.trans(cls.A_P(h1_text_raw.strip()))
+
+            plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[2]')
+            if plot_nodes:
+                try:
+                    plot_html_raw = html.tostring(plot_nodes[0], encoding='unicode')
+                    cleaned_plot = cls.A_P(plot_html_raw)
+                    if cleaned_plot:
+                        entity.plot = cls.trans(cleaned_plot)
+                except Exception as e_plot:
+                    logger.error(f"MGStage: Failed to parse plot for {code}: {e_plot}")
+
             info_table_xpath = '//div[@class="detail_data"]//tr'
             tr_nodes = tree.xpath(info_table_xpath)
 

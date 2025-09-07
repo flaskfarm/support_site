@@ -977,6 +977,7 @@ class SiteAvBase:
                 elif apply_ps_to_poster:
                     final_image_sources['poster_source'] = ps_url
 
+                # 우선 후보군 탐색
                 if not final_image_sources['poster_source']:
                     poster_candidates_simple = ([pl_url] if pl_url else []) + specific_candidates_on_page
                     im_sm_obj = cls.imopen(ps_url)
@@ -995,29 +996,74 @@ class SiteAvBase:
 
                         im_sm_obj.close()
 
+                # 확장 후보군 탐색
                 if not final_image_sources['poster_source']:
                     all_candidates_advanced = list(dict.fromkeys(([pl_url] if pl_url else []) + other_arts_on_page))
                     im_sm_obj = cls.imopen(ps_url)
                     if im_sm_obj:
-                        for candidate_url in all_candidates_advanced:
-                            im_lg_obj = cls.imopen(candidate_url)
-                            if not im_lg_obj: continue
-                            w, h = im_lg_obj.size; aspect_ratio = w / h if h > 0 else 0
+                        try:
+                            for candidate_url in all_candidates_advanced:
+                                im_lg_obj = cls.imopen(candidate_url)
+                                if not im_lg_obj:
+                                    continue
 
-                            if abs(aspect_ratio - 4/3) < 0.05: # 4:3 비율 (레터박스)
-                                crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
-                                if crop_pos:
-                                    final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"}); break
-                            elif aspect_ratio >= 1.7: # 1.7:1 이상 와이드 (MG-Style)
-                                crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
-                                if crop_pos:
-                                    final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"}); break
-                            else: # 일반 이미지
-                                crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
-                                if crop_pos:
-                                    final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"}); break
-                            if im_lg_obj: im_lg_obj.close()
-                        im_sm_obj.close()
+                                processed_lg_obj = None  # 전처리된 이미지 객체를 담을 변수
+                                crop_pos = None
+
+                                try:
+                                    w, h = im_lg_obj.size
+                                    aspect_ratio = w / h if h > 0 else 0
+
+                                    # Case 1: 4:3 비율 (레터박스 가능성) -> 레터박스 제거 후 비교
+                                    if abs(aspect_ratio - (4/3)) < 0.05:
+                                        logger.debug(f"Advanced Check (4:3 ratio): Removing letterbox for {candidate_url}")
+                                        # 상하 5.33%를 레터박스로 간주하고 제거
+                                        processed_lg_obj = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
+                                        crop_pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj)
+
+                                    # Case 2: 1.7:1 이상 와이드 비율 (MG-Style) -> 오른쪽, 실패 시 왼쪽 비교
+                                    elif aspect_ratio >= 1.7:
+                                        # 2-1. 오른쪽 절반 먼저 시도
+                                        logger.debug(f"Advanced Check (Wide ratio): Cropping right half for {candidate_url}")
+                                        right_half_obj = im_lg_obj.crop((w / 2, 0, w, h))
+                                        try:
+                                            crop_pos = cls.has_hq_poster(im_sm_obj, right_half_obj)
+                                        finally:
+                                            right_half_obj.close()
+
+                                        # 2-2. 오른쪽에서 못 찾았으면 왼쪽 절반 시도
+                                        if not crop_pos:
+                                            logger.debug(f"Advanced Check (Wide ratio): Right half failed. Cropping left half for {candidate_url}")
+                                            left_half_obj = im_lg_obj.crop((0, 0, w / 2, h))
+                                            try:
+                                                crop_pos = cls.has_hq_poster(im_sm_obj, left_half_obj)
+                                            finally:
+                                                left_half_obj.close()
+
+                                    # Case 3: 그 외 모든 일반 비율 이미지 -> 전처리 없이 원본 그대로 비교
+                                    else:
+                                        logger.debug(f"Advanced Check (Normal ratio): Comparing original for {candidate_url}")
+                                        crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
+
+                                    # 비교 성공 시 결과 저장 및 루프 탈출
+                                    if crop_pos:
+                                        logger.info(f"HQ Poster Found! Matched '{candidate_url}' at position '{crop_pos}' after processing.")
+                                        final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
+                                        break  # 성공했으므로 더 이상 후보를 탐색할 필요 없음
+
+                                finally:
+                                    if im_lg_obj:
+                                        im_lg_obj.close()
+                                    if processed_lg_obj:
+                                        processed_lg_obj.close()
+
+                            # for 루프가 break 없이 모두 실행된 후, im_sm_obj를 닫음
+                            else: # no-break
+                                logger.debug("Advanced Check: No HQ poster found in any advanced candidates.")
+
+                        finally:
+                            if im_sm_obj:
+                                im_sm_obj.close()
 
             else:
                 # Case 3: JavDB와 같이 ps_url 없이 pl/arts로 결정해야 하는 경우
@@ -1863,6 +1909,36 @@ class SiteAvBase:
             res = tag
 
         return res
+
+
+    @classmethod
+    def A_P(cls, text: str) -> str:
+        """
+        HTML 태그를 정제하고 기본적인 텍스트를 정리하는 유틸리티 메서드.
+        (A_P는 Anti-Parsing의 약자)
+        """
+        if not text:
+            return ""
+
+        try:
+            import html
+
+            # 1. <br> 태그를 줄바꿈으로 변환
+            text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=re.I)
+
+            # 2. 나머지 모든 HTML 태그 제거
+            text = re.sub(r'</?\s?[^>]+>', '', text)
+
+            # 3. HTML 엔티티 변환
+            text = html.unescape(text)
+
+            # 4. 여러 줄바꿈을 2개로 제한하고 양쪽 끝 공백 제거
+            text = re.sub(r'(\s*\n\s*){3,}', '\n\n', text).strip()
+
+            return text
+        except Exception:
+            # 실패 시 원본 텍스트 반환
+            return text
 
 
     # endregion 유틸

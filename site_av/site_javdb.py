@@ -305,7 +305,7 @@ class SiteJavdb(SiteAvBase):
                         actual_raw_title_text = current_title_node[0].strip()
 
             if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
-                entity.tagline = cls.trans(actual_raw_title_text)
+                entity.tagline = cls.trans(cls.A_P(actual_raw_title_text))
             else: 
                 entity.tagline = entity.ui_code
 

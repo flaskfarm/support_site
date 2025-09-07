@@ -161,7 +161,8 @@ class SiteFc2com(SiteAvBase):
 
         if h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
             raw_title = cls._extract_fc2com_title(h3_title[0])
-            entity.tagline = entity.plot = cls.trans(raw_title)
+            cleaned_text = cls.A_P(raw_title)
+            entity.tagline = entity.plot = cls.trans(cleaned_text)
 
         if date_text := tree.xpath('//p[contains(text(), "Sale Day")]/text()'):
             if match_date := re.search(r'(\d{4})/(\d{2})/(\d{2})', date_text[0]):
