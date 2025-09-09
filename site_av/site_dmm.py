@@ -516,10 +516,29 @@ class SiteDmm(SiteAvBase):
         entity.tag = []
         ui_code_for_image = ""
         entity.content_type = current_content_type
-        
+
         tree = None
         detail_url = None
         api_data = None
+
+        identifier_parsed = False
+        trusted_ui_code_from_keyword = ""
+        trusted_keyword = None
+        if keyword:
+            trusted_keyword = keyword
+        else:
+            try:
+                keyword_cache = F.get_cache('jav_censored_keyword_cache')
+                if keyword_cache:
+                    trusted_keyword = keyword_cache.get(code)
+            except Exception as e_cache:
+                logger.warning(f"DMM Info: Failed to get keyword from cache for {code}: {e_cache}")
+
+        if trusted_keyword:
+            trusted_ui_code_from_keyword, _, _ = cls._parse_ui_code(trusted_keyword)
+            logger.debug(f"DMM Info: Using trusted UI code '{trusted_ui_code_from_keyword}' from keyword/cache '{trusted_keyword}'.")
+            entity.ui_code = trusted_ui_code_from_keyword
+            identifier_parsed = True
 
         # === 1. 타입별 데이터 소스 분기 ===
         if entity.content_type in ['videoa', 'vr', 'amateur']:
@@ -591,7 +610,6 @@ class SiteDmm(SiteAvBase):
                 logger.exception(f"DMM Info (DVD): Exc getting detail page: {e_gt_info_dmm}"); return None
 
         # === 2. 전체 메타데이터 파싱 ===
-        identifier_parsed = False
         try:
             if api_data:
                 content = api_data.get('ppvContent')
@@ -613,12 +631,19 @@ class SiteDmm(SiteAvBase):
                 if plot_val: 
                     entity.plot = cls.trans(cls.A_P(plot_val))
 
-                id_to_parse = content.get('makerContentId') or cid_part
-                parsed_ui_code, _, _ = cls._parse_ui_code(id_to_parse, entity.content_type)
-                entity.ui_code = parsed_ui_code
-                ui_code_for_image = entity.ui_code.lower()
-                entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
-                identifier_parsed = True
+                id_to_parse_from_page = content.get('makerContentId') or cid_part
+                parsed_ui_code_from_page, _, _ = cls._parse_ui_code(id_to_parse_from_page, entity.content_type)
+
+                if identifier_parsed:
+                    core_trusted = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
+                    core_page = re.sub(r'[^A-Z0-9]', '', parsed_ui_code_from_page.upper())
+                    if not (core_trusted in core_page or core_page in core_trusted):
+                        logger.warning(f"DMM Info: Significant UI code mismatch detected!")
+                        logger.warning(f"  - Trusted UI Code (from keyword): {entity.ui_code}")
+                        logger.warning(f"  - Page UI Code (for verification): {parsed_ui_code_from_page}")
+                else:
+                    entity.ui_code = parsed_ui_code_from_page
+                    identifier_parsed = True
 
                 premiered_val = content.get('deliveryStartDate')
                 if premiered_val and isinstance(premiered_val, str):
@@ -712,22 +737,19 @@ class SiteDmm(SiteAvBase):
                         continue
 
                     if "品番" in key_dvd:
-
                         if value_text_all_dvd:
-                            logger.debug(f"DMM Info: Parsed '品番' value from page: '{key_dvd}' for {code}.")
+                            parsed_ui_code_from_page, _, _ = cls._parse_ui_code(value_text_all_dvd, entity.content_type)
 
-                            parsed_ui_code_page, _, _ = cls._parse_ui_code(value_text_all_dvd, entity.content_type)
-                            entity.ui_code = parsed_ui_code_page
-
-                            ui_code_for_image = parsed_ui_code_page.lower()
-                            entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
-                            identifier_parsed = True
-                            # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
-
-                            parsed_label = parsed_ui_code_page.split('-')[0] if '-' in parsed_ui_code_page else parsed_ui_code_page
-                            if entity.tag is None: entity.tag = []
-                            if parsed_label and parsed_label not in entity.tag:
-                                entity.tag.append(parsed_label)
+                            if identifier_parsed:
+                                core_trusted = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
+                                core_page = re.sub(r'[^A-Z0-9]', '', parsed_ui_code_from_page.upper())
+                                if not (core_trusted in core_page or core_page in core_trusted):
+                                    logger.warning(f"DMM Info: Significant UI code mismatch detected!")
+                                    logger.warning(f"  - Trusted UI Code (from keyword): {entity.ui_code}")
+                                    logger.warning(f"  - Page UI Code (for verification): {parsed_ui_code_from_page}")
+                            else:
+                                entity.ui_code = parsed_ui_code_from_page
+                                identifier_parsed = True
 
                     elif "収録時間" in key_dvd: 
                         m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd)
@@ -818,10 +840,15 @@ class SiteDmm(SiteAvBase):
                 else: 
                     logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
 
-            if not identifier_parsed:
-                logger.error(f"DMM ({entity.content_type}): CRITICAL - Identifier parse failed for {code} after all attempts.")
-                ui_code_for_image = code[2:].upper().replace("_","-")
-                entity.title=entity.originaltitle=entity.sorttitle=ui_code_for_image; entity.ui_code=ui_code_for_image
+            if identifier_parsed:
+                ui_code_for_image = entity.ui_code.lower()
+                entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
+
+                parsed_label = entity.ui_code.split('-')[0] if '-' in entity.ui_code else entity.ui_code
+                if entity.tag is None: entity.tag = []
+                if parsed_label and parsed_label not in entity.tag:
+                    entity.tag.append(parsed_label)
+
             if not entity.tagline and entity.title: entity.tagline = entity.title
             if not entity.plot and entity.tagline: entity.plot = entity.tagline
         except Exception as e_meta:
@@ -1153,34 +1180,25 @@ class SiteDmm(SiteAvBase):
             logger.debug(f"DMM Keyword Gen (ID Special Case 2): Using '{temp_keyword}' as is.")
             return keyword_for_url, "", ""
 
-        # --- ID 레이블이 아닌 경우, 기존의 일반 검색어 생성 로직 수행 ---
-        parsed_ui_code, _label_for_score, _num_raw_for_score = cls._parse_ui_code(temp_keyword, 'unknown')
+        # --- ID 레이블이 아닌 경우, 기존의 일반 검색어 생성 로직 수행(YAML 파서) ---
+        parsed_ui_code, label_for_search, num_part = cls._parse_ui_code(temp_keyword, 'unknown')
 
-        if parsed_ui_code and '-' in parsed_ui_code:
-            parts = parsed_ui_code.split('-')
-            label_part = parts[0]
-            num_part = parts[1]
-
-            # 재시도용 정보도 여기서 채워줌 (핵심 수정)
-            label_part_for_retry = label_part
+        # 파서가 유의미한 결과를 반환했는지 확인 (레이블과 숫자가 모두 있거나, 하이픈이 있는 경우)
+        if (label_for_search and num_part) or '-' in parsed_ui_code:
+            label_part_for_retry = label_for_search
             num_part_for_retry = num_part
 
             if num_part.isdigit():
                 padding_length = 3 if is_retry else 5
-                keyword_for_url = label_part.lower() + num_part.zfill(padding_length)
+                keyword_for_url = label_for_search.lower() + num_part.zfill(padding_length)
             else:
-                keyword_for_url = label_part.lower() + num_part.lower()
+                keyword_for_url = label_for_search.lower() + num_part.lower()
 
-            logger.debug(f"DMM Keyword Gen: Parsed '{temp_keyword}' -> '{parsed_ui_code}' -> Search keyword '{keyword_for_url}'")
-            # 재시도 정보를 포함하여 반환하도록 변경
+            logger.debug(f"DMM Keyword Gen: Parsed '{temp_keyword}' -> '{parsed_ui_code}' -> Search keyword '{keyword_for_url}' (using search_label: '{label_for_search}')")
             return keyword_for_url, label_part_for_retry, num_part_for_retry
 
-        # --- _parse_ui_code가 유효한 결과를 내지 못했을 경우, 기존의 일반 로직을 폴백으로 사용 ---
-
-        logger.debug(f"DMM Keyword Gen: Parsing failed for '{temp_keyword}', using generic fallback.")
-
-        label_part_for_retry = ""
-        num_part_for_retry = ""
+        # YAML 파서가 실패했을 경우, 기존의 일반 로직을 폴백으로 사용 ---
+        logger.debug(f"DMM Keyword Gen: YAML Parsing failed for '{temp_keyword}'. Using generic fallback.")
 
         temp_parts_for_url_gen = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
         temp_parts_for_url_gen = [part for part in temp_parts_for_url_gen if part]
@@ -1192,9 +1210,9 @@ class SiteDmm(SiteAvBase):
             num_part_for_retry = temp_parts_for_url_gen[1]
 
             if num_part_for_retry.isdigit():
-                keyword_for_url = label_part_for_retry + num_part_for_retry.zfill(padding_length)
+                keyword_for_url = label_part_for_retry.lower() + num_part_for_retry.zfill(padding_length)
             else:
-                keyword_for_url = label_part_for_retry + num_part_for_retry
+                keyword_for_url = label_part_for_retry.lower() + num_part_for_retry.lower()
 
         elif len(temp_parts_for_url_gen) == 1:
             single_part = temp_parts_for_url_gen[0]
@@ -1202,10 +1220,9 @@ class SiteDmm(SiteAvBase):
             if match_label_num:
                 label_part_for_retry = match_label_num.group(1)
                 num_part_for_retry = match_label_num.group(2)
-                keyword_for_url = label_part_for_retry + num_part_for_retry.zfill(padding_length)
+                keyword_for_url = label_part_for_retry.lower() + num_part_for_retry.zfill(padding_length)
             else: 
                 keyword_for_url = single_part
-
         else:
             keyword_for_url = "".join(temp_parts_for_url_gen)
 
