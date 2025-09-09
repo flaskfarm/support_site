@@ -1685,7 +1685,7 @@ class SiteAvBase:
             processed_cid = suffix_strip_match.group(1)
 
         # 파싱 변수 초기화
-        final_label_part, final_num_part, rule_applied = "", "", False
+        final_label_part, final_num_part, final_search_label_part, rule_applied = "", "", "", False
         special_rules = cls.config.get('censored_parser_rules', [])
         generic_rules = cls.config.get('generic_parser_rules', [])
         all_rules = special_rules + generic_rules
@@ -1706,13 +1706,20 @@ class SiteAvBase:
                 match = re.match(pattern, processed_cid, re.I)
                 if match:
                     template_parts = template.split('|')
-                    if len(template_parts) != 2:
-                        continue # 로그는 위에서 남겼으므로 생략
+                    if len(template_parts) < 2: continue
 
-                    label_template, num_template = template_parts
+                    label_template = template_parts[0]
+                    num_template = template_parts[1]
+                    # 검색용 템플릿이 있는지 확인 (선택 사항)
+                    search_label_template = template_parts[2] if len(template_parts) > 2 else None
+
                     groups = match.groups()
                     final_label_part = label_template.format(*groups)
                     final_num_part = num_template.format(*groups)
+
+                    # 검색용 템플릿이 있으면 그것으로 final_search_label_part를 채움
+                    if search_label_template:
+                        final_search_label_part = search_label_template.format(*groups)
 
                     rule_applied = True
                     break
@@ -1741,8 +1748,8 @@ class SiteAvBase:
             ui_code_final = label_ui_part or cid_part_raw.upper()
 
         # 반환값 준비
-        score_label_part = final_label_part.lower()
-        score_num_raw_part = final_num_part # 점수 계산용은 항상 원본 숫자 파트 사용
+        score_label_part = final_search_label_part.lower() if final_search_label_part else final_label_part.lower()
+        score_num_raw_part = final_num_part
 
         # logger.debug(f"UI Code Parser: Parsed '{cid_part_raw}' > '{pattern}' > Final: '{ui_code_final}'")
         return ui_code_final, score_label_part, score_num_raw_part
