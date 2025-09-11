@@ -365,8 +365,13 @@ class SiteWatchaTv(SiteWatcha):
                                 series.title = series_name
                                 series = series.as_dict()
                                 result_list.append(series)
-                            series['seasons'].append({'season_no':match.group('season_no'), 'year':entity.year, 'info':entity.as_dict()})
-                            series['seasons'] = sorted(series['seasons'], key=lambda k: k['year'], reverse=False)
+                            season_number = match.group('season_no')
+                            try:
+                                season_number = int(season_number)
+                            except Exception:
+                                logger.warning(f"Unknown season number: {season_number}")
+                            series['seasons'].append({'season_no':season_number, 'year':entity.year, 'info':entity.as_dict()})
+                            series['seasons'] = sorted(series['seasons'], key=lambda k: k['season_no'], reverse=False)
                             series_insert = True
                             break
                 if series_insert:
@@ -375,7 +380,19 @@ class SiteWatchaTv(SiteWatcha):
 
             for idx, item in enumerate(result_list):
                 if len(item['seasons']) > 0:
-                    item['year'] = item['seasons'][0]['year']
+                    """
+                    2025-09-11 halfaider
+                    여러 시즌이 존재하는 TV 쇼는 대표 TV 쇼 객체를 만들어서 각 시즌을 첨부함.
+                    그런데 대표 TV 쇼는 임의로 생성했기 때문에 code가 없음.
+                    Plex에서 검색 결과물로 대표 TV 쇼를 선택하면 code가 없어서 에이전트를 찾지 못하는 오류가 발생함.
+                    대표 TV 쇼의 데이터를 첫번째 시즌 데이터로 대체.
+                    """
+                    first_season = item['seasons'][0]
+                    item['year'] = first_season['year']
+                    item["code"] = item.get("code") or first_season["info"]["code"]
+                    item["studio"] = item.get("studio") or first_season["info"]["studio"]
+                    item["image_url"] = item.get("image_url") or first_season["info"]["image_url"]
+                    item["country"] = item.get("country") or first_season["info"]["country"]
                 if (SiteUtil.is_hangul(item['title']) and SiteUtil.is_hangul(keyword)) or (not SiteUtil.is_hangul(item['title']) and not SiteUtil.is_hangul(keyword)):
                     if SiteUtil.compare(item['title'], keyword):
                         if year is not None:
