@@ -998,72 +998,66 @@ class SiteAvBase:
 
                 # 확장 후보군 탐색
                 if not final_image_sources['poster_source']:
-                    all_candidates_advanced = list(dict.fromkeys(([pl_url] if pl_url else []) + other_arts_on_page))
+                    poster_candidates = list(dict.fromkeys(specific_candidates_on_page + other_arts_on_page))
+
                     im_sm_obj = cls.imopen(ps_url)
                     if im_sm_obj:
                         try:
-                            for candidate_url in all_candidates_advanced:
+                            for candidate_url in poster_candidates:
                                 im_lg_obj = cls.imopen(candidate_url)
-                                if not im_lg_obj:
-                                    continue
-
-                                processed_lg_obj = None  # 전처리된 이미지 객체를 담을 변수
-                                crop_pos = None
+                                if not im_lg_obj: continue
 
                                 try:
                                     w, h = im_lg_obj.size
                                     aspect_ratio = w / h if h > 0 else 0
 
-                                    # Case 1: 4:3 비율 (레터박스 가능성) -> 레터박스 제거 후 비교
-                                    if abs(aspect_ratio - (4/3)) < 0.05:
-                                        logger.debug(f"Advanced Check (4:3 ratio): Removing letterbox for {candidate_url}")
-                                        # 상하 5.33%를 레터박스로 간주하고 제거
-                                        processed_lg_obj = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
+                                    # Case 1: 와이드 이미지 (aspect_ratio >= 1.7)
+                                    if aspect_ratio >= 1.7:
+                                        # 오른쪽 절반 먼저 시도
+                                        right_half_obj = im_lg_obj.crop((w / 2, 0, w, h))
+                                        is_match = cls.is_hq_poster(im_sm_obj, right_half_obj)
+                                        right_half_obj.close()
+                                        if is_match:
+                                            logger.info(f"HQ Poster Found! Matched right half of '{candidate_url}'.")
+                                            final_image_sources.update({'poster_source': candidate_url, 'poster_mode': 'crop_r'})
+                                            break
+
+                                        # 왼쪽 절반 시도
+                                        left_half_obj = im_lg_obj.crop((0, 0, w / 2, h))
+                                        is_match = cls.is_hq_poster(im_sm_obj, left_half_obj)
+                                        left_half_obj.close()
+                                        if is_match:
+                                            logger.info(f"HQ Poster Found! Matched left half of '{candidate_url}'.")
+                                            final_image_sources.update({'poster_source': candidate_url, 'poster_mode': 'crop_l'})
+                                            break
+
+                                    # Case 2: 일반 비율 이미지 (레터박스 포함)
+                                    else:
+                                        # 레터박스 제거 후 비교할 이미지 생성
+                                        processed_lg_obj = im_lg_obj
+                                        if abs(aspect_ratio - (4/3)) < 0.05:
+                                            logger.debug(f"Advanced Check (4:3 ratio): Removing letterbox for {candidate_url}")
+                                            processed_lg_obj = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
+
+                                        # has_hq_poster로 최적의 크롭 위치 찾기
                                         crop_pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj)
 
-                                    # Case 2: 1.7:1 이상 와이드 비율 (MG-Style) -> 오른쪽, 실패 시 왼쪽 비교
-                                    elif aspect_ratio >= 1.7:
-                                        # 2-1. 오른쪽 절반 먼저 시도
-                                        logger.debug(f"Advanced Check (Wide ratio): Cropping right half for {candidate_url}")
-                                        right_half_obj = im_lg_obj.crop((w / 2, 0, w, h))
-                                        try:
-                                            crop_pos = cls.has_hq_poster(im_sm_obj, right_half_obj)
-                                        finally:
-                                            right_half_obj.close()
+                                        # 레터박스 제거 이미지를 사용했다면 닫아주기
+                                        if processed_lg_obj is not im_lg_obj:
+                                            processed_lg_obj.close()
 
-                                        # 2-2. 오른쪽에서 못 찾았으면 왼쪽 절반 시도
-                                        if not crop_pos:
-                                            logger.debug(f"Advanced Check (Wide ratio): Right half failed. Cropping left half for {candidate_url}")
-                                            left_half_obj = im_lg_obj.crop((0, 0, w / 2, h))
-                                            try:
-                                                crop_pos = cls.has_hq_poster(im_sm_obj, left_half_obj)
-                                            finally:
-                                                left_half_obj.close()
-
-                                    # Case 3: 그 외 모든 일반 비율 이미지 -> 전처리 없이 원본 그대로 비교
-                                    else:
-                                        logger.debug(f"Advanced Check (Normal ratio): Comparing original for {candidate_url}")
-                                        crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
-
-                                    # 비교 성공 시 결과 저장 및 루프 탈출
-                                    if crop_pos:
-                                        logger.info(f"HQ Poster Found! Matched '{candidate_url}' at position '{crop_pos}' after processing.")
-                                        final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
-                                        break  # 성공했으므로 더 이상 후보를 탐색할 필요 없음
-
+                                        if crop_pos:
+                                            logger.info(f"HQ Poster Found! Matched '{candidate_url}' at position '{crop_pos}'.")
+                                            final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
+                                            break
                                 finally:
-                                    if im_lg_obj:
-                                        im_lg_obj.close()
-                                    if processed_lg_obj:
-                                        processed_lg_obj.close()
+                                    if im_lg_obj: im_lg_obj.close()
 
-                            # for 루프가 break 없이 모두 실행된 후, im_sm_obj를 닫음
-                            else: # no-break
-                                logger.debug("Advanced Check: No HQ poster found in any advanced candidates.")
+                            else: # for 루프가 break 없이 끝난 경우
+                                logger.debug("Advanced Check: No HQ poster found in any candidates.")
 
                         finally:
-                            if im_sm_obj:
-                                im_sm_obj.close()
+                            if im_sm_obj: im_sm_obj.close()
 
             else:
                 # Case 3: JavDB와 같이 ps_url 없이 pl/arts로 결정해야 하는 경우
@@ -1478,7 +1472,7 @@ class SiteAvBase:
         """두 PIL Image 객체의 시각적 유사성을 판단합니다."""
         try:
             if im_sm_obj is None or im_lg_obj is None: return False
-            
+
             ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
             if hs == 0 or hl == 0: return False
             if abs((ws / hs) - (wl / hl)) > 0.1: return False
@@ -1497,11 +1491,11 @@ class SiteAvBase:
         """두 PIL Image 객체를 받아 크롭 영역 일치 여부를 판단하고 크롭 위치를 반환합니다."""
         try:
             if im_sm_obj is None or im_lg_obj is None: return None
-            
+
             ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
             if ws > wl or hs > hl: return None
 
-            positions = ["r", "l", "c"]
+            positions = ["c", "r", "l"]
             threshold = 20  # 이 임계값은 필요에 따라 조정 가능
 
             for pos in positions:

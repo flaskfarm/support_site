@@ -370,21 +370,25 @@ class SiteMgstage(SiteAvBase):
     def __img_urls(cls, tree):
         pl_nodes = tree.xpath('//*[@id="package"]/a/@href')
         pl_url = pl_nodes[0] if pl_nodes else ""
-        
+
         all_sample_images = tree.xpath('//*[@id="sample-photo"]//ul/li/a/@href')
-        
-        # pl에서 파생된 pf가 있다면, 샘플 목록의 맨 앞에 추가
+
+        potential_pf = ""
         if pl_url and "pb_e_" in pl_url:
             potential_pf = pl_url.replace("pb_e_", "pf_e_")
-            if potential_pf not in all_sample_images:
-                all_sample_images.insert(0, potential_pf)
 
         specific_poster_candidates = []
-        if all_sample_images:
-            specific_poster_candidates.append(all_sample_images[0])
-            if len(all_sample_images) > 1 and all_sample_images[-1] != all_sample_images[0]:
-                specific_poster_candidates.append(all_sample_images[-1])
-        
+        # 1순위: pf_e_ 이미지가 존재하면 최우선으로 추가
+        if potential_pf:
+            specific_poster_candidates.append(potential_pf)
+        # 2순위: pl_url (와이드 이미지) 추가
+        if pl_url:
+            specific_poster_candidates.append(pl_url)
+        # 3순위: 나머지 샘플 이미지들 추가 (중복 제거)
+        for img in all_sample_images:
+            if img not in specific_poster_candidates:
+                specific_poster_candidates.append(img)
+
         ret = {
             "pl": pl_url,
             "specific_poster_candidates": specific_poster_candidates,
