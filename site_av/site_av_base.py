@@ -1471,19 +1471,20 @@ class SiteAvBase:
     def is_hq_poster(cls, im_sm_obj, im_lg_obj):
         """두 PIL Image 객체의 시각적 유사성을 판단합니다."""
         try:
-            if im_sm_obj is None or im_lg_obj is None: return False
+            if im_sm_obj is None or im_lg_obj is None:
+                return False
 
-            ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
-            if hs == 0 or hl == 0: return False
-            if abs((ws / hs) - (wl / hl)) > 0.1: return False
+            dist_a = average_hash(im_sm_obj) - average_hash(im_lg_obj)
+            dist_p = phash(im_sm_obj) - phash(im_lg_obj)
 
-            hdis_d = hfun(im_sm_obj) - hfun(im_lg_obj)
-            if hdis_d >= 14: return False
-            if hdis_d <= 6: return True
+            threshold = 15
+            is_match = (dist_a + dist_p) < threshold
+            # logger.debug(f"is_hq_poster check: ahash_dist={dist_a}, phash_dist={dist_p}, combined={dist_a + dist_p}, match={is_match}")
 
-            hdis_p = phash(im_sm_obj) - phash(im_lg_obj)
-            return (hdis_d + hdis_p) < 24
-        except Exception: return False
+            return is_match
+        except Exception as e:
+            logger.error(f"is_hq_poster exception: {e}")
+            return False
 
 
     @classmethod
