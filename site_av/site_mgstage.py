@@ -257,9 +257,9 @@ class SiteMgstage(SiteAvBase):
                         entity.tag.append(label_for_tag)
 
                 elif "商品発売日" in key_text:
-                    if "----" not in value_text_content: temp_shohin_hatsubai = value_text_content.replace("/", "-")
+                    if "----" not in value_text_content: temp_shohin_hatsubai = value_text_content
                 elif "配信開始日" in key_text:
-                    if "----" not in value_text_content: temp_haishin_kaishi = value_text_content.replace("/", "-")
+                    if "----" not in value_text_content: temp_haishin_kaishi = value_text_content
                 elif "収録時間" in key_text:
                     rt_match = re.search(r'(\d+)', value_text_content)
                     if rt_match: entity.runtime = int(rt_match.group(1))
@@ -290,10 +290,24 @@ class SiteMgstage(SiteAvBase):
                             g_ko = cls.trans(g_ja).replace(" ", "")
                             if g_ko not in AV_GENRE_IGNORE_KO and g_ko not in entity.genre: entity.genre.append(g_ko)
 
-            entity.premiered = temp_shohin_hatsubai or temp_haishin_kaishi
-            if entity.premiered:
-                try: entity.year = int(entity.premiered[:4])
-                except (ValueError, IndexError): pass
+            premiered_str = None
+            date_pattern = re.compile(r'^\d{4}\/\d{2}\/\d{2}$')
+
+            # 配信開始日 (배신 개시일)을 우선으로 사용
+            if temp_haishin_kaishi and date_pattern.match(temp_haishin_kaishi):
+                premiered_str = temp_haishin_kaishi
+            # 배신 개시일이 유효하지 않으면 상품 발매일을 확인
+            elif temp_shohin_hatsubai and date_pattern.match(temp_shohin_hatsubai):
+                premiered_str = temp_shohin_hatsubai
+
+            if premiered_str:
+                try:
+                    from dateutil.parser import parse
+                    parsed_date = parse(premiered_str)
+                    entity.premiered = parsed_date.strftime('%Y-%m-%d')
+                    entity.year = parsed_date.year
+                except Exception as e:
+                    logger.warning(f"MGStage: Failed to parse valid date string '{premiered_str}': {e}")
 
             rating_nodes = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
             if rating_nodes:
