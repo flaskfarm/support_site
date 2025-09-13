@@ -282,6 +282,11 @@ class SiteDmm(SiteAvBase):
                 if not item.score:
                     item.score = 20
 
+                # CID 직접 비교 로직으로 점수 재조정
+                # 검색어(1sw00124)와 아이템 CID(1sw00124)가 정확히 일치하면 100점으로 설정
+                if content_id_or_cid and keyword_for_url.replace('00', '0') == content_id_or_cid.replace('00', '0'):
+                    current_score_val = 100
+
                 item.score = current_score_val
                 if current_score_val < 100 and score > 20: score -= 5 # 다음 아이템의 기본 점수 감소
 
@@ -333,6 +338,8 @@ class SiteDmm(SiteAvBase):
                 ret_temp_before_filtering.append(item_dict) # 최종적으로 수정된 딕셔너리를 리스트에 추가
             except Exception as e_inner_loop_dmm:
                 logger.exception(f"DMM Search: 아이템 처리 중 예외 (keyword: '{original_keyword}'): {e_inner_loop_dmm}")
+
+        # logger.debug(f"[DEBUG] Raw search results before filtering ({len(ret_temp_before_filtering)} items): {json.dumps(ret_temp_before_filtering, indent=2, ensure_ascii=False)}")
 
         # --- 검색 결과가 없고, 아직 재시도 안했으며, 재시도용 정보가 있을 경우 ---
         if not ret_temp_before_filtering and not is_retry and label_part_for_retry and num_part_for_retry:
