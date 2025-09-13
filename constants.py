@@ -3063,7 +3063,7 @@ MGS_CODE_LEN = {
     "196SRSR": 5,
     "196WHEN": 5,
     "196WNES": 5,
-    "200GANA": 4,
+    "200GANA": 3,
     "201DORI": 4,
     "201NAPK": 4,
     "201NNNC": 4,
