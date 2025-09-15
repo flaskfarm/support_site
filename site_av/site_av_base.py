@@ -774,7 +774,7 @@ class SiteAvBase:
                     url_prefix = pre_calculated_url_prefix
                 else:
                     # Case 2: 경로가 없는 경우 (DMM, JavDB 등), 여기서 경로를 새로 계산
-                    logger.debug("No pre-calculated path found. Calculating image server path in SiteAvBase.")
+                    # logger.debug("No pre-calculated path found. Calculating image server path in SiteAvBase.")
                     module_prefix = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
 
                     base_path = cls.config.get('image_server_local_path')
@@ -824,10 +824,23 @@ class SiteAvBase:
 
                     # 사용자 및 시스템 파일 존재 여부 확인
                     code_lower = entity.ui_code.lower()
-                    if os.path.exists(os.path.join(target_folder, f"{code_lower}_p_user.jpg")):
-                        decision_data['user_files_exist']['poster'] = True
-                    if os.path.exists(os.path.join(target_folder, f"{code_lower}_pl_user.jpg")):
-                        decision_data['user_files_exist']['landscape'] = True
+                    supported_extensions = ['jpg', 'png', 'webp']
+
+                    # 사용자 포스터 파일 확인 (발견된 파일명을 저장)
+                    for ext in supported_extensions:
+                        user_poster_filename = f"{code_lower}_p_user.{ext}"
+                        if os.path.exists(os.path.join(target_folder, user_poster_filename)):
+                            # True/False가 아닌, 실제 파일명을 저장합니다.
+                            decision_data['user_files_exist']['poster'] = user_poster_filename
+                            break 
+
+                    # 사용자 랜드스케이프 파일 확인 (발견된 파일명을 저장)
+                    for ext in supported_extensions:
+                        user_landscape_filename = f"{code_lower}_pl_user.{ext}"
+                        if os.path.exists(os.path.join(target_folder, user_landscape_filename)):
+                            # True/False가 아닌, 실제 파일명을 저장합니다.
+                            decision_data['user_files_exist']['landscape'] = user_landscape_filename
+                            break
 
                     if os.path.exists(os.path.join(target_folder, f"{code_lower}_p.jpg")):
                         decision_data['system_files_exist']['poster'] = True
@@ -931,8 +944,9 @@ class SiteAvBase:
             rewrite = decision_data['rewrite_flag']
             code_lower = ui_code.lower()
             
-            if decision_data['user_files_exist']['poster']:
-                final_image_sources['poster_source'] = f"{paths['url_prefix']}/{code_lower}_p_user.jpg"
+            user_poster_filename = decision_data['user_files_exist']['poster']
+            if user_poster_filename:
+                final_image_sources['poster_source'] = f"{paths['url_prefix']}/{user_poster_filename}"
                 final_image_sources['skip_poster_download'] = True
                 final_image_sources['is_user_poster'] = True
                 should_process_poster = False
@@ -941,8 +955,9 @@ class SiteAvBase:
                 final_image_sources['skip_poster_download'] = True
                 should_process_poster = False
 
-            if decision_data['user_files_exist']['landscape']:
-                final_image_sources['landscape_source'] = f"{paths['url_prefix']}/{code_lower}_pl_user.jpg"
+            user_landscape_filename = decision_data['user_files_exist']['landscape']
+            if user_landscape_filename:
+                final_image_sources['landscape_source'] = f"{paths['url_prefix']}/{user_landscape_filename}"
                 final_image_sources['skip_landscape_download'] = True
                 final_image_sources['is_user_landscape'] = True
                 should_process_landscape = False
@@ -1002,60 +1017,63 @@ class SiteAvBase:
                     im_sm_obj = cls.imopen(ps_url)
                     if im_sm_obj:
                         try:
+                            # Phase 1: 확장 후보군에 대해 is_hq_poster로 먼저 빠르게 검사
+                            logger.debug("Advanced Check (Phase 1): Performing fast strict check on all advanced candidates.")
                             for candidate_url in all_candidates_advanced:
-                                im_lg_obj = cls.imopen(candidate_url)
-                                if not im_lg_obj:
-                                    continue
-
-                                processed_lg_obj = None  # 전처리된 이미지 객체를 담을 변수
-                                crop_pos = None
-
+                                im_lg_obj = None
                                 try:
-                                    w, h = im_lg_obj.size
-                                    aspect_ratio = w / h if h > 0 else 0
-
-                                    # Case 1: 4:3 비율 (레터박스 가능성) -> 레터박스 제거 후 비교
-                                    if abs(aspect_ratio - (4/3)) < 0.05:
-                                        logger.debug(f"Advanced Check (4:3 ratio): Removing letterbox for {candidate_url}")
-                                        # 상하 5.33%를 레터박스로 간주하고 제거
-                                        processed_lg_obj = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
-                                        crop_pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj)
-
-                                    # Case 2: 1.7:1 이상 와이드 비율 (MG-Style) -> 오른쪽, 실패 시 왼쪽 비교
-                                    elif aspect_ratio >= 1.7:
-                                        # 2-1. 오른쪽 절반 먼저 시도
-                                        logger.debug(f"Advanced Check (Wide ratio): Cropping right half for {candidate_url}")
-                                        right_half_obj = im_lg_obj.crop((w / 2, 0, w, h))
-                                        try:
-                                            crop_pos = cls.has_hq_poster(im_sm_obj, right_half_obj)
-                                        finally:
-                                            right_half_obj.close()
-
-                                        # 2-2. 오른쪽에서 못 찾았으면 왼쪽 절반 시도
-                                        if not crop_pos:
-                                            logger.debug(f"Advanced Check (Wide ratio): Right half failed. Cropping left half for {candidate_url}")
-                                            left_half_obj = im_lg_obj.crop((0, 0, w / 2, h))
-                                            try:
-                                                crop_pos = cls.has_hq_poster(im_sm_obj, left_half_obj)
-                                            finally:
-                                                left_half_obj.close()
-
-                                    # Case 3: 그 외 모든 일반 비율 이미지 -> 전처리 없이 원본 그대로 비교
-                                    else:
-                                        logger.debug(f"Advanced Check (Normal ratio): Comparing original for {candidate_url}")
-                                        crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
-
-                                    # 비교 성공 시 결과 저장 및 루프 탈출
-                                    if crop_pos:
-                                        logger.info(f"HQ Poster Found! Matched '{candidate_url}' at position '{crop_pos}' after processing.")
-                                        final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
-                                        break  # 성공했으므로 더 이상 후보를 탐색할 필요 없음
-
+                                    im_lg_obj = cls.imopen(candidate_url)
+                                    # is_hq_poster (엄격한 기준)로 완벽한 매칭 찾기
+                                    if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
+                                        logger.info(f"HQ Poster Found in advanced candidates (Phase 1 strict check): {candidate_url}")
+                                        final_image_sources['poster_source'] = candidate_url
+                                        break # 찾았으면 즉시 종료
                                 finally:
-                                    if im_lg_obj:
-                                        im_lg_obj.close()
-                                    if processed_lg_obj:
-                                        processed_lg_obj.close()
+                                    if im_lg_obj: im_lg_obj.close()
+
+                            # Phase 2: Phase 1에서 못 찾았을 경우에만, 기존의 복잡한 탐색 로직 실행
+                            if not final_image_sources['poster_source']:
+                                logger.debug("Advanced Check (Phase 2): Strict check failed. Performing detailed analysis.")
+                                for candidate_url in all_candidates_advanced:
+                                    im_lg_obj = cls.imopen(candidate_url)
+                                    if not im_lg_obj: continue
+
+                                    crop_pos = None
+                                    try:
+                                        w, h = im_lg_obj.size
+                                        aspect_ratio = w / h if h > 0 else 0
+
+                                        # 1순위: 4:3 비율 (레터박스) 처리 시도
+                                        if abs(aspect_ratio - (4/3)) < 0.05:
+                                            with im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533))) as processed_lg_obj:
+                                                # logger.debug(f"Advanced Check (Priority 1: Letterbox): Trying for {candidate_url}")
+                                                crop_pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj)
+
+                                        # 2순위: 1.7:1 이상 와이드 이미지 처리 시도 (1순위에서 실패했을 경우)
+                                        if not crop_pos and aspect_ratio >= 1.7:
+                                            # logger.debug(f"Advanced Check (Priority 2: Wide Ratio): Trying for {candidate_url}")
+                                            # 오른쪽 절반 시도
+                                            with im_lg_obj.crop((w / 2, 0, w, h)) as right_half_obj:
+                                                crop_pos = cls.has_hq_poster(im_sm_obj, right_half_obj)
+                                            # 왼쪽 절반 시도 (오른쪽 실패 시)
+                                            if not crop_pos:
+                                                with im_lg_obj.crop((0, 0, w / 2, h)) as left_half_obj:
+                                                    crop_pos = cls.has_hq_poster(im_sm_obj, left_half_obj)
+
+                                        # 3순위: 원본 이미지 자체에 대한 일반적인 CRL 비교 시도 (1, 2순위에서 모두 실패했을 경우)
+                                        if not crop_pos:
+                                            # logger.debug(f"Advanced Check (Priority 3: Original CRL): Trying for {candidate_url}")
+                                            crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
+
+                                        # 비교 성공 시 결과 저장 및 루프 탈출
+                                        if crop_pos:
+                                            logger.info(f"HQ Poster Found! Matched '{candidate_url}' at position '{crop_pos}' after processing.")
+                                            final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
+                                            break
+
+                                    finally:
+                                        if im_lg_obj:
+                                            im_lg_obj.close()
 
                             # for 루프가 break 없이 모두 실행된 후, im_sm_obj를 닫음
                             else: # no-break
@@ -1096,7 +1114,7 @@ class SiteAvBase:
                                 processed_im = SiteUtilAv.imcrop(im_no_lb, position='r')
                                 temp_filepath = cls.save_pil_to_temp(processed_im)
                                 if temp_filepath:
-                                    logger.debug(f"Image for {ui_code} has aspect ratio < 4:3. Applying 'crop_c'.")
+                                    logger.debug(f"Image for {ui_code} has aspect ratio = 4:3. Applying 'Remove Letterbox & crop_r'.")
                                     final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
                                 processed_im.close(); im_no_lb.close()
 
@@ -1477,20 +1495,19 @@ class SiteAvBase:
     def is_hq_poster(cls, im_sm_obj, im_lg_obj):
         """두 PIL Image 객체의 시각적 유사성을 판단합니다."""
         try:
-            if im_sm_obj is None or im_lg_obj is None:
-                return False
+            if im_sm_obj is None or im_lg_obj is None: return False
 
-            dist_a = average_hash(im_sm_obj) - average_hash(im_lg_obj)
-            dist_p = phash(im_sm_obj) - phash(im_lg_obj)
+            ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
+            if hs == 0 or hl == 0: return False
+            if abs((ws / hs) - (wl / hl)) > 0.1: return False
 
-            threshold = 15
-            is_match = (dist_a + dist_p) < threshold
-            # logger.debug(f"is_hq_poster check: ahash_dist={dist_a}, phash_dist={dist_p}, combined={dist_a + dist_p}, match={is_match}")
+            hdis_d = hfun(im_sm_obj) - hfun(im_lg_obj)
+            if hdis_d >= 10: return False
+            if hdis_d <= 5: return True
 
-            return is_match
-        except Exception as e:
-            logger.error(f"is_hq_poster exception: {e}")
-            return False
+            hdis_p = phash(im_sm_obj) - phash(im_lg_obj)
+            return (hdis_d + hdis_p) < 15
+        except Exception: return False
 
 
     @classmethod
@@ -1503,7 +1520,7 @@ class SiteAvBase:
             if ws > wl or hs > hl: return None
 
             positions = ["c", "r", "l"]
-            threshold = 20  # 이 임계값은 필요에 따라 조정 가능
+            threshold = 30  # 이 임계값은 필요에 따라 조정 가능
 
             for pos in positions:
                 cropped_im = None
