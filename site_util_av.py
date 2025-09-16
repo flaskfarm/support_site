@@ -72,17 +72,6 @@ class SiteUtilAv:
     PTN_HANGUL_CHAR = re.compile(r"[ㄱ-ㅣ가-힣]+")
 
 
-
-
-
-    
-
-    
-
-    
-
-    
-
     @classmethod
     def resolve_jav_imgs(cls, img_urls: dict, ps_to_poster: bool = False, proxy_url: str = None, crop_mode: str = None):
         ps = img_urls["ps"]  # poster small
@@ -128,8 +117,7 @@ class SiteUtilAv:
             }
         )
 
-    
-    
+
     @classmethod
     def process_image_mode(cls, image_mode, image_source, proxy_url=None, crop_mode=None):
         if image_source is None:
@@ -775,17 +763,6 @@ class SiteUtilAv:
         # logger.debug(ret)
         return ret
 
-    
-
-
-
-
-
-
-
-
-
-
 
 
     #############################################################
@@ -908,7 +885,7 @@ class SiteUtilAv:
             return cls.is_hangul(text)
         except Exception:
             return False
-   
+
 
     @classmethod
     def process_image_book(cls, url):
@@ -937,107 +914,53 @@ class SiteUtilAv:
             return
         return html.fromstring(text)
 
-    
-
-
 
     # 범용 이미지 처리
     @classmethod
-    def imcrop(cls, im, position=None, box_only=False):
-        """원본 이미지에서 잘라내 세로로 긴 포스터를 만드는 함수"""
-
+    def imcrop(cls, im, position=None, box_only=False, aspect_ratio=1.4225):
+        """
+        원본 이미지에서 잘라내 세로로 긴 포스터를 만드는 함수.
+        :param aspect_ratio: 목표 세로/가로 비율 (예: 1.4225)
+        """
         if not isinstance(im, Image.Image):
             return im
 
         original_format = im.format
-
         width, height = im.size
-        new_w = height / 1.4225
+
+        # 목표 너비 계산 (높이 / 목표 비율)
+        new_w = height / aspect_ratio
+
+        if new_w > width:
+            # 계산된 너비가 원본 너비보다 크면, 크롭이 의미 없으므로 원본 반환
+            # 또는 너비를 원본 너비에 맞추고 높이를 조정할 수도 있으나, 현재는 원본 반환이 안전
+            # logger.debug(f"imcrop: Calculated new_w ({new_w}) > original width ({width}). Returning original.")
+            return im
+
         if position == "l":
             left = 0
         elif position == "c":
             left = (width - new_w) / 2
-        else:
-            # default: from right
+        else:  # default: from right
             left = width - new_w
-        
-        # left, right 값이 이미지 경계를 벗어나지 않도록 조정 (음수 또는 width 초과 방지)
+
+        # left, right 값이 이미지 경계를 벗어나지 않도록 조정
         left = max(0, min(left, width - new_w))
         right = left + new_w
-        if right > width : # new_w가 너무 커서 오른쪽 경계를 넘는 경우
-            new_w = width - left
-            right = width
-        if new_w <= 0 : # 계산된 너비가 0 이하이면 크롭 불가
-            logger.debug(f"imcrop: Calculated new_w ({new_w}) is invalid for image size {width}x{height}. Returning original.")
-            return im # 원본 반환 또는 None
 
         box = (left, 0, right, height)
-        
+
         if box_only:
             return box
-        
+
         try:
             cropped_im = im.crop(box)
-            if cropped_im and original_format: # 크롭 성공했고 원본 포맷 정보가 있었다면
-                cropped_im.format = original_format # format 속성 복사
+            if cropped_im and original_format:
+                cropped_im.format = original_format
             return cropped_im
         except Exception as e_crop:
             logger.error(f"Error during im.crop with box {box}: {e_crop}")
-            return None # 크롭 실패 시 None 반환
-
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            return None
 
 
 

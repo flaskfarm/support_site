@@ -611,7 +611,7 @@ class SiteAvBase:
             bytes_im = BytesIO(content_bytes)
             im = Image.open(bytes_im)
             imformat = im.format
-            
+
             # Pillow가 포맷을 감지 못했거나, Content-Type이 binary였을 경우, im.format으로 재확인
             if imformat is None or content_type_header == 'binary/octet-stream':
                 P.logger.debug(f"image_proxy: Pillow detected format '{imformat}' for binary stream. URL: {image_url}")
@@ -640,13 +640,49 @@ class SiteAvBase:
             abort(500)
             return
 
-        # apply crop - quality loss
-        
         if mode is not None and mode.startswith("crop_"):
-            im = SiteUtilAv.imcrop(im, position=mode[-1])
+
+            operations = mode.replace("crop_", "").split('_')
+
+            # 1. 비율 정보가 있는지 확인하고 추출
+            aspect_ratio = 1.4225
+            if operations and operations[-1].replace('.', '', 1).isdigit():
+                try:
+                    aspect_ratio = float(operations.pop())
+                except ValueError:
+                    pass
+
+            # 2. 크롭 명령
+            processed_im = im
+            is_first_op = True
+            num_ops = len(operations)
+
+            for op in operations:
+                new_im = None
+                # 이중 크롭의 첫 번째 단계('r' 또는 'l')일 때만 너비를 반으로 자름
+                if op in ['r', 'l'] and is_first_op and num_ops > 1:
+                    width, height = processed_im.size
+                    box = (width / 2, 0, width, height) if op == 'r' else (0, 0, width / 2, height)
+                    new_im = processed_im.crop(box)
+                else: # 단일 크롭이거나, 이중 크롭의 두 번째 단계일 경우
+                    new_im = SiteUtilAv.imcrop(processed_im, position=op, aspect_ratio=aspect_ratio)
+
+                # 중간 이미지 객체 메모리 관리
+                if processed_im is not im:
+                    processed_im.close()
+                processed_im = new_im
+
+                if processed_im is None:
+                    logger.warning(f"Cropping failed at operation '{op}' for mode '{mode}'. Using original image.")
+                    if im.fp: im.fp.seek(0)
+                    processed_im = im
+                    break
+
+                is_first_op = False
+
+            im = processed_im
+
         return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
-        #bytes_im.seek(0)
-        #return send_file(bytes_im, mimetype=mimetype)
 
 
     @classmethod
@@ -723,13 +759,41 @@ class SiteAvBase:
             abort(500)
             return
 
-        # apply crop - quality loss
-
         if mode is not None and mode.startswith("crop_"):
-            im = SiteUtilAv.imcrop(im, position=mode[-1])
+            operations = mode.replace("crop_", "").split('_')
+            aspect_ratio = 1.4225
+            if operations and operations[-1].replace('.', '', 1).isdigit():
+                try:
+                    aspect_ratio = float(operations.pop())
+                except ValueError:
+                    pass
+
+            processed_im = im
+            is_first_op = True
+            num_ops = len(operations)
+
+            for op in operations:
+                new_im = None
+                if op in ['r', 'l'] and is_first_op and num_ops > 1:
+                    width, height = processed_im.size
+                    box = (width / 2, 0, width, height) if op == 'r' else (0, 0, width / 2, height)
+                    new_im = processed_im.crop(box)
+                else:
+                    new_im = SiteUtilAv.imcrop(processed_im, position=op, aspect_ratio=aspect_ratio)
+
+                if processed_im is not im:
+                    processed_im.close()
+                processed_im = new_im
+
+                if processed_im is None:
+                    logger.warning(f"Cropping failed at operation '{op}' for mode '{mode}'. Using original image.")
+                    if im.fp: im.fp.seek(0)
+                    processed_im = im
+                    break
+
+                is_first_op = False
+            im = processed_im
         return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
-        #bytes_im.seek(0)
-        #return send_file(bytes_im, mimetype=mimetype)
 
 
     @classmethod
@@ -1003,7 +1067,7 @@ class SiteAvBase:
                                 im_lg_obj = cls.imopen(candidate_url)
 
                                 if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
-                                    logger.debug(f"Found ideal poster (visually same as thumbnail): {candidate_url}")
+                                    logger.info(f"Found ideal poster (visually same as thumbnail): {candidate_url}")
                                     final_image_sources['poster_source'] = candidate_url
                                     break
                             finally:
@@ -1018,14 +1082,14 @@ class SiteAvBase:
                     if im_sm_obj:
                         try:
                             # Phase 1: 확장 후보군에 대해 is_hq_poster로 먼저 빠르게 검사
-                            logger.debug("Advanced Check (Phase 1): Performing fast strict check on all advanced candidates.")
+                            # logger.debug("Advanced Check (Phase 1): Performing fast strict check on all advanced candidates.")
                             for candidate_url in all_candidates_advanced:
                                 im_lg_obj = None
                                 try:
                                     im_lg_obj = cls.imopen(candidate_url)
                                     # is_hq_poster (엄격한 기준)로 완벽한 매칭 찾기
                                     if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
-                                        logger.info(f"HQ Poster Found in advanced candidates (Phase 1 strict check): {candidate_url}")
+                                        logger.info(f"HQ Poster Found in advanced Phase 1: {candidate_url}")
                                         final_image_sources['poster_source'] = candidate_url
                                         break # 찾았으면 즉시 종료
                                 finally:
@@ -1033,7 +1097,7 @@ class SiteAvBase:
 
                             # Phase 2: Phase 1에서 못 찾았을 경우에만, 기존의 복잡한 탐색 로직 실행
                             if not final_image_sources['poster_source']:
-                                logger.debug("Advanced Check (Phase 2): Strict check failed. Performing detailed analysis.")
+                                # logger.debug("Advanced Check (Phase 2): Strict check failed. Performing detailed analysis.")
                                 for candidate_url in all_candidates_advanced:
                                     im_lg_obj = cls.imopen(candidate_url)
                                     if not im_lg_obj: continue
@@ -1043,37 +1107,56 @@ class SiteAvBase:
                                         w, h = im_lg_obj.size
                                         aspect_ratio = w / h if h > 0 else 0
 
-                                        # 1순위: 4:3 비율 (레터박스) 처리 시도
+                                        # 1순위: 고화질 이미지 레터박스 처리 시도
                                         if abs(aspect_ratio - (4/3)) < 0.05:
                                             with im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533))) as processed_lg_obj:
-                                                # logger.debug(f"Advanced Check (Priority 1: Letterbox): Trying for {candidate_url}")
-                                                crop_pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj)
+                                                sm_w, sm_h = im_sm_obj.size
+                                                sm_aspect = sm_h / sm_w if sm_w > 0 else 1.4225
+                                                crop_pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj, aspect_ratio=sm_aspect)
+                                                if crop_pos:
+                                                    crop_pos = f"{crop_pos}_{sm_aspect:.4f}"
 
-                                        # 2순위: 1.7:1 이상 와이드 이미지 처리 시도 (1순위에서 실패했을 경우)
+                                        # 2순위: 1.7:1 이상 와이드 이미지 처리 (이중 크롭 + 썸네일 레터박스 처리 통합)
                                         if not crop_pos and aspect_ratio >= 1.7:
                                             # logger.debug(f"Advanced Check (Priority 2: Wide Ratio): Trying for {candidate_url}")
-                                            # 오른쪽 절반 시도
+
+                                            # 기본 비교: 원본 썸네일 사용
+                                            sm_w, sm_h = im_sm_obj.size
+                                            sm_aspect = sm_h / sm_w if sm_w > 0 else 1.4225
+
                                             with im_lg_obj.crop((w / 2, 0, w, h)) as right_half_obj:
-                                                crop_pos = cls.has_hq_poster(im_sm_obj, right_half_obj)
-                                            # 왼쪽 절반 시도 (오른쪽 실패 시)
+                                                sub_pos = cls.has_hq_poster(im_sm_obj, right_half_obj, aspect_ratio=sm_aspect)
+                                                if sub_pos: crop_pos = f"r_{sub_pos}_{sm_aspect:.4f}"
+
                                             if not crop_pos:
                                                 with im_lg_obj.crop((0, 0, w / 2, h)) as left_half_obj:
-                                                    crop_pos = cls.has_hq_poster(im_sm_obj, left_half_obj)
+                                                    sub_pos = cls.has_hq_poster(im_sm_obj, left_half_obj, aspect_ratio=sm_aspect)
+                                                    if sub_pos: crop_pos = f"l_{sub_pos}_{sm_aspect:.4f}"
 
-                                        # 3순위: 원본 이미지 자체에 대한 일반적인 CRL 비교 시도 (1, 2순위에서 모두 실패했을 경우)
+                                            # 재시도: 썸네일 레터박스 제거 후 비교 (위에서 실패했을 경우)
+                                            if not crop_pos:
+                                                # logger.debug("Retrying with cropped thumbnail against the full wide image.")
+                                                with im_sm_obj.crop((0, sm_h * 0.07, sm_w, sm_h * 0.93)) as cropped_sm_obj:
+                                                    sm_w_new, sm_h_new = cropped_sm_obj.size
+                                                    sm_aspect_new = sm_h_new / sm_w_new if sm_w_new > 0 else 1.4225
+                                                    single_pos = cls.has_hq_poster(cropped_sm_obj, im_lg_obj, aspect_ratio=sm_aspect_new)
+                                                    if single_pos:
+                                                        crop_pos = f"{single_pos}_{sm_aspect_new:.4f}"
+
+                                        # 3순위: 원본 이미지 자체에 대한 일반적인 CRL 비교 시도
                                         if not crop_pos:
-                                            # logger.debug(f"Advanced Check (Priority 3: Original CRL): Trying for {candidate_url}")
-                                            crop_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj)
+                                            standard_aspect_ratio = 1.4225
+                                            single_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj, aspect_ratio=standard_aspect_ratio)
+                                            if single_pos:
+                                                crop_pos = f"{single_pos}_{standard_aspect_ratio:.4f}"
 
-                                        # 비교 성공 시 결과 저장 및 루프 탈출
+                                        # 최종 결과 저장
                                         if crop_pos:
-                                            logger.info(f"HQ Poster Found! Matched '{candidate_url}' at position '{crop_pos}' after processing.")
+                                            logger.info(f"HQ Poster Found Matched in Advanced Phase 2: '{candidate_url}' using mode '{crop_pos}'.")
                                             final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
                                             break
-
                                     finally:
-                                        if im_lg_obj:
-                                            im_lg_obj.close()
+                                        if im_lg_obj: im_lg_obj.close()
 
                             # for 루프가 break 없이 모두 실행된 후, im_sm_obj를 닫음
                             else: # no-break
@@ -1196,25 +1279,6 @@ class SiteAvBase:
         except Exception as e:
             logger.error(f"Failed to save PIL to temp file: {e}")
             return None
-
-
-    @classmethod
-    def has_hq_poster_from_url(cls, im_sm_source, im_lg_source):
-        """
-        이미지 소스(URL/경로)를 직접 받아 has_hq_poster를 호출하는 래퍼 함수.
-        내부에서 이미지 객체를 열고 닫는 것을 책임진다.
-        """
-        im_sm_obj, im_lg_obj = None, None
-        try:
-            im_sm_obj = cls.imopen(im_sm_source)
-            im_lg_obj = cls.imopen(im_lg_source)
-            return cls.has_hq_poster(im_sm_obj, im_lg_obj)
-        except Exception as e:
-            logger.error(f"Error in has_hq_poster_from_url for '{im_lg_source}': {e}")
-            return None
-        finally:
-            if im_sm_obj: im_sm_obj.close()
-            if im_lg_obj: im_lg_obj.close()
 
 
     # 의미상 메타데이터에서 처리해야한다.
@@ -1427,71 +1491,6 @@ class SiteAvBase:
 
 
     @classmethod
-    def are_images_visually_same(cls, img_src1, img_src2, threshold=10):
-        """
-        두 이미지 소스(URL 또는 로컬 경로)가 시각적으로 거의 동일한지 비교합니다.
-        Image hashing (dhash + phash)을 사용하여 거리가 임계값 미만인지 확인합니다.
-        """
-        # logger.debug(f"Comparing visual similarity (threshold: {threshold})...")
-        # log_src1 = img_src1 if isinstance(img_src1, str) else "PIL Object 1"
-        # log_src2 = img_src2 if isinstance(img_src2, str) else "PIL Object 2"
-        # logger.debug(f"  Source 1: {log_src1}")
-        # logger.debug(f"  Source 2: {log_src2}")
-
-        try:
-            if img_src1 is None or img_src2 is None:
-                logger.debug("  Result: False (One or both sources are None)")
-                return False
-
-            # 이미지 열기 (imopen은 URL, 경로, PIL 객체 처리 가능)
-            # 첫 번째 이미지는 proxy_url 사용 가능, 두 번째는 주로 로컬 파일이므로 불필요
-            im1 = cls.imopen(img_src1) 
-            im2 = cls.imopen(img_src2) # 두 번째는 로컬 파일 경로 가정
-
-            if im1 is None or im2 is None:
-                logger.debug("  Result: False (Failed to open one or both images)")
-                return False
-            # logger.debug("  Images opened successfully.")
-
-            try:
-                from imagehash import dhash, phash # 한 번에 임포트
-
-                # 크기가 약간 달라도 해시는 비슷할 수 있으므로 크기 비교는 선택적
-                # w1, h1 = im1.size; w2, h2 = im2.size
-                # if w1 != w2 or h1 != h2:
-                #     logger.debug(f"  Sizes differ: ({w1}x{h1}) vs ({w2}x{h2}). Might still be visually similar.")
-
-                # dhash 및 phash 계산
-                dhash1 = dhash(im1); dhash2 = dhash(im2)
-                phash1 = phash(im1); phash2 = phash(im2)
-
-                # 거리 계산
-                d_dist = dhash1 - dhash2
-                p_dist = phash1 - phash2
-                combined_dist = d_dist + p_dist
-
-                # logger.debug(f"  dhash distance: {d_dist}")
-                # logger.debug(f"  phash distance: {p_dist}")
-                # logger.debug(f"  Combined distance: {combined_dist}")
-
-                # 임계값 비교
-                is_same = combined_dist < threshold
-                # logger.debug(f"  Result: {is_same} (Combined distance < {threshold})")
-                return is_same
-
-            except ImportError:
-                logger.warning("  ImageHash library not found. Cannot perform visual similarity check.")
-                return False # 라이브러리 없으면 비교 불가
-            except Exception as hash_e:
-                logger.exception(f"  Error during image hash comparison: {hash_e}")
-                return False # 해시 비교 중 오류
-
-        except Exception as e:
-            logger.exception(f"  Error in are_images_visually_same: {e}")
-            return False # 전체 함수 오류
-
-
-    @classmethod
     def is_hq_poster(cls, im_sm_obj, im_lg_obj):
         """두 PIL Image 객체의 시각적 유사성을 판단합니다."""
         try:
@@ -1502,8 +1501,8 @@ class SiteAvBase:
             if abs((ws / hs) - (wl / hl)) > 0.1: return False
 
             hdis_d = hfun(im_sm_obj) - hfun(im_lg_obj)
-            if hdis_d >= 10: return False
-            if hdis_d <= 5: return True
+            if hdis_d >= 14: return False
+            if hdis_d <= 6: return True
 
             hdis_p = phash(im_sm_obj) - phash(im_lg_obj)
             return (hdis_d + hdis_p) < 15
@@ -1511,7 +1510,7 @@ class SiteAvBase:
 
 
     @classmethod
-    def has_hq_poster(cls, im_sm_obj, im_lg_obj):
+    def has_hq_poster(cls, im_sm_obj, im_lg_obj, aspect_ratio):
         """두 PIL Image 객체를 받아 크롭 영역 일치 여부를 판단하고 크롭 위치를 반환합니다."""
         try:
             if im_sm_obj is None or im_lg_obj is None: return None
@@ -1520,12 +1519,12 @@ class SiteAvBase:
             if ws > wl or hs > hl: return None
 
             positions = ["c", "r", "l"]
-            threshold = 30  # 이 임계값은 필요에 따라 조정 가능
+            threshold = 30
 
             for pos in positions:
                 cropped_im = None
                 try:
-                    cropped_im = SiteUtilAv.imcrop(im_lg_obj, position=pos)
+                    cropped_im = SiteUtilAv.imcrop(im_lg_obj, position=pos, aspect_ratio=aspect_ratio)
                     if cropped_im is None: continue
 
                     # average_hash와 phash를 조합하여 비교
@@ -1540,143 +1539,6 @@ class SiteAvBase:
         except Exception as e:
             logger.debug(f"has_hq_poster exception: {e}")
             return None
-
-
-    @classmethod
-    def _internal_has_hq_poster_comparison(cls, im_sm_obj, im_lg_to_compare, function_name_for_log="has_hq_poster", sm_source_info=None, lg_source_info=None):
-        ws, hs = im_sm_obj.size
-        wl, hl = im_lg_to_compare.size
-        if ws > wl or hs > hl:
-            logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
-            return None
-
-        positions = ["r", "l", "c"]
-        ahash_threshold = 10
-        for pos in positions:
-            try:
-                cropped_im = SiteUtilAv.imcrop(im_lg_to_compare, position=pos)
-                if cropped_im is None: 
-                    continue
-                if average_hash(im_sm_obj) - average_hash(cropped_im) <= ahash_threshold:
-                    # [수정] 로그 강화
-                    logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Found similar (ahash) at pos '{pos}'.")
-                    return pos
-            except Exception as e_ahash:
-                logger.error(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Exception during ahash for pos '{pos}': {e_ahash}")
-                continue
-
-        phash_threshold = 10
-        for pos in positions:
-            try:
-                cropped_im = SiteUtilAv.imcrop(im_lg_to_compare, position=pos)
-                if cropped_im is None: continue
-                if phash(im_sm_obj) - phash(cropped_im) <= phash_threshold:
-                    logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Found similar (phash) at pos '{pos}'.")
-                    return pos
-            except Exception as e_phash:
-                logger.error(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': Exception during phash for pos '{pos}': {e_phash}")
-                continue
-
-        logger.debug(f"{function_name_for_log} for '{sm_source_info}' vs '{lg_source_info}': No similar region found (ahash & phash).")
-        return None
-
-
-    # 파일명에 indx 포함. 0 우, 1 좌
-    @classmethod
-    def get_mgs_half_pl_poster_info_local(cls, ps_url: str, pl_url: str, do_save:bool = True):
-        """
-        MGStage용으로 pl 이미지를 특별 처리합니다. (로컬 임시 파일 사용)
-        pl 이미지를 가로로 반으로 자르고 (오른쪽 우선), 각 절반의 중앙 부분을 ps와 비교합니다.
-        is_hq_poster 검사 성공 시에만 해당 결과를 사용하고,
-        모든 검사 실패 시에는 None, None, None을 반환합니다.
-        """
-        try:
-            # logger.debug(f"MGS Special Local: Trying get_mgs_half_pl_poster_info_local for ps='{ps_url}', pl='{pl_url}'")
-            if not ps_url or not pl_url: return None, None, None
-
-            ps_image = cls.imopen(ps_url)
-            pl_image_original = cls.imopen(pl_url)
-
-            if ps_image is None or pl_image_original is None:
-                # logger.debug("MGS Special Local: Failed to open ps_image or pl_image_original.")
-                return None, None, None
-
-            pl_width, pl_height = pl_image_original.size
-            if pl_width < pl_height * 1.1: # 가로가 세로의 1.1배보다 작으면 충분히 넓지 않다고 판단
-                # logger.debug(f"MGS Special Local: pl_image_original not wide enough ({pl_width}x{pl_height}). Skipping.")
-                return None, None, None
-
-            # 처리 순서 정의: 오른쪽 먼저
-            candidate_sources = []
-            # 오른쪽 절반
-            right_half_box = (pl_width / 2, 0, pl_width, pl_height)
-            right_half_img_obj = pl_image_original.crop(right_half_box)
-            if right_half_img_obj: candidate_sources.append( (right_half_img_obj, f"{pl_url} (right_half)") )
-            # 왼쪽 절반
-            left_half_box = (0, 0, pl_width / 2, pl_height)
-            left_half_img_obj = pl_image_original.crop(left_half_box)
-            if left_half_img_obj: candidate_sources.append( (left_half_img_obj, f"{pl_url} (left_half)") )
-
-            idx = 0
-            for img_obj_to_crop, obj_name in candidate_sources:
-                # logger.debug(f"MGS Special Local: Processing candidate source: {obj_name}")
-                # 중앙 크롭 시도
-                with img_obj_to_crop:
-                    with SiteUtilAv.imcrop(img_obj_to_crop, position='c') as center_cropped_candidate_obj:
-
-                        if center_cropped_candidate_obj:
-                            # logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
-
-                            # is_hq_poster 유사도 검사 시도
-                            # logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
-                            is_similar = cls.is_hq_poster(
-                                ps_image, 
-                                center_cropped_candidate_obj, 
-                                sm_source_info=ps_url, 
-                                lg_source_info=obj_name
-                            )
-
-                            if is_similar:
-                                logger.debug(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
-                                # 성공! 이 객체를 저장하고 반환
-                                img_format = center_cropped_candidate_obj.format if center_cropped_candidate_obj.format else "JPEG"
-                                ext = img_format.lower().replace("jpeg", "jpg")
-                                if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
-                                temp_filename = f"mgs_temp_poster_{int(time.time())}_{os.urandom(4).hex()}_{idx}.{ext}"
-                                temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                                if do_save == False:
-                                    center_cropped_candidate_obj.close()
-                                    return temp_filepath, None, pl_url
-
-                                try:
-                                    os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                                    save_params = {}
-                                    if ext in ['jpg', 'webp']: save_params['quality'] = 95
-                                    elif ext == 'png': save_params['optimize'] = True
-
-                                    # JPEG 저장 시 RGB 변환 필요할 수 있음
-                                    img_to_save = center_cropped_candidate_obj
-                                    if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
-                                        img_to_save = img_to_save.convert('RGB')
-
-                                    img_to_save.save(temp_filepath, **save_params)
-                                    logger.debug(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
-                                    return temp_filepath, None, pl_url # 성공 반환 (파일경로, crop=None, 원본pl)
-                                except Exception as e_save_hq:
-                                    logger.exception(f"MGS Special Local: Failed to save HQ similarity match from {obj_name}: {e_save_hq}")
-
-                            else: # is_hq_poster 검사 실패
-                                logger.debug(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
-                        else: # 크롭 자체 실패
-                            logger.debug(f"MGS Special Local: Failed to crop center from {obj_name}.")
-                idx += 1
-
-            logger.debug("MGS Special Local: All similarity checks failed. No suitable poster found.")
-            return None, None, None # 최종적으로 실패 반환
-
-        except Exception as e:
-            logger.exception(f"MGS Special Local: Error in get_mgs_half_pl_poster_info_local: {e}")
-            return None, None, None
 
 
     # endregion SiteUtilAV 이미지 처리 관련
