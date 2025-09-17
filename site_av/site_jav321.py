@@ -67,8 +67,11 @@ class SiteJav321(SiteAvBase):
             item_ui_code, item_label_part, item_num_part = cls._parse_ui_code(code_from_url_path)
             item.ui_code = item_ui_code
 
-            kw_std_code = kw_label_part + kw_num_part.zfill(5) if kw_num_part.isdigit() else kw_label_part + kw_num_part
-            item_std_code = item_label_part + item_num_part.zfill(5) if item_num_part.isdigit() else item_label_part + item_num_part
+            kw_num_part_stripped = kw_num_part.lstrip('0') or '0'
+            item_num_part_stripped = item_num_part.lstrip('0') or '0'
+
+            kw_std_code = kw_label_part + kw_num_part_stripped.zfill(5) if kw_num_part.isdigit() else kw_label_part + kw_num_part
+            item_std_code = item_label_part + item_num_part_stripped.zfill(5) if item_num_part.isdigit() else item_label_part + item_num_part
 
             # 3. 점수 부여
             if kw_std_code.lower() == item_std_code.lower():
