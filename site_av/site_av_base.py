@@ -551,25 +551,6 @@ class SiteAvBase:
                 return None
 
 
-    # 유사도 확인시에 호출. 0이면 오른쪽
-    @classmethod
-    def get_mgs_half_pl_poster(cls, pl_url: str, idx: int = 0):
-        try:
-            pl_image_original = cls.imopen(pl_url)
-            pl_width, pl_height = pl_image_original.size
-
-            if idx == 0:
-                right_half_box = (pl_width / 2, 0, pl_width, pl_height)
-                target = pl_image_original.crop(right_half_box)
-            else:
-                left_half_box = (0, 0, pl_width / 2, pl_height)
-                target = pl_image_original.crop(left_half_box)
-
-            return SiteUtilAv.imcrop(target, position='c')
-        except Exception as e:
-            logger.exception(f"MGS Special Local: Error in : {e}")
-
-
     # jav_image 기본 처리
     @classmethod
     def default_jav_image(cls, image_url, mode=None):
@@ -941,27 +922,6 @@ class SiteAvBase:
         return entity
 
 
-    @classmethod
-    def check_user_files_exist(cls, entity):
-        """
-        entity에 미리 계산된 target_folder를 사용하여 사용자 파일 존재 여부를 확인.
-        """
-        results = {'poster': False, 'landscape': False}
-        target_folder = getattr(entity, 'image_server_target_folder', None)
-
-        if not entity.ui_code or not target_folder:
-            return results
-
-        code_lower = entity.ui_code.lower()
-
-        if os.path.exists(os.path.join(target_folder, f"{code_lower}_p_user.jpg")):
-            results['poster'] = True
-        if os.path.exists(os.path.join(target_folder, f"{code_lower}_pl_user.jpg")):
-            results['landscape'] = True
-            
-        return results
-
-
     # --- 이미지 소스 결정 ---
     @classmethod
     def determine_final_image_sources(cls, decision_data):
@@ -1078,6 +1038,8 @@ class SiteAvBase:
                 # 확장 후보군 탐색
                 if not final_image_sources['poster_source']:
                     all_candidates_advanced = list(dict.fromkeys(([pl_url] if pl_url else []) + other_arts_on_page))
+                    standard_aspect_ratio = 1.4225
+
                     im_sm_obj = cls.imopen(ps_url)
                     if im_sm_obj:
                         try:
@@ -1095,72 +1057,100 @@ class SiteAvBase:
                                 finally:
                                     if im_lg_obj: im_lg_obj.close()
 
-                            # Phase 2: Phase 1에서 못 찾았을 경우에만, 기존의 복잡한 탐색 로직 실행
+                            # Phase 2: Phase 1에서 못 찾았을 경우에
                             if not final_image_sources['poster_source']:
                                 # logger.debug("Advanced Check (Phase 2): Strict check failed. Performing detailed analysis.")
                                 for candidate_url in all_candidates_advanced:
                                     im_lg_obj = cls.imopen(candidate_url)
                                     if not im_lg_obj: continue
 
-                                    crop_pos = None
+                                    found_poster_for_this_candidate = False
                                     try:
                                         w, h = im_lg_obj.size
                                         aspect_ratio = w / h if h > 0 else 0
+                                        crop_pos = None
 
                                         # 1순위: 고화질 이미지 레터박스 처리 시도
                                         if abs(aspect_ratio - (4/3)) < 0.05:
-                                            with im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533))) as processed_lg_obj:
+                                            processed_lg_obj = None
+                                            final_poster = None
+                                            try:
+                                                top_crop = int(h * 0.0567)
+                                                bottom_crop = h - top_crop
+                                                box = (0, top_crop, w, bottom_crop)
+
+                                                cropped_view = im_lg_obj.crop(box)
+                                                processed_lg_obj = cropped_view.copy()
+                                                cropped_view.close()
+
+                                                pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj, aspect_ratio=standard_aspect_ratio)
+
+                                                if pos:
+                                                    final_poster = SiteUtilAv.imcrop(processed_lg_obj, position=pos, aspect_ratio=standard_aspect_ratio)
+
+                                                    if final_poster:
+                                                        temp_filepath = cls.save_pil_to_temp(final_poster)
+
+                                                        if temp_filepath:
+                                                            final_image_sources['poster_source'] = temp_filepath
+                                                            final_image_sources['poster_mode'] = 'local_file'
+                                                            final_image_sources['temp_poster_filepath'] = temp_filepath
+                                                            final_image_sources['processed_from_url'] = candidate_url
+
+                                                            found_poster_for_this_candidate = True
+                                                            logger.info(f"HQ Poster Found (Letterbox Processed): Saved to {temp_filepath}")
+                                                        else:
+                                                            logger.error("Failed to save the final cropped poster to a temporary file.")
+                                            finally:
+                                                if processed_lg_obj: processed_lg_obj.close()
+                                                if final_poster: final_poster.close()
+
+                                        # 2, 3순위는 1순위에서 찾지 못했을 경우에만 실행
+                                        if not found_poster_for_this_candidate:
+                                            # 2순위: 1.7:1 이상 와이드 이미지 처리
+                                            if aspect_ratio >= 1.7:
+                                                # 기본 비교: 원본 썸네일 사용
                                                 sm_w, sm_h = im_sm_obj.size
-                                                sm_aspect = sm_h / sm_w if sm_w > 0 else 1.4225
-                                                crop_pos = cls.has_hq_poster(im_sm_obj, processed_lg_obj, aspect_ratio=sm_aspect)
-                                                if crop_pos:
-                                                    crop_pos = f"{crop_pos}_{sm_aspect:.4f}"
+                                                sm_aspect = sm_h / sm_w if sm_w > 0 else standard_aspect_ratio
+                                                with im_lg_obj.crop((w / 2, 0, w, h)) as right_half_obj:
+                                                    sub_pos = cls.has_hq_poster(im_sm_obj, right_half_obj, aspect_ratio=sm_aspect)
+                                                    if sub_pos: crop_pos = f"r_{sub_pos}_{sm_aspect:.4f}"
+                                                if not crop_pos:
+                                                    with im_lg_obj.crop((0, 0, w / 2, h)) as left_half_obj:
+                                                        sub_pos = cls.has_hq_poster(im_sm_obj, left_half_obj, aspect_ratio=sm_aspect)
+                                                        if sub_pos: crop_pos = f"l_{sub_pos}_{sm_aspect:.4f}"
+                                                # 재시도: 썸네일 레터박스 제거 후 비교
+                                                if not crop_pos:
+                                                    with im_sm_obj.crop((0, sm_h * 0.07, sm_w, sm_h * 0.93)) as cropped_sm_obj:
+                                                        sm_w_new, sm_h_new = cropped_sm_obj.size
+                                                        sm_aspect_new = sm_h_new / sm_w_new if sm_w_new > 0 else standard_aspect_ratio
+                                                        single_pos = cls.has_hq_poster(cropped_sm_obj, im_lg_obj, aspect_ratio=sm_aspect_new)
+                                                        if single_pos:
+                                                            crop_pos = f"{single_pos}_{sm_aspect_new:.4f}"
 
-                                        # 2순위: 1.7:1 이상 와이드 이미지 처리 (이중 크롭 + 썸네일 레터박스 처리 통합)
-                                        if not crop_pos and aspect_ratio >= 1.7:
-                                            # logger.debug(f"Advanced Check (Priority 2: Wide Ratio): Trying for {candidate_url}")
-
-                                            # 기본 비교: 원본 썸네일 사용
-                                            sm_w, sm_h = im_sm_obj.size
-                                            sm_aspect = sm_h / sm_w if sm_w > 0 else 1.4225
-
-                                            with im_lg_obj.crop((w / 2, 0, w, h)) as right_half_obj:
-                                                sub_pos = cls.has_hq_poster(im_sm_obj, right_half_obj, aspect_ratio=sm_aspect)
-                                                if sub_pos: crop_pos = f"r_{sub_pos}_{sm_aspect:.4f}"
-
+                                            # 3순위: 원본 이미지 자체에 대한 일반적인 CRL 비교 시도
                                             if not crop_pos:
-                                                with im_lg_obj.crop((0, 0, w / 2, h)) as left_half_obj:
-                                                    sub_pos = cls.has_hq_poster(im_sm_obj, left_half_obj, aspect_ratio=sm_aspect)
-                                                    if sub_pos: crop_pos = f"l_{sub_pos}_{sm_aspect:.4f}"
+                                                # 표준 포스터 비율 강제 적용
+                                                single_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj, aspect_ratio=standard_aspect_ratio)
+                                                if single_pos:
+                                                    crop_pos = f"{single_pos}_{standard_aspect_ratio:.4f}"
 
-                                            # 재시도: 썸네일 레터박스 제거 후 비교 (위에서 실패했을 경우)
-                                            if not crop_pos:
-                                                # logger.debug("Retrying with cropped thumbnail against the full wide image.")
-                                                with im_sm_obj.crop((0, sm_h * 0.07, sm_w, sm_h * 0.93)) as cropped_sm_obj:
-                                                    sm_w_new, sm_h_new = cropped_sm_obj.size
-                                                    sm_aspect_new = sm_h_new / sm_w_new if sm_w_new > 0 else 1.4225
-                                                    single_pos = cls.has_hq_poster(cropped_sm_obj, im_lg_obj, aspect_ratio=sm_aspect_new)
-                                                    if single_pos:
-                                                        crop_pos = f"{single_pos}_{sm_aspect_new:.4f}"
-
-                                        # 3순위: 원본 이미지 자체에 대한 일반적인 CRL 비교 시도
-                                        if not crop_pos:
-                                            standard_aspect_ratio = 1.4225
-                                            single_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj, aspect_ratio=standard_aspect_ratio)
-                                            if single_pos:
-                                                crop_pos = f"{single_pos}_{standard_aspect_ratio:.4f}"
-
-                                        # 최종 결과 저장
-                                        if crop_pos:
-                                            logger.info(f"HQ Poster Found Matched in Advanced Phase 2: '{candidate_url}' using mode '{crop_pos}'.")
-                                            final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
-                                            break
+                                            # 2, 3순위 최종 결과 저장
+                                            if crop_pos:
+                                                logger.info(f"HQ Poster Found Matched in Advanced Phase 2: '{candidate_url}' using mode '{crop_pos}'.")
+                                                final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
+                                                found_poster_for_this_candidate = True
                                     finally:
                                         if im_lg_obj: im_lg_obj.close()
 
-                            # for 루프가 break 없이 모두 실행된 후, im_sm_obj를 닫음
+                                    # 이 후보에서 포스터를 찾았다면, 전체 for 루프를 탈출
+                                    if found_poster_for_this_candidate:
+                                        break
+
+                            # for 루프가 break 없이 모두 실행된 후
                             else: # no-break
-                                logger.debug("Advanced Check: No HQ poster found in any advanced candidates.")
+                                if not final_image_sources.get('poster_source'):
+                                    logger.debug("Advanced Check: No HQ poster found in any advanced candidates.")
 
                         finally:
                             if im_sm_obj:
@@ -1203,15 +1193,11 @@ class SiteAvBase:
 
                             # 2. 1.7:1 이상 와이드 (MG-Style)
                             elif aspect_ratio >= 1.7:
-                                right_half = im_lg_obj.crop((w / 2, 0, w, h))
-                                processed_im = SiteUtilAv.imcrop(right_half, position='c')
-                                temp_filepath = cls.save_pil_to_temp(processed_im)
-                                if temp_filepath:
-                                    logger.debug(f"Image for {ui_code} has aspect ratio >= 1.7. Applying right_half and 'crop_c'.")
-                                    final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
-                                processed_im.close(); right_half.close()
+                                logger.debug(f"Image for {ui_code} has aspect ratio >= 1.7. Applying 'crop_r_c'.")
+                                # 최종 크롭 연산을 poster_mode에 기록
+                                final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_r_c'})
 
-                            # 3. (신규) 4:3 비율 미만 (가로가 충분히 넓지 않음)
+                            # 3. 4:3 비율 미만 (가로가 충분히 넓지 않음)
                             elif aspect_ratio < (4/3 - 0.05):
                                 logger.debug(f"Image for {ui_code} has aspect ratio < 4:3. Applying 'crop_c'.")
                                 final_image_sources.update({'poster_source': pl_url, 'poster_mode': 'crop_c'})

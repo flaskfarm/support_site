@@ -1167,6 +1167,8 @@ class SiteDmm(SiteAvBase):
     @classmethod
     def __get_keyword_for_url(cls, temp_keyword, is_retry):
         keyword_for_url = ""
+        label_part_for_retry = ""
+        num_part_for_retry = ""
 
         # --- ID 레이블 특별 처리 (DMM 검색 최적화) ---
 
