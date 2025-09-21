@@ -6,7 +6,7 @@ from urllib.parse import urljoin, quote, urlencode, urlparse
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
-from ..setup import P, logger
+from ..setup import P, logger, F
 from .site_av_base import SiteAvBase
 from ..constants import AV_STUDIO, AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 

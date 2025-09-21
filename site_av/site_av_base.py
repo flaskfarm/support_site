@@ -463,11 +463,11 @@ class SiteAvBase:
         return Response(generate_content(), headers=response_headers)
 
 
-    _parsing_rules = {}
+    _yaml_settings = {}
 
     @classmethod
-    def set_parsing_rules(cls, rules):
-        cls._parsing_rules = rules if rules is not None else {}
+    def set_yaml_settings(cls, settings):
+        cls._yaml_settings = settings if settings is not None else {}
         # logger.debug(f"Global parsing rules updated. Generic: {len(cls._parsing_rules.get('generic_rules', []))}, Censored: {len(cls._parsing_rules.get('censored_special_rules', []))}")
 
 
@@ -494,6 +494,9 @@ class SiteAvBase:
         if getattr(cls, 'config', None) is None:
             cls.config = {}
 
+        parsing_rules = cls._yaml_settings.get('jav_parsing_rules', {})
+        image_settings = cls._yaml_settings.get('jav_image_settings', {})
+
         cls.config.update({
             # 공통 설정 (항상 jav_censored 값을 사용)
             "image_mode": db.get(f'{common_config_prefix}_image_mode'),
@@ -514,9 +517,14 @@ class SiteAvBase:
             "use_proxy": db.get_bool(use_proxy_key),
             "proxy_url": db.get(proxy_url_key),
 
-            "generic_parser_rules": cls._parsing_rules.get('generic_rules', []),
-            "censored_parser_rules": cls._parsing_rules.get('censored_special_rules', []),
-            "uncensored_parser_rules": cls._parsing_rules.get('uncensored_special_rules', []),
+            # 파싱 규칙 설정
+            "generic_parser_rules": parsing_rules.get('generic_rules', []),
+            "censored_parser_rules": parsing_rules.get('censored_special_rules', []),
+            "uncensored_parser_rules": parsing_rules.get('uncensored_special_rules', []),
+
+            # 이미지 임계값 설정
+            "hq_poster_threshold_strict": image_settings.get('hq_poster_threshold_strict', 10),
+            "hq_poster_threshold_normal": image_settings.get('hq_poster_threshold_normal', 30),
         })
         # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
         # uncensored_rules_count = len(cls.config.get('uncensored_parser_rules', {}).get('custom_rules', []))
@@ -1002,21 +1010,17 @@ class SiteAvBase:
             # PS가 있는 다른 모든 사이트를 위한 공통 로직
             elif ps_url:
                 # Case 2: Censored와 같이 ps_url을 기반으로 복잡한 결정이 필요한 경우
+                # 1. (설정) ps_force_labels 확인 (ps_url 직접 사용)
                 apply_ps_to_poster = False
-                forced_crop_mode = None
                 label_from_ui_code = ui_code.split('-', 1)[0] if '-' in ui_code else (re.match(r'([A-Z]+)', ui_code.upper()).group(1) if re.match(r'([A-Z]+)', ui_code.upper()) else '')
                 if label_from_ui_code:
-                    if site_config.get('ps_force_labels_set') and label_from_ui_code in site_config['ps_force_labels_set']: apply_ps_to_poster = True
-                    if site_config.get('crop_mode'):
-                        for line in site_config['crop_mode']:
-                            parts = [x.strip() for x in line.split(":", 1)]
-                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in "rlc": forced_crop_mode = parts[1].lower(); break
-                if forced_crop_mode and pl_url:
-                    final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
-                elif apply_ps_to_poster:
+                    if site_config.get('ps_force_labels_set') and label_from_ui_code in site_config['ps_force_labels_set']:
+                        apply_ps_to_poster = True
+
+                if apply_ps_to_poster:
                     final_image_sources['poster_source'] = ps_url
 
-                # 우선 후보군 탐색
+                # 2. (자동 탐색) 우선 후보군 탐색
                 if not final_image_sources['poster_source']:
                     poster_candidates_simple = ([pl_url] if pl_url else []) + specific_candidates_on_page
                     im_sm_obj = cls.imopen(ps_url)
@@ -1035,7 +1039,7 @@ class SiteAvBase:
 
                         im_sm_obj.close()
 
-                # 확장 후보군 탐색
+                # 3. (자동 탐색) 확장 후보군 탐색
                 if not final_image_sources['poster_source']:
                     all_candidates_advanced = list(dict.fromkeys(([pl_url] if pl_url else []) + other_arts_on_page))
                     standard_aspect_ratio = 1.4225
@@ -1114,11 +1118,15 @@ class SiteAvBase:
                                                 sm_aspect = sm_h / sm_w if sm_w > 0 else standard_aspect_ratio
                                                 with im_lg_obj.crop((w / 2, 0, w, h)) as right_half_obj:
                                                     sub_pos = cls.has_hq_poster(im_sm_obj, right_half_obj, aspect_ratio=sm_aspect)
-                                                    if sub_pos: crop_pos = f"r_{sub_pos}_{sm_aspect:.4f}"
+                                                    if sub_pos:
+                                                        crop_pos = f"r_{sub_pos}_{sm_aspect:.4f}"
+                                                        logger.debug(f"HQ Poster Found (Wide_R): using mode {crop_pos}")
                                                 if not crop_pos:
                                                     with im_lg_obj.crop((0, 0, w / 2, h)) as left_half_obj:
                                                         sub_pos = cls.has_hq_poster(im_sm_obj, left_half_obj, aspect_ratio=sm_aspect)
-                                                        if sub_pos: crop_pos = f"l_{sub_pos}_{sm_aspect:.4f}"
+                                                        if sub_pos:
+                                                            crop_pos = f"l_{sub_pos}_{sm_aspect:.4f}"
+                                                            logger.debug(f"HQ Poster Found (Wide_L): using mode {crop_pos}")
                                                 # 재시도: 썸네일 레터박스 제거 후 비교
                                                 if not crop_pos:
                                                     with im_sm_obj.crop((0, sm_h * 0.07, sm_w, sm_h * 0.93)) as cropped_sm_obj:
@@ -1127,6 +1135,7 @@ class SiteAvBase:
                                                         single_pos = cls.has_hq_poster(cropped_sm_obj, im_lg_obj, aspect_ratio=sm_aspect_new)
                                                         if single_pos:
                                                             crop_pos = f"{single_pos}_{sm_aspect_new:.4f}"
+                                                            logger.debug(f"HQ Poster Found (Thumb_Lbox): using mode {crop_pos}")
 
                                             # 3순위: 원본 이미지 자체에 대한 일반적인 CRL 비교 시도
                                             if not crop_pos:
@@ -1134,6 +1143,7 @@ class SiteAvBase:
                                                 single_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj, aspect_ratio=standard_aspect_ratio)
                                                 if single_pos:
                                                     crop_pos = f"{single_pos}_{standard_aspect_ratio:.4f}"
+                                                    logger.debug(f"HQ Poster Found (Standard): using mode {crop_pos}")
 
                                             # 2, 3순위 최종 결과 저장
                                             if crop_pos:
@@ -1156,28 +1166,49 @@ class SiteAvBase:
                             if im_sm_obj:
                                 im_sm_obj.close()
 
+                # 4. (수동 설정) 모든 자동 탐색 실패 시, 강제 크롭 모드 적용
+                if not final_image_sources['poster_source']:
+                    forced_crop_mode = None
+                    if site_config.get('crop_mode'):
+                        for line in site_config['crop_mode']:
+                            parts = [x.strip() for x in line.split(":", 1)]
+                            if len(parts) == 2 and parts[0].upper() == label_from_ui_code and parts[1].lower() in "rlc":
+                                forced_crop_mode = parts[1].lower()
+                                break
+                    if forced_crop_mode and pl_url:
+                        final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
+
             else:
                 # Case 3: JavDB와 같이 ps_url 없이 pl/arts로 결정해야 하는 경우
-                logger.debug(f"Determining poster source for {ui_code} via complex logic (no ps_url).")
-                forced_crop_mode = None
-                label = ui_code.split('-', 1)[0] if '-' in ui_code else (re.match(r'([A-Z]+)', ui_code.upper()).group(1) if re.match(r'([A-Z]+)', ui_code.upper()) else '')
-                if label and site_config.get('crop_mode'):
-                    for rule in site_config['crop_mode']:
-                        parts = [x.strip() for x in rule.split(":", 1)]
-                        if len(parts) == 2 and parts[0].upper() == label and parts[1].lower() in "rlc":
-                            forced_crop_mode = parts[1].lower(); break
-                if forced_crop_mode and pl_url:
-                    final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
+                # 1. (자동 탐색) 고화질 세로 이미지 우선 탐색
+                portrait_found = False
+                for candidate_url in specific_candidates_on_page:
+                    if cls.is_portrait_high_quality_image(cls.imopen(candidate_url)):
+                        final_image_sources['poster_source'] = candidate_url
+                        portrait_found = True
+                        logger.debug(f"Found & using portrait HQ poster: {candidate_url}")
+                        break
 
+                # 2. (수동 설정) 세로 이미지가 없을 경우, 강제 크롭 모드 적용
+                if not portrait_found: # final_image_sources['poster_source'] 대신 portrait_found 플래그 사용
+                    forced_crop_mode = None
+                    label = ui_code.split('-', 1)[0]
+                    if label and site_config.get('crop_mode'):
+                        for rule in site_config['crop_mode']:
+                            # JavDB는 '='를 사용한다고 가정.
+                            parts = [x.strip() for x in rule.split(":", 1)]
+                            if len(parts) == 2 and parts[0].upper() == label.upper() and parts[1].lower() in "rlc":
+                                forced_crop_mode = parts[1].lower()
+                                break
+                    if forced_crop_mode and pl_url:
+                        final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
+                        logger.debug(f"Applying forced crop mode: {pl_url}, (crop_mode: crop_{forced_crop_mode})")
+
+                # 3. (자동 분석) 위 방법들이 모두 실패했을 경우, 비율 기반 분석
                 if not final_image_sources['poster_source']:
-                    for candidate_url in specific_candidates_on_page:
-                        if cls.is_portrait_high_quality_image(cls.imopen(candidate_url)):
-                            final_image_sources['poster_source'] = candidate_url; break
-
-                if not final_image_sources['poster_source'] and pl_url:
-                    im_lg_obj = cls.imopen(pl_url)
-                    if im_lg_obj:
+                    if pl_url:
                         try:
+                            im_lg_obj = cls.imopen(pl_url)
                             w, h = im_lg_obj.size
                             aspect_ratio = w / h if h > 0 else 0
 
@@ -1487,11 +1518,12 @@ class SiteAvBase:
             if abs((ws / hs) - (wl / hl)) > 0.1: return False
 
             hdis_d = hfun(im_sm_obj) - hfun(im_lg_obj)
-            if hdis_d >= 14: return False
-            if hdis_d <= 6: return True
+            if hdis_d >= 10: return False
+            if hdis_d <= 5: return True
 
             hdis_p = phash(im_sm_obj) - phash(im_lg_obj)
-            return (hdis_d + hdis_p) < 15
+            threshold = cls.config.get('hq_poster_threshold_strict', 10)
+            return (hdis_d + hdis_p) < threshold
         except Exception: return False
 
 
@@ -1505,7 +1537,7 @@ class SiteAvBase:
             if ws > wl or hs > hl: return None
 
             positions = ["c", "r", "l"]
-            threshold = 30
+            threshold = cls.config.get('hq_poster_threshold_normal', 30)
 
             for pos in positions:
                 cropped_im = None
