@@ -99,8 +99,11 @@ class SiteDmm(SiteAvBase):
 
         # --- 검색 결과 목록 추출 XPath ---
         list_xpath_options = [
+            # 'Product' 이미지를 가진 <a> 태그를 포함하는 div의 부모 div를 찾음
+            '//a[./img[@alt="Product"]]/parent::div/parent::div',
+            # 폴백(Fallback)
             '//div[contains(@class, "border-r") and contains(@class, "border-b") and contains(@class, "border-gray-300")]',
-            '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]', # (Fallback)
+            '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]',
         ]
 
         lists = []
