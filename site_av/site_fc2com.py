@@ -211,74 +211,109 @@ class SiteFc2com(SiteAvBase):
         if not selenium_url:
             raise Exception("Selenium 서버 URL이 설정되지 않았습니다.")
 
-        options = webdriver.ChromeOptions()
-        options.add_argument('--headless=new')
+        driver_type = cls.config.get('selenium_driver_type', 'chrome')
+        logger.debug(f"[{cls.site_name}] Preparing Selenium driver. Type: {driver_type}")
+
+        if driver_type == 'firefox':
+            options = webdriver.FirefoxOptions()
+            options.add_argument('--headless')
+        else: # 기본값은 chrome
+            options = webdriver.ChromeOptions()
+            options.add_argument('--headless=new')
+            # Chrome 전용 자동화 탐지 우회 옵션
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option('useAutomationExtension', False)
+            options.add_argument('--disable-blink-features=AutomationControlled')
+
+        # 공통 옵션
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         options.add_argument(f'user-agent={user_agent}')
         options.add_argument("--disable-infobars")
-        options.add_argument('--disable-blink-features=AutomationControlled')
 
+        # --- START: 드라이버 타입에 따른 프록시 설정 분기 ---
         if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
             proxy_url = cls.config["proxy_url"]
             # logger.debug(f"[{cls.site_name}] Selenium using proxy: {proxy_url}")
-            if '@' in proxy_url:
-                try:
+
+            # Firefox 프록시 설정
+            if driver_type == 'firefox':
+                if '@' in proxy_url:
+                    logger.warning(f"[{cls.site_name}] Authenticated proxy is not supported for Firefox. Using proxy without authentication info.")
+                    # 인증 정보 제거
                     parsed_proxy = urlparse(proxy_url)
-                    proxy_host, proxy_port = parsed_proxy.hostname, parsed_proxy.port
-                    proxy_user, proxy_pass = parsed_proxy.username, parsed_proxy.password
-                    proxy_scheme = parsed_proxy.scheme or 'http'
+                    proxy_url = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
 
-                    manifest_json = """
-                    {
-                        "version": "1.0.0", "manifest_version": 2, "name": "Chrome Proxy",
-                        "permissions": [ "proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking" ],
-                        "background": { "scripts": ["background.js"] }
-                    }
-                    """
-                    background_js = f"""
-                    var config = {{
-                        mode: "fixed_servers",
-                        rules: {{
-                            singleProxy: {{
-                                scheme: "{proxy_scheme}", host: "{proxy_host}", port: parseInt({proxy_port})
-                            }},
-                            bypassList: ["localhost", "127.0.0.1", "{urlparse(selenium_url).hostname}"]
-                        }}
-                    }};
-                    chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
-                    function callbackFn(details) {{
-                        return {{ authCredentials: {{ username: "{proxy_user}", password: "{proxy_pass}" }} }};
-                    }}
-                    chrome.webRequest.onAuthRequired.addListener(callbackFn,{{urls: ["<all_urls>"]}},['blocking']);
-                    """
+                logger.debug(f"[{cls.site_name}] Setting Firefox proxy via preferences: {proxy_url}")
+                parsed_proxy = urlparse(proxy_url)
+                options.set_preference("network.proxy.type", 1)
+                options.set_preference("network.proxy.http", parsed_proxy.hostname)
+                options.set_preference("network.proxy.http_port", parsed_proxy.port)
+                options.set_preference("network.proxy.ssl", parsed_proxy.hostname)
+                options.set_preference("network.proxy.ssl_port", parsed_proxy.port)
+                options.set_preference("network.proxy.no_proxies_on", f"localhost, 127.0.0.1, {urlparse(selenium_url).hostname}")
 
-                    zip_buffer = BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w') as zp:
-                        zp.writestr("manifest.json", manifest_json)
-                        zp.writestr("background.js", background_js)
-
-                    extension_b64 = base64.b64encode(zip_buffer.getvalue()).decode('utf-8')
-                    options.add_encoded_extension(extension_b64)
-                except Exception as e:
-                    logger.error(f"[{cls.site_name}] Failed to create proxy auth extension, falling back: {e}")
-                    options.add_argument(f'--proxy-server={proxy_url}')
+            # Chrome 프록시 설정
             else:
-                options.add_argument(f'--proxy-server={proxy_url}')
+                if '@' in proxy_url:
+                    try:
+                        parsed_proxy = urlparse(proxy_url)
+                        proxy_host, proxy_port = parsed_proxy.hostname, parsed_proxy.port
+                        proxy_user, proxy_pass = parsed_proxy.username, parsed_proxy.password
+                        proxy_scheme = parsed_proxy.scheme or 'http'
+
+                        manifest_json = """
+                        {
+                            "version": "1.0.0", "manifest_version": 2, "name": "Chrome Proxy",
+                            "permissions": [ "proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking" ],
+                            "background": { "scripts": ["background.js"] }
+                        }
+                        """
+                        background_js = f"""
+                        var config = {{
+                            mode: "fixed_servers",
+                            rules: {{
+                                singleProxy: {{
+                                    scheme: "{proxy_scheme}", host: "{proxy_host}", port: parseInt({proxy_port})
+                                }},
+                                bypassList: ["localhost", "127.0.0.1", "{urlparse(selenium_url).hostname}"]
+                            }}
+                        }};
+                        chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
+                        function callbackFn(details) {{
+                            return {{ authCredentials: {{ username: "{proxy_user}", password: "{proxy_pass}" }} }};
+                        }}
+                        chrome.webRequest.onAuthRequired.addListener(callbackFn,{{urls: ["<all_urls>"]}},['blocking']);
+                        """
+
+                        zip_buffer = BytesIO()
+                        with zipfile.ZipFile(zip_buffer, 'w') as zp:
+                            zp.writestr("manifest.json", manifest_json)
+                            zp.writestr("background.js", background_js)
+
+                        extension_b64 = base64.b64encode(zip_buffer.getvalue()).decode('utf-8')
+                        options.add_encoded_extension(extension_b64)
+                    except Exception as e:
+                        logger.error(f"[{cls.site_name}] Failed to create proxy auth extension, falling back: {e}")
+                        options.add_argument(f'--proxy-server={proxy_url}')
+                else:
+                    options.add_argument(f'--proxy-server={proxy_url}')
 
         original_timeout = socket.getdefaulttimeout()
         try:
-            socket.setdefaulttimeout(10)
-            logger.debug(f"[{cls.site_name}] Connecting to Selenium at: {selenium_url} (10s timeout)")
+            socket.setdefaulttimeout(20)
+            logger.debug(f"[{cls.site_name}] Connecting to Selenium at: {selenium_url} (20s timeout)")
             driver = webdriver.Remote(command_executor=selenium_url, options=options)
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            # Chrome 전용 자동화 탐지 우회 스크립트
+            if driver_type == 'chrome':
+                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
             return driver
         except (socket.timeout, TimeoutError) as e:
-            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 시간이 10초를 초과했습니다: {e}")
+            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 시간이 20초를 초과했습니다: {e}")
             raise WebDriverException("Selenium 서버 연결 시간 초과") from e
         except WebDriverException as e:
             logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패: {e}")

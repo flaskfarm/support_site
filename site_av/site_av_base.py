@@ -505,6 +505,7 @@ class SiteAvBase:
             "max_arts": db.get_int(f'{common_config_prefix}_art_count'),
             "use_imagehash": db.get_bool(f'{common_config_prefix}_use_imagehash'),
             "selenium_url": db.get('jav_uncensored_selenium_url'),
+            "selenium_driver_type": db.get('jav_uncensored_selenium_driver_type'),
 
             # 이미지 서버 관련 공통 설정
             "image_server_local_path": db.get(f'{common_config_prefix}_image_server_local_path'),
