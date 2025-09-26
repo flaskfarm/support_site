@@ -4,7 +4,7 @@ from typing import Union
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb
-from ..setup import P, logger
+from ..setup import P, logger, F
 from .site_av_base import SiteAvBase
 from ..constants import AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 
@@ -268,20 +268,19 @@ class SiteJavbus(SiteAvBase):
                 if label not in entity.tag:
                     entity.tag.append(label)
 
-            # === 3. 이미지 처리 위임 ===
-
-            # PS URL은 검색 캐시 또는 페이지에서 직접 유추하여 가져옴
+            # === 3. 이미지 URL 수집 및 처리 위임 ===
             ps_url_from_search_cache = cls._ps_url_cache.get(code, {}).get('ps')
 
-            # 검색 캐시에 PS가 없었다면, 페이지에서 유추한 PS를 사용
-            ps_url_to_use = ps_url_from_search_cache or raw_image_urls.get('ps')
-
             try:
+                # 3-1. 페이지에서 모든 원본 이미지 URL 수집
                 raw_image_urls = cls.__img_urls(tree)
 
+                # 3-2. fp_meta_mode에 따른 분기 처리
                 if not fp_meta_mode:
+                    # process_image_data에 모든 이미지 처리 위임
                     entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
                 else:
+                    # fp_meta_mode일 경우, 간단한 URL 할당
                     poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
                     if poster_url:
                         entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
@@ -290,11 +289,10 @@ class SiteJavbus(SiteAvBase):
                     if landscape_url:
                         entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
 
-                    # 팬아트는 URL만 리스트로 할당
                     entity.fanart = raw_image_urls.get('arts', [])
 
             except Exception as e:
-                logger.exception(f"JavBus: Error during image processing delegation for {code}: {e}")
+                logger.exception(f"JavBus: Error during image processing for {code}: {e}")
 
             # === 4. Shiroutoname 보정 처리 ===
             if entity.originaltitle:
