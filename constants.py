@@ -1927,6 +1927,7 @@ MGS_LABEL_MAP = {
     "OREJ": ["230OREJ"],
     "OREMO": ["230OREMO"],
     "OREO": ["230OREO"],
+    "ORESO": ["230ORESO"],
     "OREV": ["230OREV"],
     "ORG": ["077ORG"],
     "OSBR": ["404OSBR"],
