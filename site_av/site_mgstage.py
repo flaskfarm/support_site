@@ -218,7 +218,7 @@ class SiteMgstage(SiteAvBase):
             if h1_tags:
                 h1_text_raw = h1_tags[0]
                 for ptn in PTN_TEXT_SUB: h1_text_raw = ptn.sub("", h1_text_raw)
-                entity.tagline = cls.trans(cls.A_P(h1_text_raw.strip()))
+                entity.tagline = cls.A_P(h1_text_raw.strip()) if fp_meta_mode else cls.trans(cls.A_P(h1_text_raw.strip()))
 
             plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[2]')
             if plot_nodes:
@@ -226,7 +226,7 @@ class SiteMgstage(SiteAvBase):
                     plot_html_raw = html.tostring(plot_nodes[0], encoding='unicode')
                     cleaned_plot = cls.A_P(plot_html_raw)
                     if cleaned_plot:
-                        entity.plot = cls.trans(cleaned_plot)
+                        entity.plot = cleaned_plot if fp_meta_mode else cls.trans(cleaned_plot)
                 except Exception as e_plot:
                     logger.error(f"MGStage: Failed to parse plot for {code}: {e_plot}")
 
@@ -270,20 +270,23 @@ class SiteMgstage(SiteAvBase):
                 elif "シリーズ" in key_text:
                     s_name = (value_node_instance.xpath("./a/text()")[0] if value_node_instance.xpath("./a/text()") else value_text_content).strip()
                     if s_name:
-                        trans_s = cls.trans(s_name)
-                        if trans_s and trans_s not in (entity.tag or []): 
+                        tag_to_add = s_name if fp_meta_mode else cls.trans(s_name)
+                        if tag_to_add and tag_to_add not in (entity.tag or []): 
                             if entity.tag is None: entity.tag = []
-                            entity.tag.append(trans_s)
+                            entity.tag.append(tag_to_add)
                 elif "レーベル" in key_text: 
                     studio_name = (value_node_instance.xpath("./a/text()")[0] if value_node_instance.xpath("./a/text()") else value_text_content).strip()
                     if studio_name: 
-                        entity.studio = cls.trans(studio_name)
+                        entity.studio = studio_name if fp_meta_mode else cls.trans(studio_name)
                 elif "ジャンル" in key_text:
                     if entity.genre is None: entity.genre = []
                     for g_tag in value_node_instance.xpath("./a"):
                         g_ja = g_tag.text_content().strip()
                         if "MGSだけのおまけ映像付き" in g_ja or not g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
-                        if g_ja in AV_GENRE:
+                        if fp_meta_mode:
+                            if g_ja not in entity.genre:
+                                entity.genre.append(g_ja)
+                        elif g_ja in AV_GENRE:
                             g_ko = AV_GENRE[g_ja]
                             if g_ko not in entity.genre: entity.genre.append(g_ko)
                         else:
@@ -329,46 +332,29 @@ class SiteMgstage(SiteAvBase):
         # 3. 이미지 처리: 모든 이미지 관련 로직을 공통 메서드에 위임
         try:
             raw_image_urls = cls.__img_urls(tree)
-
-            if not fp_meta_mode:
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
-            else:
-                poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
-                if poster_url:
-                    entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
-
-                landscape_url = raw_image_urls.get('pl')
-                if landscape_url:
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
-
-                # 팬아트는 URL만 리스트로 할당
-                entity.fanart = raw_image_urls.get('arts', [])
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
 
         except Exception as e:
             logger.exception(f"MGStage: Error during image processing delegation for {code}: {e}")
 
         # 4. 예고편 및 Shiroutoname 보정 처리
-        if not fp_meta_mode and cls.config['use_extras']:
-            if cls.config['use_extras']:
-                try:
-                    trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
-                    if trailer_sample_btn:
-                        pid_trailer = trailer_sample_btn[0].split("/")[-1]
-                        api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
-                        api_headers_trailer = cls.default_headers.copy(); api_headers_trailer['Referer'] = url 
-                        api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
-                        res_json_trailer = cls.get_response(api_url_trailer, headers=api_headers_trailer).json()
-                        if res_json_trailer and res_json_trailer.get("url"):
-                            trailer_base = res_json_trailer["url"].split(".ism")[0]; 
-                            trailer_final_url = trailer_base + ".mp4"
-                            trailer_final_url = cls.make_video_url(trailer_final_url)
-                            trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
-                            entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
-                except Exception as e_trailer_proc_dvd:
-                    logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
-        elif fp_meta_mode:
-            # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
-            pass
+        if cls.config['use_extras']:
+            try:
+                trailer_sample_btn = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
+                if trailer_sample_btn:
+                    pid_trailer = trailer_sample_btn[0].split("/")[-1]
+                    api_url_trailer = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid_trailer}"
+                    api_headers_trailer = cls.default_headers.copy(); api_headers_trailer['Referer'] = url 
+                    api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
+                    res_json_trailer = cls.get_response(api_url_trailer, headers=api_headers_trailer).json()
+                    if res_json_trailer and res_json_trailer.get("url"):
+                        trailer_base = res_json_trailer["url"].split(".ism")[0]; 
+                        trailer_final_url = trailer_base + ".mp4"
+                        trailer_final_url = cls.make_video_url(trailer_final_url)
+                        trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
+                        entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
+            except Exception as e_trailer_proc_dvd:
+                logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
 
         if entity.originaltitle:
             try:

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import re
+import os
 import traceback
 import time
 from urllib.parse import urljoin, urlparse
@@ -162,7 +163,9 @@ class SiteFc2com(SiteAvBase):
         if h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
             raw_title = cls._extract_fc2com_title(h3_title[0])
             cleaned_text = cls.A_P(raw_title)
-            entity.tagline = entity.plot = cls.trans(cleaned_text)
+            text_to_assign = cleaned_text if fp_meta_mode else cls.trans(cleaned_text)
+            entity.tagline = text_to_assign
+            entity.plot = text_to_assign
 
         if date_text := tree.xpath('//p[contains(text(), "Sale Day")]/text()'):
             if match_date := re.search(r'(\d{4})/(\d{2})/(\d{2})', date_text[0]):
@@ -170,10 +173,13 @@ class SiteFc2com(SiteAvBase):
                 entity.year = int(match_date.group(1))
 
         if seller := tree.xpath('//a[contains(@href, "/users/")]/text()'):
-            entity.studio = entity.director = seller[0].strip()
+            studio_director_text = seller[0].strip()
+            entity.studio = studio_director_text
+            entity.director = studio_director_text
 
         for genre_name in tree.xpath('//section[contains(@class, "items_article_TagArea")]//a/text()'):
-            entity.genre.append(cls.trans(genre_name.strip()))
+            tag_to_add = genre_name.strip() if fp_meta_mode else cls.trans(genre_name.strip())
+            entity.genre.append(tag_to_add)
 
         entity.tag.append('FC2')
         if entity.studio and entity.studio not in entity.tag:
@@ -186,18 +192,40 @@ class SiteFc2com(SiteAvBase):
         for art_src in tree.xpath('//section[contains(@class, "items_article_SampleImages")]//a/@href'):
             raw_image_urls['arts'].append(cls._normalize_url(art_src, cls.site_base_url, upgrade_size=True))
 
-        if not fp_meta_mode:
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
-        else:
-            if raw_image_urls.get('poster'):
-                entity.thumb.append(EntityThumb(aspect="poster", value=raw_image_urls['poster']))
-            entity.fanart = raw_image_urls.get('arts', [])
+        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+        if image_mode == 'image_server':
+            try:
+                code_match = re.search(r'(\d+)$', entity.ui_code)
+                if code_match:
+                    num_part = code_match.group(1)
 
-        if not fp_meta_mode and cls.config['use_extras']:
+                    # 7자리로 패딩 후 앞 3자리 추출
+                    padded_num = num_part.zfill(7)
+                    sub_folder = padded_num[:3]
+
+                    # 전체 경로 조합
+                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format') # 예: /jav/uncen/{label}
+                    base_path_part = base_save_format.format(label=entity.label) 
+
+                    final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), sub_folder)
+
+                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
+                    logger.debug(f"[{cls.site_name}] Custom image server path set for {entity.ui_code}: {entity.image_server_target_folder}")
+
+            except Exception as e:
+                logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+
+        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+
+        if cls.config['use_extras']:
             if video_src := tree.xpath('//video[contains(@id, "sample_video")]/@src'):
                 trailer_url = cls._normalize_url(video_src[0], cls.site_base_url, upgrade_size=False)
                 if url := cls.make_video_url(trailer_url):
-                    entity.extras.append(EntityExtra("trailer", entity.tagline, "mp4", url))
+                    trailer_title = entity.tagline if (fp_meta_mode or not entity.tagline) else cls.trans(entity.tagline)
+                    entity.extras.append(EntityExtra("trailer", trailer_title, "mp4", url))
 
         return entity
 

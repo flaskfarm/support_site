@@ -225,7 +225,7 @@ class SiteJav321(SiteAvBase):
                 plot_full_text = plot_div_nodes[0].text_content().strip()
                 if plot_full_text:
                     cleaned_plot = cls.A_P(cls._clean_value(plot_full_text))
-                    entity.plot = cls.trans(cleaned_plot)
+                    entity.plot = cleaned_plot if fp_meta_mode else cls.trans(cleaned_plot)
 
             info_container_node_list = tree.xpath('//div[contains(@class, "panel-body")]//div[contains(@class, "col-md-9")]')
             if info_container_node_list:
@@ -262,7 +262,8 @@ class SiteJav321(SiteAvBase):
                         studio_name_raw = (b_tag_key_node.xpath("./following-sibling::a[1][contains(@href, '/company/')]/text()") or [""])[0]
                         if not studio_name_raw: studio_name_raw = (b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0]
                         cleaned_studio_name = cls._clean_value(studio_name_raw)
-                        if cleaned_studio_name: entity.studio = cls.trans(cleaned_studio_name)
+                        if cleaned_studio_name:
+                            entity.studio = cleaned_studio_name if fp_meta_mode else cls.trans(cleaned_studio_name)
                     elif current_key == "ジャンル":
                         if entity.genre is None: entity.genre = []
                         genre_a_tags = b_tag_key_node.xpath("./following-sibling::a[contains(@href, '/genre/')]")
@@ -270,7 +271,10 @@ class SiteJav321(SiteAvBase):
                         for genre_link in genre_a_tags:
                             genre_ja_cleaned = cls._clean_value(genre_link.text_content().strip())
                             if not genre_ja_cleaned or genre_ja_cleaned in AV_GENRE_IGNORE_JA: continue
-                            if genre_ja_cleaned in AV_GENRE: temp_genre_list.append(AV_GENRE[genre_ja_cleaned])
+                            if fp_meta_mode:
+                                temp_genre_list.append(genre_ja_cleaned)
+                            elif genre_ja_cleaned in AV_GENRE: 
+                                temp_genre_list.append(AV_GENRE[genre_ja_cleaned])
                             else:
                                 genre_ko_item = cls.trans(genre_ja_cleaned).replace(" ", "")
                                 if genre_ko_item not in AV_GENRE_IGNORE_KO: 
@@ -294,8 +298,8 @@ class SiteJav321(SiteAvBase):
                         series_name_cleaned = cls._clean_value(series_name_raw)
                         if series_name_cleaned:
                             if entity.tag is None: entity.tag = []
-                            trans_series = cls.trans(series_name_cleaned)
-                            if trans_series and trans_series not in entity.tag: entity.tag.append(trans_series)
+                            tag_to_add = series_name_cleaned if fp_meta_mode else cls.trans(series_name_cleaned)
+                            if tag_to_add and tag_to_add not in entity.tag: entity.tag.append(tag_to_add)
                     elif current_key == "平均評価":
                         rating_val_cleaned = cls._clean_value((b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0])
                         if rating_val_cleaned:
@@ -322,38 +326,21 @@ class SiteJav321(SiteAvBase):
 
             try:
                 raw_image_urls = cls.__img_urls(tree)
-
-                if not fp_meta_mode:
-                    entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
-                else:
-                    poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
-                    if poster_url:
-                        entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
-
-                    landscape_url = raw_image_urls.get('pl')
-                    if landscape_url:
-                        entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
-
-                    # 팬아트는 URL만 리스트로 할당
-                    entity.fanart = raw_image_urls.get('arts', [])
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
 
             except Exception as e:
                 logger.exception(f"Jav321: Error during image processing delegation for {code}: {e}")
 
             # === 4. 예고편 및 Shiroutoname 보정 처리 ===
-            if not fp_meta_mode and cls.config['use_extras']:
-                if cls.config['use_extras']:
-                    try: 
-                        trailer_xpath = '//*[@id="vjs_sample_player"]/source/@src'
-                        trailer_tags = tree.xpath(trailer_xpath)
-                        if trailer_tags and trailer_tags[0].strip().startswith("http"):
-                            url = cls.make_video_url(trailer_tags[0].strip())
-                            if url:
-                                entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", url))
-                    except Exception as e_trailer: logger.exception(f"Jav321: Error processing trailer for {code}: {e_trailer}")
-            elif fp_meta_mode:
-                # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
-                pass
+            if cls.config['use_extras']:
+                try: 
+                    trailer_xpath = '//*[@id="vjs_sample_player"]/source/@src'
+                    trailer_tags = tree.xpath(trailer_xpath)
+                    if trailer_tags and trailer_tags[0].strip().startswith("http"):
+                        url = cls.make_video_url(trailer_tags[0].strip())
+                        if url:
+                            entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", url))
+                except Exception as e_trailer: logger.exception(f"Jav321: Error processing trailer for {code}: {e_trailer}")
 
             if entity.originaltitle:
                 try:
@@ -368,7 +355,7 @@ class SiteJav321(SiteAvBase):
         except Exception as e_main:
             logger.exception(f"Jav321: Major error during info processing for {code}: {e_main}")
             return None
-        
+
         finally:
             # === 6. 임시 파일 정리 ===
             if mgs_special_poster_filepath and os.path.exists(mgs_special_poster_filepath):
