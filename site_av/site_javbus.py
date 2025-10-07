@@ -204,11 +204,13 @@ class SiteJavbus(SiteAvBase):
 
             h3_text = tree.xpath("normalize-space(//div[@class='container']/h3/text())")
             cleaned_h3_text = cls.A_P(h3_text)
-            
+
             if cleaned_h3_text.upper().startswith(entity.ui_code):
-                entity.tagline = cls.trans(cleaned_h3_text[len(entity.ui_code):].strip())
+                tagline_text = cleaned_h3_text[len(entity.ui_code):].strip()
             else:
-                entity.tagline = cls.trans(cleaned_h3_text)
+                tagline_text = cleaned_h3_text
+
+            entity.tagline = tagline_text if fp_meta_mode else cls.trans(tagline_text)
 
             if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
                 entity.plot = entity.tagline
@@ -234,12 +236,14 @@ class SiteJavbus(SiteAvBase):
                     try: entity.runtime = int(value.replace("分鐘", "").strip())
                     except: pass
                 elif key == "導演": entity.director = value
-                elif key == "製作商": entity.studio = cls.trans(value)
-                elif key == "發行商" and not entity.studio: entity.studio = cls.trans(value)
+                elif key == "製作商":
+                    entity.studio = value if fp_meta_mode else cls.trans(value)
+                elif key == "發行商" and not entity.studio:
+                    entity.studio = value if fp_meta_mode else cls.trans(value)
                 elif key == "系列":
-                    trans_series = cls.trans(value)
-                    if trans_series not in entity.tag:
-                        entity.tag.append(trans_series)
+                    tag_to_add = value if fp_meta_mode else cls.trans(value)
+                    if tag_to_add not in entity.tag:
+                        entity.tag.append(tag_to_add)
 
             if genre_header_p_node is not None:
                 entity.genre = []
@@ -247,7 +251,10 @@ class SiteJavbus(SiteAvBase):
                     genre_ja = "".join(genre_span.xpath("./label/a/text() | ./a/text()")).strip()
                     if not genre_ja or genre_ja == "多選提交" or genre_ja in AV_GENRE_IGNORE_JA: 
                         continue
-                    if genre_ja in AV_GENRE:
+                    if fp_meta_mode:
+                        if genre_ja not in entity.genre:
+                            entity.genre.append(genre_ja)
+                    elif genre_ja in AV_GENRE:
                         if AV_GENRE[genre_ja] not in entity.genre:
                             entity.genre.append(AV_GENRE[genre_ja])
                     else:
@@ -276,20 +283,7 @@ class SiteJavbus(SiteAvBase):
                 raw_image_urls = cls.__img_urls(tree)
 
                 # 3-2. fp_meta_mode에 따른 분기 처리
-                if not fp_meta_mode:
-                    # process_image_data에 모든 이미지 처리 위임
-                    entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
-                else:
-                    # fp_meta_mode일 경우, 간단한 URL 할당
-                    poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
-                    if poster_url:
-                        entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
-
-                    landscape_url = raw_image_urls.get('pl')
-                    if landscape_url:
-                        entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
-
-                    entity.fanart = raw_image_urls.get('arts', [])
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
 
             except Exception as e:
                 logger.exception(f"JavBus: Error during image processing for {code}: {e}")
@@ -340,12 +334,12 @@ class SiteJavbus(SiteAvBase):
             for href_art in tree.xpath('//*[@id="sample-waterfall"]/a/@href'):
                 all_sample_images.append(cls.__fix_url(href_art))
             all_sample_images = list(dict.fromkeys(all_sample_images))
-            
+
             # 4. 역할에 맞게 데이터 분류 및 정제
             thumb_candidates = set()
             if pl_url:
                 thumb_candidates.add(pl_url)
-            
+
             # Javbus는 PL 외에 명확한 포스터 후보가 없으므로 specific_poster_candidates는 비워둠
             specific_poster_candidates = []
 

@@ -305,7 +305,7 @@ class SiteJavdb(SiteAvBase):
                         actual_raw_title_text = current_title_node[0].strip()
 
             if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
-                entity.tagline = cls.trans(cls.A_P(actual_raw_title_text))
+                entity.tagline = cls.A_P(actual_raw_title_text) if fp_meta_mode else cls.trans(cls.A_P(actual_raw_title_text))
             else: 
                 entity.tagline = entity.ui_code
 
@@ -341,33 +341,38 @@ class SiteJavdb(SiteAvBase):
                         except (ValueError, IndexError): pass
                 elif key == 'director':
                     director_text = value_node.xpath('normalize-space()')
-                    if director_text.lower() not in ['n/a', '暂无', '暫無']: entity.director = cls.trans(director_text)
+                    if director_text.lower() not in ['n/a', '暂无', '暫無']:
+                        entity.director = director_text if fp_meta_mode else cls.trans(director_text)
                 elif key in ('maker', 'publisher'):
                     studio_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if not entity.studio and studio_text.lower() not in ['n/a', '暂无', '暫無']:
-                        entity.studio = cls.trans(studio_text.split(',')[0].strip())
+                        entity.studio = studio_text.split(',')[0].strip() if fp_meta_mode else cls.trans(studio_text.split(',')[0].strip())
                 elif key == 'series':
                     series_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if series_text.lower() not in ['n/a', '暂无', '暫無']:
-                        series_name = cls.trans(series_text)
-                        if series_name not in (entity.tag or []):
+                        tag_to_add = series_text if fp_meta_mode else cls.trans(series_text)
+                        if tag_to_add not in (entity.tag or []):
                             if entity.tag is None: entity.tag = []
-                            entity.tag.append(series_name)
+                            entity.tag.append(tag_to_add)
                 elif key == 'tags':
                     if entity.genre is None: entity.genre = []
                     for genre_name_raw in value_node.xpath('./a/text()'):
                         genre_name = genre_name_raw.strip()
                         if genre_name:
-                            trans_genre = cls.trans(genre_name)
-                            if trans_genre not in entity.genre: 
-                                entity.genre.append(trans_genre)
+                            if fp_meta_mode:
+                                if genre_name not in entity.genre:
+                                    entity.genre.append(genre_name)
+                            else:
+                                trans_genre = cls.trans(genre_name)
+                                if trans_genre not in entity.genre: 
+                                    entity.genre.append(trans_genre)
                 elif key == 'actor(s)':
                     if entity.actor is None: entity.actor = []
                     for actor_node in value_node.xpath('./a'):
                         if 'female' in (actor_node.xpath('./following-sibling::strong[1]/@class') or [''])[0]:
                             actor_name = actor_node.xpath('string()').strip()
                             if actor_name and actor_name.lower() not in ['n/a', '暂无', '暫無'] and not any(act.originalname == actor_name for act in entity.actor):
-                                actor_entity = EntityActor(cls.trans(actor_name))
+                                actor_entity = EntityActor(actor_name)
                                 actor_entity.originalname = actor_name
                                 entity.actor.append(actor_entity)
 
@@ -380,26 +385,13 @@ class SiteJavdb(SiteAvBase):
 
             try:
                 raw_image_urls = cls.__img_urls(tree)
-
-                if not fp_meta_mode:
-                    entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
-                else:
-                    poster_url = raw_image_urls.get('pl') or raw_image_urls.get('specific_poster_candidates', [None])[0]
-                    if poster_url:
-                        entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
-
-                    landscape_url = raw_image_urls.get('pl')
-                    if landscape_url:
-                        entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
-
-                    # 팬아트는 URL만 리스트로 할당
-                    entity.fanart = raw_image_urls.get('arts', [])
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
 
             except Exception as e:
                 logger.exception(f"JavDB: Error during image processing delegation for {code}: {e}")
 
             # === 4. 예고편 및 Shiroutoname 보정 처리 ===
-            if not fp_meta_mode and cls.config['use_extras']:
+            if cls.config['use_extras']:
                 trailer_source_tag = tree.xpath('//video[@id="preview-video"]/source/@src')
                 if trailer_source_tag:
                     trailer_url_raw = trailer_source_tag[0].strip()
@@ -407,9 +399,6 @@ class SiteJavdb(SiteAvBase):
                         trailer_url_final = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
                         trailer_url_final = cls.make_video_url(trailer_url_final)
                         entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", trailer_url_final))
-            elif fp_meta_mode:
-                # logger.debug(f"FP Meta Mode: Skipping extras processing for {code}.")
-                pass
 
             if entity.originaltitle:
                 try:

@@ -154,42 +154,32 @@ class Site1PondoTv(SiteAvBase):
         poster_url = json_data.get('MovieThumb')
         landscape_url = json_data.get('ThumbUltra')
 
-        if not fp_meta_mode:
-            # [일반 모드] : 전체 이미지 처리 파이프라인 실행
-            image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-            if image_mode == 'image_server':
-                try:
-                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
-                    base_path_part = base_save_format.format(label=entity.label)
-                    year_part = str(entity.year) if entity.year else "0000"
-                    final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), year_part)
-                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-                except Exception as e:
-                    logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
-
+        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+        if image_mode == 'image_server':
             try:
-                raw_image_urls = {
-                    'poster': poster_url,
-                    'pl': landscape_url,
-                    'arts': arts_urls,
-                }
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
+                base_path_part = base_save_format.format(label=entity.label)
+                year_part = str(entity.year) if entity.year else "0000"
+                final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), year_part)
+                entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+                entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
             except Exception as e:
-                logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
-        else:
-            # [파일처리 모드] : 원본 URL만 추가하고 무거운 처리는 생략
-            logger.debug(f"[{cls.site_name}] FP Meta Mode: Skipping full image processing for {code}.")
-            if poster_url:
-                entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
-            if landscape_url:
-                entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
-            entity.fanart = arts_urls
+                logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+
+        try:
+            raw_image_urls = {
+                'poster': poster_url,
+                'pl': landscape_url,
+                'arts': arts_urls,
+            }
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+        except Exception as e:
+            logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
         raw_tagline = json_data.get('Title', '')
-        entity.tagline = cls.trans(cls.A_P(raw_tagline))
+        entity.tagline = cls.A_P(raw_tagline) if fp_meta_mode else cls.trans(cls.A_P(raw_tagline))
 
         # actor
         actresses = json_data.get('ActressesJa', [])
@@ -203,7 +193,8 @@ class Site1PondoTv(SiteAvBase):
         genrelist = json_data.get('UCNAME', [])
         if isinstance(genrelist, list):
             for item in genrelist:
-                entity.genre.append(cls.get_translated_tag('uncen_tags', item)) # 미리 번역된 태그를 포함
+                tag_to_add = item if fp_meta_mode else cls.get_translated_tag('uncen_tags', item)
+                entity.genre.append(tag_to_add)
 
         try:
             avg_rating = json_data.get('AvgRating')
@@ -213,13 +204,13 @@ class Site1PondoTv(SiteAvBase):
 
         # plot
         raw_plot = json_data.get('Desc', '')
-        entity.plot = cls.trans(cls.A_P(raw_plot))
+        entity.plot = cls.A_P(raw_plot) if fp_meta_mode else cls.trans(cls.A_P(raw_plot))
 
         # 제작사
         entity.studio = '1Pondo'
 
         # 부가영상 or 예고편
-        if not fp_meta_mode and cls.config.get('use_extras'):
+        if cls.config.get('use_extras'):
             try:
                 sample_files = json_data.get('SampleFiles')
                 if isinstance(sample_files, list) and sample_files:

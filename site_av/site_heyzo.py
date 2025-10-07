@@ -194,37 +194,28 @@ class SiteHeyzo(SiteAvBase):
         poster_url = tmp.get('poster')
         landscape_url = tmp.get('landscape')
 
-        if not fp_meta_mode:
-            # [일반 모드]
-            image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-            if image_mode == 'image_server':
-                try:
-                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
-                    base_path_part = base_save_format.format(label=entity.label)
-                    code_prefix_part = code_part[:2] # 품번 앞 2자리 (예: 2681 -> 26)
-                    final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), code_prefix_part)
-                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-                except Exception as e:
-                    logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
-
+        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+        if image_mode == 'image_server':
             try:
-                raw_image_urls = {
-                    'poster': poster_url,
-                    'pl': landscape_url,
-                }
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
+                base_path_part = base_save_format.format(label=entity.label)
+                code_prefix_part = code_part[:2] # 품번 앞 2자리 (예: 2681 -> 26)
+                final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), code_prefix_part)
+                entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+                entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
             except Exception as e:
-                logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
-        else:
-            # [파일처리 모드]
-            logger.debug(f"[{cls.site_name}] FP Meta Mode: Skipping full image processing for {code}.")
-            if poster_url:
-                entity.thumb.append(EntityThumb(aspect="poster", value=poster_url))
-            if landscape_url:
-                entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
+                logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+
+        try:
+            raw_image_urls = {
+                'poster': poster_url,
+                'pl': landscape_url,
+            }
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+        except Exception as e:
+            logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
         for actor_name in tmp.get('actor', []):
             entity.actor.append(EntityActor(actor_name))
@@ -234,17 +225,19 @@ class SiteHeyzo(SiteAvBase):
         genrelist = tmp.get('genre', [])
         if genrelist != []:
             for item in genrelist:
-                entity.genre.append(cls.get_translated_tag('uncen_tags', item))
+                tag_to_add = item if fp_meta_mode else cls.get_translated_tag('uncen_tags', item)
+                entity.genre.append(tag_to_add)
 
-        if tmp.get('plot', '') != '':
-            entity.plot = cls.trans(tmp['plot'])
+        raw_plot = tmp.get('plot', '')
+        if raw_plot:
+            entity.plot = raw_plot if fp_meta_mode else cls.trans(raw_plot)
         else:
             entity.plot = ''
 
         entity.studio = 'HEYZO'
 
         # 부가영상 or 예고편
-        if not fp_meta_mode and cls.config.get('use_extras'):
+        if cls.config.get('use_extras'):
             try:
                 video_url = cls.make_video_url(f'https://m.heyzo.com/contents/3000/{code_part}/sample.mp4')
                 if video_url:
