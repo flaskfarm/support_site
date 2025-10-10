@@ -184,6 +184,7 @@ class SiteJav321(SiteAvBase):
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
+        entity.original = {}
         ui_code_for_image = ""
         mgs_special_poster_filepath = None
 
@@ -225,7 +226,8 @@ class SiteJav321(SiteAvBase):
                 plot_full_text = plot_div_nodes[0].text_content().strip()
                 if plot_full_text:
                     cleaned_plot = cls.A_P(cls._clean_value(plot_full_text))
-                    entity.plot = cleaned_plot if fp_meta_mode else cls.trans(cleaned_plot)
+                    entity.original['plot'] = cleaned_plot
+                    entity.plot = cls.trans(cleaned_plot)
 
             info_container_node_list = tree.xpath('//div[contains(@class, "panel-body")]//div[contains(@class, "col-md-9")]')
             if info_container_node_list:
@@ -263,17 +265,19 @@ class SiteJav321(SiteAvBase):
                         if not studio_name_raw: studio_name_raw = (b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0]
                         cleaned_studio_name = cls._clean_value(studio_name_raw)
                         if cleaned_studio_name:
-                            entity.studio = cleaned_studio_name if fp_meta_mode else cls.trans(cleaned_studio_name)
+                            entity.original['studio'] = cleaned_studio_name
+                            entity.studio = cls.trans(cleaned_studio_name)
                     elif current_key == "ジャンル":
                         if entity.genre is None: entity.genre = []
+                        if 'genre' not in entity.original: 
+                            entity.original['genre'] = []
                         genre_a_tags = b_tag_key_node.xpath("./following-sibling::a[contains(@href, '/genre/')]")
                         temp_genre_list = []
                         for genre_link in genre_a_tags:
                             genre_ja_cleaned = cls._clean_value(genre_link.text_content().strip())
                             if not genre_ja_cleaned or genre_ja_cleaned in AV_GENRE_IGNORE_JA: continue
-                            if fp_meta_mode:
-                                temp_genre_list.append(genre_ja_cleaned)
-                            elif genre_ja_cleaned in AV_GENRE: 
+                            entity.original['genre'].append(genre_ja_cleaned)
+                            if genre_ja_cleaned in AV_GENRE: 
                                 temp_genre_list.append(AV_GENRE[genre_ja_cleaned])
                             else:
                                 genre_ko_item = cls.trans(genre_ja_cleaned).replace(" ", "")
@@ -298,7 +302,8 @@ class SiteJav321(SiteAvBase):
                         series_name_cleaned = cls._clean_value(series_name_raw)
                         if series_name_cleaned:
                             if entity.tag is None: entity.tag = []
-                            tag_to_add = series_name_cleaned if fp_meta_mode else cls.trans(series_name_cleaned)
+                            entity.original['series'] = series_name_cleaned
+                            tag_to_add = cls.trans(series_name_cleaned)
                             if tag_to_add and tag_to_add not in entity.tag: entity.tag.append(tag_to_add)
                     elif current_key == "平均評価":
                         rating_val_cleaned = cls._clean_value((b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0])
@@ -308,14 +313,12 @@ class SiteJav321(SiteAvBase):
                                 entity.ratings = [EntityRatings(rating_float, max=5, name=cls.site_name)]
                             except ValueError: pass
 
-            if raw_h3_title_text and ui_code_for_image:
+            if raw_h3_title_text:
                 tagline_candidate_text = raw_h3_title_text
-                if raw_h3_title_text.upper().startswith(ui_code_for_image.upper()):
-                    tagline_candidate_text = raw_h3_title_text[len(ui_code_for_image):].strip()
+                if raw_h3_title_text.upper().startswith(entity.ui_code.upper()):
+                    tagline_candidate_text = raw_h3_title_text[len(entity.ui_code):].strip()
                 cleaned_tagline = cls.A_P(cls._clean_value(tagline_candidate_text))
-                entity.tagline = cls.trans(cleaned_tagline)
-            elif raw_h3_title_text: 
-                cleaned_tagline = cls.A_P(cls._clean_value(raw_h3_title_text))
+                entity.original['tagline'] = cleaned_tagline
                 entity.tagline = cls.trans(cleaned_tagline)
 
             if not entity.tagline and entity.title: entity.tagline = entity.title

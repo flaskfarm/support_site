@@ -524,6 +524,7 @@ class SiteDmm(SiteAvBase):
         entity.extras = []
         entity.ratings = []
         entity.tag = []
+        entity.original = {}
         ui_code_for_image = ""
         entity.content_type = current_content_type
 
@@ -635,11 +636,15 @@ class SiteDmm(SiteAvBase):
 
                 title_val = content.get('title')
                 if title_val: 
-                    entity.tagline = cls.A_P(title_val) if fp_meta_mode else cls.trans(cls.A_P(title_val))
+                    original_tagline = cls.A_P(title_val)
+                    entity.original['tagline'] = original_tagline
+                    entity.tagline = cls.trans(original_tagline)
 
                 plot_val = content.get('description')
                 if plot_val: 
-                    entity.plot = cls.A_P(plot_val) if fp_meta_mode else cls.trans(cls.A_P(plot_val))
+                    original_plot = cls.A_P(plot_val)
+                    entity.original['plot'] = original_plot
+                    entity.plot = cls.trans(original_plot)
 
                 id_to_parse_from_page = content.get('makerContentId') or cid_part
                 parsed_ui_code_from_page, _, _ = cls._parse_ui_code(id_to_parse_from_page, entity.content_type)
@@ -696,14 +701,18 @@ class SiteDmm(SiteAvBase):
 
                 if content.get('label') and content.get('label').get('name'):
                     label_name = content['label']['name']
-                    entity.studio = label_name if fp_meta_mode else AV_STUDIO.get(label_name, cls.trans(label_name))
+                    entity.original['studio'] = label_name
+                    entity.studio = AV_STUDIO.get(label_name, cls.trans(label_name))
+
                 elif content.get('maker') and content.get('maker').get('name'):
                     maker_name = content['maker']['name']
-                    entity.studio = maker_name if fp_meta_mode else cls.trans(maker_name)
+                    entity.original['studio'] = maker_name
+                    entity.studio = cls.trans(maker_name)
 
                 if content.get('series') and content.get('series').get('name'):
                     series_name = content['series']['name']
-                    entity.tag.append(series_name if fp_meta_mode else cls.trans(series_name))
+                    entity.original['series'] = series_name
+                    entity.tag.append(cls.trans(series_name))
 
                 parsed_label = entity.ui_code.split('-')[0] if '-' in entity.ui_code else entity.ui_code
                 if parsed_label not in entity.tag:
@@ -712,14 +721,16 @@ class SiteDmm(SiteAvBase):
                 genres_list = content.get('genres')
                 if genres_list:
                     entity.genre = []
+                    entity.original['genre'] = []
                     for g_item in genres_list:
                         if not (isinstance(g_item, dict) and g_item.get('name')):
                             continue
                         g_ja = g_item['name']
                         if "％OFF" in g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
-                        if fp_meta_mode:
-                            entity.genre.append(g_ja) # 원본 장르명 추가
-                        elif g_ja in AV_GENRE: 
+
+                        entity.original['genre'].append(g_ja)
+
+                        if g_ja in AV_GENRE: 
                             entity.genre.append(AV_GENRE[g_ja])
                         else:
                             g_ko = cls.trans(g_ja).replace(" ", "")
@@ -731,7 +742,9 @@ class SiteDmm(SiteAvBase):
                 title_node_dvd = tree.xpath('//h1[@id="title"]')
                 if title_node_dvd:
                     title_text_raw = title_node_dvd[0].text_content().strip()
-                    entity.tagline = cls.A_P(title_text_raw) if fp_meta_mode else cls.trans(cls.A_P(title_text_raw))
+                    original_tagline_dvd = cls.A_P(title_text_raw)
+                    entity.original['tagline'] = original_tagline_dvd
+                    entity.tagline = cls.trans(original_tagline_dvd)
                 info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
                 table_rows_dvd = tree.xpath(info_table_xpath_dvd)
                 premiered_shouhin_dvd, premiered_hatsubai_dvd, premiered_haishin_dvd = None, None, None   
@@ -782,7 +795,8 @@ class SiteDmm(SiteAvBase):
                         series_dvd = [s.strip() for s in value_node_dvd.xpath('.//a/text()') if s.strip()]
                         s_name_dvd = (series_dvd[0] if series_dvd else value_text_all_dvd).strip()
                         if s_name_dvd and s_name_dvd != '----':
-                            tag_to_add = s_name_dvd if fp_meta_mode else cls.trans(s_name_dvd)
+                            entity.original['series'] = s_name_dvd
+                            tag_to_add = cls.trans(s_name_dvd)
                             if tag_to_add not in entity.tag:
                                 entity.tag.append(tag_to_add)
                     elif "メーカー" in key_dvd:
@@ -790,22 +804,23 @@ class SiteDmm(SiteAvBase):
                             makers_dvd = [mk.strip() for mk in value_node_dvd.xpath('.//a/text()') if mk.strip()]
                             m_name_dvd = (makers_dvd[0] if makers_dvd else value_text_all_dvd).strip()
                             if m_name_dvd and m_name_dvd != '----':
-                                entity.studio = m_name_dvd if fp_meta_mode else cls.trans(m_name_dvd)
+                                entity.original['studio'] = m_name_dvd
+                                entity.studio = cls.trans(m_name_dvd)
                     elif "レーベル" in key_dvd:
                         labels_dvd = [lb.strip() for lb in value_node_dvd.xpath('.//a/text()') if lb.strip()]
                         l_name_dvd = (labels_dvd[0] if labels_dvd else value_text_all_dvd).strip()
                         if l_name_dvd and l_name_dvd != '----':
-                            entity.studio = l_name_dvd if fp_meta_mode else AV_STUDIO.get(l_name_dvd, cls.trans(l_name_dvd))
+                            entity.original['studio'] = l_name_dvd
+                            entity.studio = AV_STUDIO.get(l_name_dvd, cls.trans(l_name_dvd))
                     elif "ジャンル" in key_dvd:
                         if entity.genre is None: entity.genre = []
+                        if 'genre' not in entity.original: entity.original['genre'] = []
                         for genre_ja_tag_dvd in value_node_dvd.xpath('.//a'):
                             genre_ja_dvd = genre_ja_tag_dvd.text_content().strip()
                             if not genre_ja_dvd or "％OFF" in genre_ja_dvd or genre_ja_dvd in AV_GENRE_IGNORE_JA: 
                                 continue
-                            if fp_meta_mode:
-                                if genre_ja_dvd not in entity.genre:
-                                    entity.genre.append(genre_ja_dvd)
-                            elif genre_ja_dvd in AV_GENRE:
+                            entity.original['genre'].append(genre_ja_dvd) # <<-- [수정]
+                            if genre_ja_dvd in AV_GENRE:
                                 if AV_GENRE[genre_ja_dvd] not in entity.genre: 
                                     entity.genre.append(AV_GENRE[genre_ja_dvd])
                             else:
@@ -851,7 +866,9 @@ class SiteDmm(SiteAvBase):
                 if plot_nodes_dvd_specific:
                     plot_text_raw = "\n".join([p.strip() for p in plot_nodes_dvd_specific if p.strip()]).split("※")[0].strip()
                     if plot_text_raw: 
-                        entity.plot = cls.A_P(plot_text_raw) if fp_meta_mode else cls.trans(cls.A_P(plot_text_raw))
+                        original_plot_dvd = cls.A_P(plot_text_raw)
+                        entity.original['plot'] = original_plot_dvd
+                        entity.plot = cls.trans(original_plot_dvd)
                 else: 
                     logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
 

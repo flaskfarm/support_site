@@ -179,6 +179,7 @@ class SiteHeyzo(SiteAvBase):
         entity.country = [u'일본']; entity.mpaa = u'청소년 관람불가'
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
+        entity.original = {}
 
         # --- 파싱된 데이터를 entity 객체에 할당 ---
         entity.ui_code = cls._parse_ui_code_uncensored(f'heyzo-{code_part}')
@@ -187,7 +188,10 @@ class SiteHeyzo(SiteAvBase):
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
         entity.label = "HEYZO"
 
-        entity.tagline = cls.trans(tmp.get('tagline', ''))
+        raw_tagline = tmp.get('tagline', '')
+        entity.original['tagline'] = raw_tagline
+        entity.tagline = cls.trans(raw_tagline)
+
         entity.premiered = tmp.get('premiered')
         entity.year = tmp.get('year')
 
@@ -224,17 +228,20 @@ class SiteHeyzo(SiteAvBase):
 
         genrelist = tmp.get('genre', [])
         if genrelist != []:
+            if 'genre' not in entity.original: entity.original['genre'] = []
             for item in genrelist:
-                tag_to_add = item if fp_meta_mode else cls.get_translated_tag('uncen_tags', item)
-                entity.genre.append(tag_to_add)
+                entity.original['genre'].append(item)
+                entity.genre.append(cls.get_translated_tag('uncen_tags', item))
 
         raw_plot = tmp.get('plot', '')
         if raw_plot:
-            entity.plot = raw_plot if fp_meta_mode else cls.trans(raw_plot)
+            entity.original['plot'] = raw_plot
+            entity.plot = cls.trans(raw_plot)
         else:
             entity.plot = ''
 
         entity.studio = 'HEYZO'
+        entity.original['studio'] = 'HEYZO'
 
         # 부가영상 or 예고편
         if cls.config.get('use_extras'):

@@ -126,6 +126,7 @@ class Site10Musume(SiteAvBase):
 
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
+        entity.original = {}
 
         entity.ui_code = cls._parse_ui_code_uncensored(f'10mu-{code_part}')
         if not entity.ui_code: entity.ui_code = f'10mu-{code_part}'
@@ -185,23 +186,30 @@ class Site10Musume(SiteAvBase):
 
         # tagline
         raw_tagline = json_data.get('Title', '')
-        entity.tagline = cls.A_P(raw_tagline) if fp_meta_mode else cls.trans(cls.A_P(raw_tagline))
+        original_tagline = cls.A_P(raw_tagline)
+        entity.original['tagline'] = original_tagline
+        entity.tagline = cls.trans(original_tagline)
 
         # actor
         actresses = json_data.get('ActressesJa', [])
         if isinstance(actresses, list):
             for actor in actresses:
                 entity.actor.append(EntityActor(actor))
-
         # tag
         entity.tag.append('10Musume')
 
         # genre
         genrelist = json_data.get('UCNAME', [])
         if isinstance(genrelist, list):
+            # --- START: 수정 제안 ---
+            if 'genre' not in entity.original: 
+                entity.original['genre'] = []
+
             for item in genrelist:
-                tag_to_add = item if fp_meta_mode else cls.get_translated_tag('uncen_tags', item)
-                entity.genre.append(tag_to_add)
+                # 원본 장르 저장
+                entity.original['genre'].append(item)
+                # 번역된 장르 저장
+                entity.genre.append(cls.get_translated_tag('uncen_tags', item))
 
         # entity.ratings
         try:
@@ -212,10 +220,13 @@ class Site10Musume(SiteAvBase):
 
         # plot
         raw_plot = json_data.get('Desc', '')
-        entity.plot = cls.A_P(raw_plot) if fp_meta_mode else cls.trans(cls.A_P(raw_plot))
+        original_plot = cls.A_P(raw_plot)
+        entity.original['plot'] = original_plot
+        entity.plot = cls.trans(original_plot)
 
         # 제작사
         entity.studio = '10Musume'
+        entity.original['studio'] = '10Musume'
 
         # 부가영상 or 예고편
         if cls.config.get('use_extras'):
