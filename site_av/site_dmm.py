@@ -338,11 +338,44 @@ class SiteDmm(SiteAvBase):
                         item_dict['is_priority_label_site'] = True
                         # logger.debug(f"DMM Search: Item '{ui_code_for_label_check}' matched PrioLabel '{label_to_check}'. Flag set True.")
 
+                # CID에서 숫자 부분과 접미사 부분을 분리하여 임시 저장
+                match = re.search(r'(.+?)(\d+[a-z]*)$', content_id_or_cid.lower())
+                if match:
+                    numeric_part_with_suffix = match.group(2)
+                    if not numeric_part_with_suffix.isdigit():
+                        item_dict['has_suffix'] = True # 특별판 플래그
+
                 ret_temp_before_filtering.append(item_dict) # 최종적으로 수정된 딕셔너리를 리스트에 추가
             except Exception as e_inner_loop_dmm:
                 logger.exception(f"DMM Search: 아이템 처리 중 예외 (keyword: '{original_keyword}'): {e_inner_loop_dmm}")
 
         # logger.debug(f"[DEBUG] Raw search results before filtering ({len(ret_temp_before_filtering)} items): {json.dumps(ret_temp_before_filtering, indent=2, ensure_ascii=False)}")
+
+        # videoa에서 일반판/특별판 구분
+        # 1. ui_code를 기준으로 아이템들을 그룹화
+        grouped_by_ui_code = {}
+        for item in ret_temp_before_filtering:
+            ui_code = item.get('ui_code')
+            if ui_code not in grouped_by_ui_code:
+                grouped_by_ui_code[ui_code] = []
+            grouped_by_ui_code[ui_code].append(item)
+
+        # 2. 각 그룹을 순회하며 페널티 적용
+        for ui_code, items_in_group in grouped_by_ui_code.items():
+            # 그룹 내 아이템이 2개 이상일 때만 로직 실행
+            if len(items_in_group) > 1:
+                
+                # 그룹 내에 '일반판'(접미사 없음)이 하나라도 있는지 확인
+                has_standard_version = any(not item.get('has_suffix', False) for item in items_in_group)
+                
+                if has_standard_version:
+                    logger.debug(f"[{cls.site_name}] Group for '{ui_code}' has a standard version. Applying penalties to special versions.")
+                    # 일반판이 존재하면, 이 그룹 내의 모든 '특별판'에 페널티 부여
+                    for item in items_in_group:
+                        if item.get('has_suffix', False):
+                            item['score'] -= 1
+                else:
+                    logger.debug(f"[{cls.site_name}] Group for '{ui_code}' has no standard version. No penalties applied.")
 
         # --- 검색 결과가 없고, 아직 재시도 안했으며, 재시도용 정보가 있을 경우 ---
         if not ret_temp_before_filtering and not is_retry and label_part_for_retry and num_part_for_retry:
