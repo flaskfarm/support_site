@@ -162,6 +162,7 @@ class SiteJavbus(SiteAvBase):
             entity = EntityMovie(cls.site_name, code)
             entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
             entity.thumb = []; entity.fanart = []; entity.tag = []; entity.actor = []
+            entity.original = {}
 
             # === 2. 메타데이터 파싱 ===
             info_node = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")[0]
@@ -210,7 +211,8 @@ class SiteJavbus(SiteAvBase):
             else:
                 tagline_text = cleaned_h3_text
 
-            entity.tagline = tagline_text if fp_meta_mode else cls.trans(tagline_text)
+            entity.original['tagline'] = original_tagline
+            entity.tagline = cls.trans(original_tagline)
 
             if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
                 entity.plot = entity.tagline
@@ -237,24 +239,27 @@ class SiteJavbus(SiteAvBase):
                     except: pass
                 elif key == "導演": entity.director = value
                 elif key == "製作商":
-                    entity.studio = value if fp_meta_mode else cls.trans(value)
+                    entity.original['studio'] = value
+                    entity.studio = cls.trans(value)
                 elif key == "發行商" and not entity.studio:
-                    entity.studio = value if fp_meta_mode else cls.trans(value)
+                    entity.original['studio'] = value
+                    entity.studio = cls.trans(value)
                 elif key == "系列":
-                    tag_to_add = value if fp_meta_mode else cls.trans(value)
-                    if tag_to_add not in entity.tag:
-                        entity.tag.append(tag_to_add)
+                    entity.original['series'] = value
+                    trans_series = cls.trans(value)
+                    if trans_series not in entity.tag:
+                        entity.tag.append(trans_series)
 
             if genre_header_p_node is not None:
                 entity.genre = []
+                if 'genre' not in entity.original: 
+                    entity.original['genre'] = []
                 for genre_span in genre_header_p_node.xpath("./following-sibling::p[1]/span[@class='genre']"):
                     genre_ja = "".join(genre_span.xpath("./label/a/text() | ./a/text()")).strip()
                     if not genre_ja or genre_ja == "多選提交" or genre_ja in AV_GENRE_IGNORE_JA: 
                         continue
-                    if fp_meta_mode:
-                        if genre_ja not in entity.genre:
-                            entity.genre.append(genre_ja)
-                    elif genre_ja in AV_GENRE:
+                    entity.original['genre'].append(genre_ja)
+                    if genre_ja in AV_GENRE:
                         if AV_GENRE[genre_ja] not in entity.genre:
                             entity.genre.append(AV_GENRE[genre_ja])
                     else:

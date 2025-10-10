@@ -156,6 +156,8 @@ class SiteFc2com(SiteAvBase):
         entity = EntityMovie(cls.site_name, code)
         entity.country = ['일본']; entity.mpaa = '청소년 관람불가'
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.tag = []; entity.genre = []
+        entity.original = {}
+
         entity.ui_code = cls._parse_ui_code_uncensored(f'fc2-{code_part}')
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
         entity.label = "FC2"
@@ -163,7 +165,9 @@ class SiteFc2com(SiteAvBase):
         if h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
             raw_title = cls._extract_fc2com_title(h3_title[0])
             cleaned_text = cls.A_P(raw_title)
-            text_to_assign = cleaned_text if fp_meta_mode else cls.trans(cleaned_text)
+            entity.original['tagline'] = cleaned_text
+            entity.original['plot'] = cleaned_text
+            text_to_assign = cls.trans(cleaned_text)
             entity.tagline = text_to_assign
             entity.plot = text_to_assign
 
@@ -174,12 +178,16 @@ class SiteFc2com(SiteAvBase):
 
         if seller := tree.xpath('//a[contains(@href, "/users/")]/text()'):
             studio_director_text = seller[0].strip()
+            entity.original['studio'] = studio_director_text
+            entity.original['director'] = studio_director_text
             entity.studio = studio_director_text
             entity.director = studio_director_text
 
+        if 'genre' not in entity.original: entity.original['genre'] = []
         for genre_name in tree.xpath('//section[contains(@class, "items_article_TagArea")]//a/text()'):
-            tag_to_add = genre_name.strip() if fp_meta_mode else cls.trans(genre_name.strip())
-            entity.genre.append(tag_to_add)
+            genre_strip = genre_name.strip()
+            entity.original['genre'].append(genre_strip)
+            entity.genre.append(cls.trans(genre_strip))
 
         entity.tag.append('FC2')
         if entity.studio and entity.studio not in entity.tag:

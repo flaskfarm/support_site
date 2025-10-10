@@ -249,6 +249,7 @@ class SiteJavdb(SiteAvBase):
             entity = EntityMovie(cls.site_name, code)
             entity.country = ['일본']; entity.mpaa = '청소년 관람불가'
             entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
+            entity.original = {}
 
             # === 2. 메타데이터 파싱 ===
             if not keyword:
@@ -305,7 +306,8 @@ class SiteJavdb(SiteAvBase):
                         actual_raw_title_text = current_title_node[0].strip()
 
             if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
-                entity.tagline = cls.A_P(actual_raw_title_text) if fp_meta_mode else cls.trans(cls.A_P(actual_raw_title_text))
+                entity.original['tagline'] = cls.A_P(actual_raw_title_text)
+                entity.tagline = cls.trans(cls.A_P(actual_raw_title_text))
             else: 
                 entity.tagline = entity.ui_code
 
@@ -342,30 +344,32 @@ class SiteJavdb(SiteAvBase):
                 elif key == 'director':
                     director_text = value_node.xpath('normalize-space()')
                     if director_text.lower() not in ['n/a', '暂无', '暫無']:
-                        entity.director = director_text if fp_meta_mode else cls.trans(director_text)
+                        entity.original['director'] = director_text
+                        entity.director = cls.trans(director_text)
                 elif key in ('maker', 'publisher'):
                     studio_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if not entity.studio and studio_text.lower() not in ['n/a', '暂无', '暫無']:
-                        entity.studio = studio_text.split(',')[0].strip() if fp_meta_mode else cls.trans(studio_text.split(',')[0].strip())
+                        studio_name = studio_text.split(',')[0].strip()
+                        entity.original['studio'] = studio_name
+                        entity.studio = cls.trans(studio_name)
                 elif key == 'series':
                     series_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                     if series_text.lower() not in ['n/a', '暂无', '暫無']:
-                        tag_to_add = series_text if fp_meta_mode else cls.trans(series_text)
-                        if tag_to_add not in (entity.tag or []):
+                        entity.original['series'] = series_text
+                        series_name = cls.trans(series_text)
+                        if series_name not in (entity.tag or []):
                             if entity.tag is None: entity.tag = []
-                            entity.tag.append(tag_to_add)
+                            entity.tag.append(series_name)
                 elif key == 'tags':
                     if entity.genre is None: entity.genre = []
+                    if 'genre' not in entity.original: entity.original['genre'] = []
                     for genre_name_raw in value_node.xpath('./a/text()'):
                         genre_name = genre_name_raw.strip()
                         if genre_name:
-                            if fp_meta_mode:
-                                if genre_name not in entity.genre:
-                                    entity.genre.append(genre_name)
-                            else:
-                                trans_genre = cls.trans(genre_name)
-                                if trans_genre not in entity.genre: 
-                                    entity.genre.append(trans_genre)
+                            entity.original['genre'].append(genre_name)
+                            trans_genre = cls.trans(genre_name)
+                            if trans_genre not in entity.genre: 
+                                entity.genre.append(trans_genre)
                 elif key == 'actor(s)':
                     if entity.actor is None: entity.actor = []
                     for actor_node in value_node.xpath('./a'):
@@ -373,7 +377,6 @@ class SiteJavdb(SiteAvBase):
                             actor_name = actor_node.xpath('string()').strip()
                             if actor_name and actor_name.lower() not in ['n/a', '暂无', '暫無'] and not any(act.originalname == actor_name for act in entity.actor):
                                 actor_entity = EntityActor(actor_name)
-                                actor_entity.originalname = actor_name
                                 entity.actor.append(actor_entity)
 
             if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:

@@ -125,6 +125,7 @@ class Site1PondoTv(SiteAvBase):
 
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
+        entity.original = {}
 
         entity.ui_code = cls._parse_ui_code_uncensored(f'1pon-{code_part}')
         if not entity.ui_code: entity.ui_code = f'1pon-{code_part}'
@@ -179,7 +180,9 @@ class Site1PondoTv(SiteAvBase):
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
         raw_tagline = json_data.get('Title', '')
-        entity.tagline = cls.A_P(raw_tagline) if fp_meta_mode else cls.trans(cls.A_P(raw_tagline))
+        original_tagline = cls.A_P(raw_tagline)
+        entity.original['tagline'] = original_tagline
+        entity.tagline = cls.trans(original_tagline)
 
         # actor
         actresses = json_data.get('ActressesJa', [])
@@ -192,9 +195,10 @@ class Site1PondoTv(SiteAvBase):
         # genre
         genrelist = json_data.get('UCNAME', [])
         if isinstance(genrelist, list):
+            if 'genre' not in entity.original: entity.original['genre'] = []
             for item in genrelist:
-                tag_to_add = item if fp_meta_mode else cls.get_translated_tag('uncen_tags', item)
-                entity.genre.append(tag_to_add)
+                entity.original['genre'].append(item)
+                entity.genre.append(cls.get_translated_tag('uncen_tags', item))
 
         try:
             avg_rating = json_data.get('AvgRating')
@@ -204,10 +208,13 @@ class Site1PondoTv(SiteAvBase):
 
         # plot
         raw_plot = json_data.get('Desc', '')
-        entity.plot = cls.A_P(raw_plot) if fp_meta_mode else cls.trans(cls.A_P(raw_plot))
+        original_plot = cls.A_P(raw_plot)
+        entity.original['plot'] = original_plot
+        entity.plot = cls.trans(original_plot)
 
         # 제작사
         entity.studio = '1Pondo'
+        entity.original['studio'] = '1Pondo'
 
         # 부가영상 or 예고편
         if cls.config.get('use_extras'):

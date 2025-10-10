@@ -209,6 +209,7 @@ class SiteMgstage(SiteAvBase):
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"; entity.tag = []
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
+        entity.original = {}
 
         mgs_special_poster_filepath = None
 
@@ -218,7 +219,9 @@ class SiteMgstage(SiteAvBase):
             if h1_tags:
                 h1_text_raw = h1_tags[0]
                 for ptn in PTN_TEXT_SUB: h1_text_raw = ptn.sub("", h1_text_raw)
-                entity.tagline = cls.A_P(h1_text_raw.strip()) if fp_meta_mode else cls.trans(cls.A_P(h1_text_raw.strip()))
+                original_tagline = cls.A_P(h1_text_raw.strip())
+                entity.original['tagline'] = original_tagline
+                entity.tagline = cls.trans(original_tagline)
 
             plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[2]')
             if plot_nodes:
@@ -226,7 +229,8 @@ class SiteMgstage(SiteAvBase):
                     plot_html_raw = html.tostring(plot_nodes[0], encoding='unicode')
                     cleaned_plot = cls.A_P(plot_html_raw)
                     if cleaned_plot:
-                        entity.plot = cleaned_plot if fp_meta_mode else cls.trans(cleaned_plot)
+                        entity.original['plot'] = cleaned_plot
+                        entity.plot = cls.trans(cleaned_plot)
                 except Exception as e_plot:
                     logger.error(f"MGStage: Failed to parse plot for {code}: {e_plot}")
 
@@ -270,23 +274,26 @@ class SiteMgstage(SiteAvBase):
                 elif "シリーズ" in key_text:
                     s_name = (value_node_instance.xpath("./a/text()")[0] if value_node_instance.xpath("./a/text()") else value_text_content).strip()
                     if s_name:
-                        tag_to_add = s_name if fp_meta_mode else cls.trans(s_name)
-                        if tag_to_add and tag_to_add not in (entity.tag or []): 
-                            if entity.tag is None: entity.tag = []
+                        if entity.tag is None: entity.tag = []
+                        entity.original['series'] = s_name
+                        tag_to_add = cls.trans(s_name)
+                        if tag_to_add and tag_to_add not in entity.tag: 
                             entity.tag.append(tag_to_add)
                 elif "レーベル" in key_text: 
                     studio_name = (value_node_instance.xpath("./a/text()")[0] if value_node_instance.xpath("./a/text()") else value_text_content).strip()
                     if studio_name: 
-                        entity.studio = studio_name if fp_meta_mode else cls.trans(studio_name)
+                        entity.original['studio'] = studio_name
+                        entity.studio = cls.trans(studio_name)
                 elif "ジャンル" in key_text:
                     if entity.genre is None: entity.genre = []
+                    if 'genre' not in entity.original: 
+                        entity.original['genre'] = []
                     for g_tag in value_node_instance.xpath("./a"):
                         g_ja = g_tag.text_content().strip()
                         if "MGSだけのおまけ映像付き" in g_ja or not g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
-                        if fp_meta_mode:
-                            if g_ja not in entity.genre:
-                                entity.genre.append(g_ja)
-                        elif g_ja in AV_GENRE:
+
+                        entity.original['genre'].append(g_ja)
+                        if g_ja in AV_GENRE:
                             g_ko = AV_GENRE[g_ja]
                             if g_ko not in entity.genre: entity.genre.append(g_ko)
                         else:

@@ -117,6 +117,7 @@ class SiteCarib(SiteAvBase):
         entity.country = [u'일본']; entity.mpaa = u'청소년 관람불가'
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
+        entity.original = {}
 
         # ui_code 및 title 설정
         entity.ui_code = cls._parse_ui_code_uncensored(f'carib-{code_part}')
@@ -173,7 +174,8 @@ class SiteCarib(SiteAvBase):
         title_node = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')
         if title_node:
             cleaned_tagline = cls.A_P(title_node[0].strip())
-            entity.tagline = cleaned_tagline if fp_meta_mode else cls.trans(cleaned_tagline)
+            entity.original['tagline'] = cleaned_tagline
+            entity.tagline = cls.trans(cleaned_tagline)
 
         for actor in tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()'):
             entity.actor.append(EntityActor(actor))
@@ -181,16 +183,19 @@ class SiteCarib(SiteAvBase):
         entity.tag.append('carib')
 
         genre_nodes = tree.xpath('//li[@class="movie-spec"]//span[@class="spec-content"]/a[@class="spec-item"]/text()')
+        if 'genre' not in entity.original: entity.original['genre'] = []
         for item in genre_nodes:
-            tag_to_add = item if fp_meta_mode else cls.get_translated_tag('uncen_tags', item)
-            entity.genre.append(tag_to_add)
+            entity.original['genre'].append(item)
+            entity.genre.append(cls.get_translated_tag('uncen_tags', item))
 
         plot_node = tree.xpath('//p[@itemprop="description"]/text()')
         if plot_node:
             cleaned_plot = cls.A_P(plot_node[0])
-            entity.plot = cleaned_plot if fp_meta_mode else cls.trans(cleaned_plot)
+            entity.original['plot'] = cleaned_plot
+            entity.plot = cls.trans(cleaned_plot)
 
         entity.studio = 'Caribbeancom'
+        entity.original['studio'] = 'Caribbeancom'
 
         # 부가영상 or 예고편
         if cls.config.get('use_extras'):
