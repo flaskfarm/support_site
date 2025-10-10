@@ -206,10 +206,12 @@ class SiteJavbus(SiteAvBase):
             h3_text = tree.xpath("normalize-space(//div[@class='container']/h3/text())")
             cleaned_h3_text = cls.A_P(h3_text)
 
-            if cleaned_h3_text.upper().startswith(entity.ui_code):
-                tagline_text = cleaned_h3_text[len(entity.ui_code):].strip()
-            else:
-                tagline_text = cleaned_h3_text
+            original_tagline = ""
+            if cleaned_h3_text:
+                if cleaned_h3_text.upper().startswith(entity.ui_code):
+                    original_tagline = cleaned_h3_text[len(entity.ui_code):].strip()
+                else:
+                    original_tagline = cleaned_h3_text
 
             entity.original['tagline'] = original_tagline
             entity.tagline = cls.trans(original_tagline)

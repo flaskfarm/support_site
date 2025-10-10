@@ -39,7 +39,7 @@ class SiteMgstage(SiteAvBase):
             # 1. 입력된 키워드를 전역 파서로 우선 정규화
             normalized_ui_code, _, _ = cls._parse_ui_code(keyword)
 
-            search_keyword_for_mgs = normalized_ui_code # 기본 검색어는 정규화된 품번
+            search_keywords_to_try = [normalized_ui_code] # 기본 검색어 우선 추가
 
             # 2. MGS_LABEL_MAP을 사용한 레이블 변환 시도
             if '-' in normalized_ui_code:
@@ -47,19 +47,35 @@ class SiteMgstage(SiteAvBase):
                 
                 mgs_labels_to_try = MGS_LABEL_MAP.get(input_label.upper())
                 if mgs_labels_to_try:
-                    mgs_label = mgs_labels_to_try[0]
-                    if codelen := MGS_CODE_LEN.get(mgs_label):
-                        try: code_part = str(int(code_part)).zfill(codelen)
-                        except ValueError: pass
-                    search_keyword_for_mgs = f"{mgs_label}-{code_part}"
-                    logger.debug(f"MGStage Search: Mapping '{keyword}' to '{search_keyword_for_mgs}' for search.")
+                    # MGS_LABEL_MAP에 있는 모든 후보 레이블에 대해 검색어 생성
+                    for mgs_label in mgs_labels_to_try:
+                        temp_code_part = code_part
+                        if codelen := MGS_CODE_LEN.get(mgs_label):
+                            try: temp_code_part = str(int(temp_code_part)).zfill(codelen)
+                            except ValueError: pass
+                        
+                        mapped_keyword = f"{mgs_label}-{temp_code_part}"
+                        # 중복 방지를 위해 리스트에 없는 경우에만 추가
+                        if mapped_keyword not in search_keywords_to_try:
+                            search_keywords_to_try.append(mapped_keyword)
+            
+            logger.debug(f"MGStage Search: Keywords to try: {search_keywords_to_try}")
 
-            data = cls.__search(search_keyword_for_mgs, normalized_ui_code, do_trans, manual)
+            final_data = []
+            for search_keyword in search_keywords_to_try:
+                # 각 키워드에 대해 __search 호출
+                data = cls.__search(search_keyword, normalized_ui_code, do_trans, manual)
+                if data:
+                    # 결과를 찾았으면, 더 이상 검색하지 않고 루프 종료
+                    logger.debug(f"MGStage Search: Found results with keyword '{search_keyword}'.")
+                    final_data = data
+                    break
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"; ret["data"] = str(exception)
         else:
-            ret["ret"] = "success" if data else "no_match"; ret["data"] = data
+            # 최종적으로 수집된 final_data를 사용
+            ret["ret"] = "success" if final_data else "no_match"; ret["data"] = final_data
         return ret
 
 
