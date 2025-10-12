@@ -2,10 +2,11 @@ import re
 import urllib.parse
 from datetime import datetime
 from http.cookies import SimpleCookie
+from typing import Sequence
 
 import requests
 import lxml.etree
-import lxml.html
+from lxml.html import HtmlElement
 
 from .entity_base import EntityExtra, EntitySearchItemTvDaum
 from .setup import *
@@ -41,7 +42,7 @@ class SiteDaum(object):
             cls._proxy_url = None
 
     @classmethod
-    def get_tree(cls, url: str) -> lxml.html.HtmlElement:
+    def get_tree(cls, url: str) -> HtmlElement:
         doc = SiteUtil.get_tree(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie)
         cls.is_duam_captcha(doc)
         return doc
@@ -49,7 +50,7 @@ class SiteDaum(object):
     redirect_pattern = re.compile(r"location\.(replace|assign|href\s?=).?[\"'](.+?)[\"'].?")
 
     @classmethod
-    def is_duam_captcha(cls, doc: lxml.html.HtmlElement) -> bool:
+    def is_duam_captcha(cls, doc: HtmlElement) -> bool:
         script_text = doc.xpath("string(//head//script)")
         match = cls.redirect_pattern.search(script_text)
         if redirect := match.group(2) if match else None:
@@ -59,7 +60,7 @@ class SiteDaum(object):
         return False
 
     @classmethod
-    def get_show_info_on_home(cls, root: lxml.html.HtmlElement) -> dict | None:
+    def get_show_info_on_home(cls, root: HtmlElement) -> dict | None:
         entity = EntitySearchItemTvDaum(cls.site_name)
         try:
             # 제목 및 코드
@@ -277,7 +278,7 @@ class SiteDaum(object):
 
     # 2024.06.05 둘중 하나로..
     @classmethod
-    def process_image_url(cls, img_tag: lxml.html.HtmlElement) -> str:
+    def process_image_url(cls, img_tag: HtmlElement) -> str:
         url = img_tag.attrib.get('data-original-src') or img_tag.attrib.get('src')
         tmps = url.split('fname=')
         if len(tmps) == 2:
@@ -375,7 +376,7 @@ class SiteDaum(object):
         return urllib.parse.urlunparse([scheme, netloc, path, urllib.parse.urlencode(params) if params else None, urllib.parse.urlencode(query) if query else None, fragment])
 
     @classmethod
-    def get_info_tab(cls, tab_name: str, document: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    def get_info_tab(cls, tab_name: str, document: HtmlElement) -> HtmlElement | None:
         tab_elements: list = document.xpath('//ul[@class="grid_xscroll"]/li/a')
         target = None
         for e in tab_elements:
@@ -385,3 +386,176 @@ class SiteDaum(object):
         if target is not None:
             tab_url = urllib.parse.urljoin(cls.get_request_url(), target.get('href'))
             return SiteDaum.get_tree(tab_url)
+
+    @classmethod
+    def iter_text(cls, element: HtmlElement, excludes: Sequence = (",", "|", "/")) -> tuple:
+        return tuple(stripped for text in element.itertext() if (stripped := text.strip()) and stripped not in excludes)
+
+    @classmethod
+    def parse_thumb_and_bundle(cls, item_thumb: HtmlElement) -> dict:
+        data = {}
+        for a_tag in item_thumb.xpath(".//a"):
+            href = a_tag.get('href') or ""
+            url_splits = urllib.parse.urlsplit(href)
+            query = dict(urllib.parse.parse_qsl(url_splits.query))
+            data['query'] = query or {}
+            data['link'] = href if url_splits.netloc else cls.get_request_url(query=query)
+            for img_tag in a_tag.xpath(".//img"):
+                data['thumb'] = cls.process_image_url(img_tag)
+                img_query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(data['thumb']).query))
+                if fname := img_query.get('fname'):
+                    data['thumb'] = fname
+                break
+            break
+        if (bundle_div := item_thumb.getnext()) is not None:
+            data['labels'] = cls.iter_text(bundle_div)
+        return data
+
+    @classmethod
+    def parse_card_title(cls, c_tit_exact: HtmlElement) -> dict:
+        data = {}
+        if (a_tag := c_tit_exact.find("./div/div[@class='inner_header']//a")) is not None and a_tag.get('href'):
+            query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(a_tag.get('href')).query))
+            if query.get("spId"):
+                data['code'] = query.get("spId")
+            data['title'] = a_tag.text_content().strip()
+            query['q'] = data['title']
+            query['w'] = 'cin'
+            data['link'] = cls.get_request_url(query=query)
+        if (sub_header := c_tit_exact.find("./div/div[@class='sub_header']")) is not None:
+            data['sub_title'] = sub_header.text_content().strip()
+        return data
+
+    @classmethod
+    def parse_card_tab(cls, c_section_tab: HtmlElement) -> dict:
+        data = {}
+        for a_tag in c_section_tab.xpath(".//li/a"):
+            label = a_tag.text_content().strip()
+            try:
+                if a_tag.get('href'):
+                    data[label] = urllib.parse.urljoin(cls.get_request_url(), a_tag.get('href'))
+            except Exception:
+                logger.exception(f"Failed to parse '{label}'")
+        return data
+
+    @classmethod
+    def parse_card_section_info(cls, cont_info: HtmlElement) -> dict:
+        data = {}
+        if tags := cont_info.xpath("*[contains(@class, 'desc_story')]"):
+            data['줄거리'] = tags[0].text_content().strip()
+        if (c_item_exact := cont_info.find("./div[@class='c-item-exact']")) is not None:
+            data.update(cls.parse_item_exact(c_item_exact))
+        return data
+
+    @classmethod
+    def parse_item_exact(cls, html: HtmlElement) -> dict:
+        data = {}
+        if (img_tag := html.find("./div[@class='item-thumb']//img")) is not None:
+            data['thumb'] = cls.process_image_url(img_tag)
+        for dt_tag in html.xpath("./div[@class='item-content']/dl//dt"):
+            if not (label := dt_tag.text_content().strip()):
+                continue
+            if (dd_tag := dt_tag.getnext()) is None:
+                continue
+            texts = cls.iter_text(dd_tag, excludes=(",", "|", "더보기", "(재)"))
+            if not texts:
+                continue
+            try:
+                match label:
+                    case "개봉":
+                        release_date = cls.parse_date_text(texts[0])
+                        data[label] = release_date.strftime("%Y-%m-%d")
+                    case "국가":
+                        data[label] = tuple(texts)
+                    case "장르":
+                        data[label] = tuple(stripped for genre in texts[0].split("/") if (stripped := genre.strip()))
+                    case "시간" | "등급":
+                        numbers = re.findall(r'\d+', texts[0])
+                        if numbers:
+                            if label == "시간":
+                                data[label] = int(numbers[0])
+                            elif label == "등급":
+                                data[label] = f"kr/{numbers[0]}"
+                    case "평점":
+                        ratings = []
+                        for idx, item in enumerate(texts):
+                            if idx + 1 > len(texts):
+                                continue
+                            if item not in ("전문가", "네티즌"):
+                                continue
+                            rating = {
+                                "default": True,
+                                "image_url": "",
+                                "max": 10,
+                                "name": "",
+                                "value": float(texts[idx + 1]),
+                                "votes": 0
+                            }
+                            if item == "전문가":
+                                rating['default'] = True
+                                rating['name'] = "cine21-expert"
+                            elif item == "네티즌":
+                                rating['default'] = False
+                                rating['name'] = "cine21-netizen"
+                            ratings.append(rating)
+                        data[label] = tuple(ratings)
+                    case "관객수":
+                        numbers = re.sub(r'[^\d]', '', texts[0])
+                        if numbers:
+                            data[label] = int(numbers[0])
+                    case "줄거리":
+                        if not data.get('줄거리'):
+                            data['줄거리'] = texts[0].strip()
+                    case _:
+                        data[label] = texts
+            except Exception:
+                logger.exception(f"Failed to parse '{label}'")
+        return data
+
+    @classmethod
+    def parse_people(cls, html: HtmlElement) -> list:
+        data = []
+        for section_title in html.findall(".//div[@slot='panel']/div[@class='c-tit-section']"):
+            match section_title.text_content():
+                case '제작진':
+                    category = 'staff'
+                case '감독':
+                    category = 'director'
+                case '주연' | '출연':
+                    category = 'actor'
+                case _:
+                    continue
+            if (panel_content := section_title.getnext()) is None:
+                continue
+            if panel_content.tag == 'ul':
+                for thumb in panel_content.xpath(".//div[@class='item-thumb']"):
+                    person = {}
+                    thumb_data = cls.parse_thumb_and_bundle(thumb)
+                    person['category'] = category
+                    if (labels := thumb_data.get('labels')) and len(labels) > 1:
+                        person['name'] = labels[0]
+                        person['role'] = labels[1]
+                    if thumb_data.get('thumb'):
+                        person['thumb'] = thumb_data.get('thumb')
+                    if thumb_data.get('link'):
+                        person['link'] = thumb_data.get('link')
+                    if person:
+                        data.append(person)
+            elif panel_content.tag == 'div':
+                panel_data = cls.parse_item_exact(panel_content)
+                for key in panel_data:
+                    match key:
+                        case '제작':
+                            category = 'producer'
+                        case '각본':
+                            category = 'writer'
+                        case _:
+                            category = 'staff'
+                    for name in panel_data.get(key) or ():
+                        person = {
+                            'category': category,
+                            'name': name,
+                            'role': key,
+                        }
+                        data.append(person)
+        return data
