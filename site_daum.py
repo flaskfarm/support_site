@@ -401,10 +401,10 @@ class SiteDaum(object):
             data['query'] = query or {}
             data['link'] = href if url_splits.netloc else cls.get_request_url(query=query)
             for img_tag in a_tag.xpath(".//img"):
-                data['thumb'] = cls.process_image_url(img_tag)
+                data['thumb'] = img_tag.get('data-original-src') or img_tag.get('src') or ""
                 img_query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(data['thumb']).query))
                 if fname := img_query.get('fname'):
-                    data['thumb'] = fname
+                    data['image'] = fname
                 break
             break
         if (bundle_div := item_thumb.getnext()) is not None:
@@ -451,7 +451,10 @@ class SiteDaum(object):
     def parse_item_exact(cls, html: HtmlElement) -> dict:
         data = {}
         if (img_tag := html.find("./div[@class='item-thumb']//img")) is not None:
-            data['thumb'] = cls.process_image_url(img_tag)
+            data['thumb'] = img_tag.get('data-original-src') or img_tag.get('src') or ""
+            img_query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(data['thumb']).query))
+            if fname := img_query.get('fname'):
+                data['image'] = fname
         for dt_tag in html.xpath("./div[@class='item-content']/dl//dt"):
             if not (label := dt_tag.text_content().strip()):
                 continue
@@ -536,7 +539,7 @@ class SiteDaum(object):
                         person['name'] = labels[0]
                         person['role'] = labels[1]
                     if thumb_data.get('thumb'):
-                        person['thumb'] = thumb_data.get('thumb')
+                        person['thumb'] = thumb_data.get('image') or thumb_data.get('thumb')
                     if thumb_data.get('link'):
                         person['link'] = thumb_data.get('link')
                     if person:

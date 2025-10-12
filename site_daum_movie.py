@@ -1,6 +1,7 @@
 import re
 import json
 import base64
+import urllib.parse
 
 from lxml.html import HtmlElement
 
@@ -151,11 +152,14 @@ class SiteDaumMovie(SiteDaum):
             primary_movie = EntityMovie2(cls.site_name, code)
         primary_movie.code = code
         primary_movie.title = card_title.get('title')
-        primary_movie.year = year or 1900
-
+        if year is None:
+            dates = (card_info.get('개봉') or '').split("-")
+            primary_movie.year = int(dates[0]) if dates and dates[0].isdigit() else 1900
+        else:
+            primary_movie.year = year
         if mode == "search":
             primary_movie.link = card_title.get('link') or ""
-            primary_movie.image_url = card_info.get('thumb') or ""
+            primary_movie.image_url = card_info.get('image') or card_info.get('thumb') or ""
             primary_movie.title_en = title_in_english or ""
             primary_movie.desc = "\n".join((", ".join( card_info.get('감독') + card_info.get('개요')), card_info.get('줄거리') or ""))
             primary_movie.score = 100
@@ -283,8 +287,12 @@ class SiteDaumMovie(SiteDaum):
                         title_section = container_title.text_content()
                         for img_tag in container_photo.xpath(".//img"):
                             try:
-                                image_url = cls.process_image_url(img_tag)
-                                if not image_url:
+                                
+                                thumb = img_tag.get('data-original-src') or img_tag.get('src') or ""
+                                img_query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(thumb).query))
+                                if fname := img_query.get('fname'):
+                                    image = fname   
+                                if not (thumb or image):
                                     continue
                                 aspect = 'poster' if float(img_tag.get('height') or 0) > float(img_tag.get('width') or 0) else 'landscape'
                                 image_score = 100
@@ -296,7 +304,7 @@ class SiteDaumMovie(SiteDaum):
                                     case _:
                                         bucket = etcs
                                         image_score = 80
-                                bucket.append(EntityThumb(aspect=aspect, value=image_url, site=cls.site_name, score=image_score))
+                                bucket.append(EntityThumb(aspect=aspect, value=image if image else '', thumb=thumb if thumb else '', site=cls.site_name, score=image_score))
                             except Exception:
                                 logger.exception(f"Failed to parse a photo...")
                     primary_movie.art.extend(posters)
@@ -317,7 +325,7 @@ class SiteDaumMovie(SiteDaum):
                         try:
                             texts = cls.iter_text(li_tag, excludes=(",", "|", "/", "점"))
                             if len(texts) == 3:
-                                primary_movie.review.append(EntityReview(cls.site_name, author=texts[0], source="cine21-expert", text=texts[-1], rating=float(texts[1])))
+                                primary_movie.review.append(EntityReview(cls.site_name, author=texts[0], source="Cine21", text=texts[-1], rating=float(texts[1])))
                         except Exception:
                             logger.exception(f"Failed to parse a review...")
             except Exception:
