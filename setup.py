@@ -39,6 +39,8 @@ except Exception as e:
 
 logger = P.logger
 
+P.cache = F.get_cache('support_site')
+
 REDIS_EXPIRE = 21600 # in seconds (6 hours)
 REDIS_KEY_PLUGIN = 'flaskfarm:support_site'
 try:
@@ -61,13 +63,13 @@ def check_redis(func: callable) -> callable:
 
 
 @check_redis
-def hset(key: str, field: str = None, value: str = None, mapping: dict = None) -> None:
+def hset(key: str, field: str = None, value: str = None, mapping: dict = None, expire: int = REDIS_EXPIRE) -> None:
     if mapping:
         REDIS_CONN.hset(key, mapping=mapping)
     else:
         REDIS_CONN.hset(key, field, value)
     if REDIS_CONN.ttl(key) < 0:
-        REDIS_CONN.expire(key, time=REDIS_EXPIRE)
+        REDIS_CONN.expire(key, time=expire)
 
 
 @check_redis
