@@ -50,6 +50,7 @@ class SiteDaumMovie(SiteDaum):
             search_keywords.extend([f"영화 {keyword}", keyword])
 
             for search_keyword in search_keywords:
+                logger.debug(f"Try searching for '{search_keyword}'")
                 query = cls.DEFAULT_QUERY.copy()
                 query['w'] = 'tot'
                 query['q'] = search_keyword
@@ -165,6 +166,7 @@ class SiteDaumMovie(SiteDaum):
             primary_movie.score = 100
             primary_movie.originaltitle = primary_movie.title if "한국" in card_info.get('개요') or () else title_in_english or ""
         else:
+            primary_movie.art.append(EntityThumb(aspect='poster', value=card_info.get('image') or '', thumb=card_info.get('thumb') or '', site=cls.site_name, score=101))
             primary_movie.plot = card_info.get('줄거리') or ""
             primary_movie.code_list.append(["daum_id", code[2:]])
             primary_movie.premiered = card_info.get('개봉') or ""
@@ -287,13 +289,11 @@ class SiteDaumMovie(SiteDaum):
                         title_section = container_title.text_content()
                         for img_tag in container_photo.xpath(".//img"):
                             try:
-                                
                                 thumb = img_tag.get('data-original-src') or img_tag.get('src') or ""
-                                img_query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(thumb).query))
-                                if fname := img_query.get('fname'):
-                                    image = fname   
-                                if not (thumb or image):
+                                if not thumb:
                                     continue
+                                img_query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(thumb).query))
+                                image = img_query.get('fname')
                                 aspect = 'poster' if float(img_tag.get('height') or 0) > float(img_tag.get('width') or 0) else 'landscape'
                                 image_score = 100
                                 match title_section:
