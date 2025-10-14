@@ -1,4 +1,5 @@
 import re
+import json
 import urllib.parse
 from datetime import datetime
 from http.cookies import SimpleCookie
@@ -20,12 +21,15 @@ class SiteDaum(object):
 
     site_name = 'daum'
     default_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
         'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language' : 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
     }
 
     REDIS_KEY_DAUM = f'{REDIS_KEY_PLUGIN}:daum'
+
+    CACHE_ENABLE = True
+    CACHE_EXPIRY = 60
 
     @classmethod
     def initialize(cls, daum_cookie: str, use_proxy: bool = False, proxy_url: str = None) -> None:
@@ -562,3 +566,26 @@ class SiteDaum(object):
                         }
                         data.append(person)
         return data
+
+    @classmethod
+    def set_cache(cls, key: str, data: dict, expiry: int = None) -> None:
+        key = f'{cls.REDIS_KEY_DAUM}:{key}'
+        if expiry is None:
+            expiry = cls.CACHE_EXPIRY
+        try:
+            if data:
+                P.cache.set(key, json.dumps(data, separators=(',', ':')), ex=expiry)
+        except Exception:
+            logger.exception('')
+
+    @classmethod
+    def get_cache(cls, key: str) -> dict | None:
+        key = f'{cls.REDIS_KEY_DAUM}:{key}'
+        try:
+            if cached := P.cache.get(key):
+                logger.debug(f'Cache hit: {key}')
+                data = json.loads(cached)
+                data['cached'] = True
+                return data
+        except Exception:
+            logger.exception('')

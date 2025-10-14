@@ -1,5 +1,4 @@
 import re
-import json
 import base64
 import urllib.parse
 
@@ -32,22 +31,17 @@ class SiteDaumMovie(SiteDaum):
         if year and int(year) == 1900:
             year = None
         encoded_keyword = base64.urlsafe_b64encode(keyword.encode('utf-8')).decode('utf-8')
-        cache_key = f"site_daum_movie:search:{encoded_keyword}:{year or '1900'}"
+        cache_key = f"movie:search:{encoded_keyword}:{year or '1900'}"
         try:
             # 캐시 활용
-            cached = P.cache.get(cache_key)
-            if cached:
-                logger.debug(f"Cache hit: {cache_key}")
-                ret = json.loads(cached)
-                ret['cached'] = True
-                return ret
+            if cls.CACHE_ENABLE and (cached := cls.get_cache(cache_key)):
+                return cached
 
             # request
-            search_keywords = []
+            search_keywords = [f"영화 {keyword}", keyword]
             if year:
                 search_keywords.append(f"{keyword} {str(year)}")
                 search_keywords.append(f"영화 {keyword} {str(year)}")
-            search_keywords.extend([f"영화 {keyword}", keyword])
 
             for search_keyword in search_keywords:
                 logger.debug(f"Try searching for '{search_keyword}'")
@@ -73,15 +67,16 @@ class SiteDaumMovie(SiteDaum):
                         elif discrepancy < 2:
                             score = 90
                         else:
-                            score = 80
+                            score = 85
                     else:
-                        score = 75
+                        score = 80
                 else:
                     score = max(75 - (idx * 5), 0)
                 sr['score'] = score
             search_results = sorted(search_results, key=lambda x:x.get('score', 0), reverse=True)
             ret = {'ret': 'success', 'data': search_results, 'cached': False}
-            P.cache.set(cache_key, json.dumps(ret, separators=(',', ':')), ex=30)
+            if cls.CACHE_ENABLE:
+                cls.set_cache(cache_key, ret)
             return ret
         return {'ret': 'empty'}
 
@@ -91,12 +86,8 @@ class SiteDaumMovie(SiteDaum):
         logger.debug(f'Daum movie info: {code=}')
         cache_key = f"site_daum_movie:info:{code}"
         try:
-            cached = P.cache.get(cache_key)
-            if cached:
-                logger.debug(f"Cache hit: {cache_key}")
-                ret = json.loads(cached)
-                ret['cached'] = True
-                return ret
+            if cls.CACHE_ENABLE and (cached := cls.get_cache(cache_key)):
+                return cached
 
             # request
             query = cls.DEFAULT_QUERY.copy()
@@ -109,7 +100,8 @@ class SiteDaumMovie(SiteDaum):
                     'data': results[0],
                     'cached': False
                 }
-                P.cache.set(cache_key, json.dumps(ret, separators=(',', ':')), ex=30)
+                if cls.CACHE_ENABLE:
+                    cls.set_cache(cache_key, ret)
                 return ret
         except Exception:
             logger.exception(f"Failed to get info: {code=}")
