@@ -63,23 +63,26 @@ class SiteJav321(SiteAvBase):
             item.code = cls.module_char + cls.site_char + code_from_url_path
 
             # --- 점수 계산 로직 (DMM 스타일 표준화) ---
+            # 검색어와 결과 URL의 품번을 모두 파싱
             kw_ui_code, kw_label_part, kw_num_part = cls._parse_ui_code(original_keyword)
             item_ui_code, item_label_part, item_num_part = cls._parse_ui_code(code_from_url_path)
             item.ui_code = item_ui_code
 
-            kw_num_part_stripped = kw_num_part.lstrip('0') or '0'
-            item_num_part_stripped = item_num_part.lstrip('0') or '0'
+            # 숫자 부분을 정규화하여 비교
+            kw_num_norm = kw_num_part.lstrip('0') or '0'
+            item_num_norm = item_num_part.lstrip('0') or '0'
 
-            kw_std_code = kw_label_part + kw_num_part_stripped.zfill(5) if kw_num_part.isdigit() else kw_label_part + kw_num_part
-            item_std_code = item_label_part + item_num_part_stripped.zfill(5) if item_num_part.isdigit() else item_label_part + item_num_part
-
-            # 3. 점수 부여
-            if kw_std_code.lower() == item_std_code.lower():
-                item.score = 100
+            # 점수 부여
+            if kw_num_norm == item_num_norm and (kw_label_part.lower().endswith(item_label_part.lower()) or item_label_part.lower().endswith(kw_label_part.lower())):
+                item.score = 100 # 기본 점수
+                if kw_label_part.lower() != item_label_part.lower():
+                    item.score -= 1 # 접두사 차이 페널티
+            
+            # elif를 사용하여, 위 조건이 실패했을 때만 기존의 ui_code 비교 수행
             elif kw_ui_code.lower() == item_ui_code.lower():
-                item.score = 80
+                item.score = 95 # ui_code가 정확히 일치하면 95점
             else:
-                item.score = 60
+                item.score = 60 # 그 외는 60점
 
             # logger.debug(f"Jav321 Score: SearchFull='{search_full_code}', ItemFull='{item_full_code}' -> Score={item.score}")
             # logger.debug(f"Jav321 Score: SearchPure='{search_pure_code}', ItemPure='{item_pure_code}'")
