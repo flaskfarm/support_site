@@ -147,13 +147,22 @@ class Site1PondoTv(SiteAvBase):
         except (ValueError, TypeError, IndexError):
             entity.year = 0
 
-        gallery_data = json_data.get('Gallery')
-        arts_urls = []
-        if isinstance(gallery_data, list):
-            arts_urls = [f"{SITE_BASE_URL}{p}" for p in gallery_data if p and isinstance(p, str) and p.startswith('/')]
+        # 1. URL을 완전한 주소로 만들어주는 헬퍼 함수
+        def format_url(path):
+            if path and isinstance(path, str):
+                return f"{SITE_BASE_URL}{path}" if path.startswith('/') else path
+            return None
 
-        poster_url = json_data.get('MovieThumb')
-        landscape_url = json_data.get('ThumbUltra')
+        # 2. 모든 이미지 URL을 수집하고 완전한 주소로 변환
+        poster_url = format_url(json_data.get('MovieThumb'))
+        landscape_url = format_url(json_data.get('ThumbUltra'))
+        gallery_data = json_data.get('Gallery', [])
+        arts_urls = [format_url(p) for p in gallery_data if p] if isinstance(gallery_data, list) else []
+
+        # 3. 포스터 폴백 로직 적용
+        if not poster_url and landscape_url:
+            logger.debug(f"[{cls.site_name}] Poster image is missing. Using landscape image as a fallback for poster.")
+            poster_url = landscape_url
 
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
@@ -220,10 +229,27 @@ class Site1PondoTv(SiteAvBase):
         if cls.config.get('use_extras'):
             try:
                 sample_files = json_data.get('SampleFiles')
+                
+                # SampleFiles가 리스트이고, 비어있지 않은지 확인
                 if isinstance(sample_files, list) and sample_files:
-                    video_url_data = next((f for f in sample_files if f.get('FileSize') and f.get('URL')), None)
-                    if video_url_data:
-                        video_url = cls.make_video_url(video_url_data['URL'])
+                    
+                    # 해상도를 기준으로 정렬하기 위한 헬퍼 함수
+                    def get_resolution(file_info):
+                        filename = file_info.get('FileName', '')
+                        match = re.search(r'(\d+)p\.mp4', filename)
+                        if match:
+                            return int(match.group(1))
+                        # 해상도를 찾을 수 없으면 파일 크기를 기준으로 하되, 우선순위를 낮춤
+                        return file_info.get('FileSize', 0) / 1000000 # 단위를 맞추기 위해 조정
+
+                    # get_resolution 함수의 결과를 기준으로 내림차순 정렬
+                    sorted_samples = sorted(sample_files, key=get_resolution, reverse=True)
+                    
+                    # 가장 첫 번째 요소가 가장 고화질 영상
+                    best_quality_video = sorted_samples[0]
+                    
+                    if best_quality_video and best_quality_video.get('URL'):
+                        video_url = cls.make_video_url(best_quality_video['URL'])
                         if video_url:
                             trailer_title = entity.tagline if entity.tagline else entity.title
                             entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url))
