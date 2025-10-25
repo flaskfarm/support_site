@@ -160,6 +160,10 @@ class Site10Musume(SiteAvBase):
         gallery_data = json_data.get('Gallery', [])
         arts_urls = [format_url(p) for p in gallery_data if p] if isinstance(gallery_data, list) else []
 
+        if not poster_url and landscape_url:
+            logger.debug(f"[{cls.site_name}] Poster image is missing. Using landscape image as a fallback for poster.")
+            poster_url = landscape_url
+
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
             try:
@@ -232,10 +236,22 @@ class Site10Musume(SiteAvBase):
         if cls.config.get('use_extras'):
             try:
                 sample_files = json_data.get('SampleFiles')
+                
                 if isinstance(sample_files, list) and sample_files:
-                    video_url_data = next((f for f in sample_files if f.get('FileSize') and f.get('URL')), None)
-                    if video_url_data:
-                        video_url = cls.make_video_url(video_url_data['URL'])
+                    
+                    def get_resolution(file_info):
+                        filename = file_info.get('FileName', '')
+                        match = re.search(r'(\d+)p\.mp4', filename)
+                        if match:
+                            return int(match.group(1))
+                        return file_info.get('FileSize', 0)
+
+                    sorted_samples = sorted(sample_files, key=get_resolution, reverse=True)
+                    
+                    best_quality_video = sorted_samples[0]
+                    
+                    if best_quality_video and best_quality_video.get('URL'):
+                        video_url = cls.make_video_url(best_quality_video['URL'])
                         if video_url:
                             trailer_title = entity.tagline if entity.tagline else entity.title
                             entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url))
