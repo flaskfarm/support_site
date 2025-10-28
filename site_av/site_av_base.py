@@ -496,6 +496,7 @@ class SiteAvBase:
 
         parsing_rules = cls._yaml_settings.get('jav_parsing_rules', {})
         image_settings = cls._yaml_settings.get('jav_image_settings', {})
+        misc_settings = cls._yaml_settings.get('jav_misc_settings', {})
 
         cls.config.update({
             # 공통 설정 (항상 jav_censored 값을 사용)
@@ -526,6 +527,9 @@ class SiteAvBase:
             # 이미지 임계값 설정
             "hq_poster_threshold_strict": image_settings.get('hq_poster_threshold_strict', 10),
             "hq_poster_threshold_normal": image_settings.get('hq_poster_threshold_normal', 30),
+
+            # Selenium 타임아웃 설정
+            "selenium_timeout": misc_settings.get('selenium_timeout', 10),
         })
         # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
         # uncensored_rules_count = len(cls.config.get('uncensored_parser_rules', {}).get('custom_rules', []))
@@ -1434,12 +1438,19 @@ class SiteAvBase:
                     source_mode = image_sources.get('poster_mode')
 
                     if source_mode == 'local_file':
-                        import shutil
-                        shutil.copy(poster_source, system_poster_path)
+                        try:
+                            with open(poster_source, 'rb') as f:
+                                if not cls._save_image_as_jpeg(BytesIO(f.read()), system_poster_path):
+                                    # 실패 시 원본 복사
+                                    import shutil
+                                    shutil.copy(poster_source, system_poster_path)
+                        except Exception as e_read_local:
+                            logger.error(f"Failed to read local file {poster_source}: {e_read_local}")
                     else:
                         response = cls.jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
                         if response and response.status_code == 200:
-                            with open(system_poster_path, 'wb') as f: f.write(response.data)
+                            if not cls._save_image_as_jpeg(BytesIO(response.data), system_poster_path):
+                                with open(system_poster_path, 'wb') as f: f.write(response.data)
                         else:
                             logger.error(f"Failed to download poster for {code_lower} from {poster_source}")
 
@@ -1455,7 +1466,8 @@ class SiteAvBase:
                     os.makedirs(target_folder, exist_ok=True)
                     response = cls.jav_image(url=landscape_source, site=cls.site_name)
                     if response and response.status_code == 200:
-                        with open(system_landscape_path, 'wb') as f: f.write(response.data)
+                        if not cls._save_image_as_jpeg(BytesIO(response.data), system_landscape_path):
+                            with open(system_landscape_path, 'wb') as f: f.write(response.data)
                     else:
                         logger.error(f"Failed to download landscape for {code_lower} from {landscape_source}")
 
@@ -1477,8 +1489,11 @@ class SiteAvBase:
                     os.makedirs(os.path.dirname(filepath), exist_ok=True)
                     response = cls.jav_image(url=art_url, site=cls.site_name)
                     if response and response.status_code == 200:
-                        with open(filepath, 'wb') as f: f.write(response.data)
-                        entity.fanart.append(f"{server_url_prefix}/{filename}")
+                        if cls._save_image_as_jpeg(BytesIO(response.data), filepath):
+                            entity.fanart.append(f"{server_url_prefix}/{os.path.basename(filepath)}")
+                        else:
+                            with open(filepath, 'wb') as f: f.write(response.data)
+                            entity.fanart.append(f"{server_url_prefix}/{os.path.basename(filepath)}")
                     else:
                         logger.error(f"Failed to download art for {code_lower} from {art_url}")
             # 덮어쓰기 off and 기존 팬아트 존재 -> 기존 파일 URL만 추가
@@ -1845,6 +1860,58 @@ class SiteAvBase:
         except Exception:
             # 실패 시 원본 텍스트 반환
             return text
+
+
+    @classmethod
+    def _save_image_as_jpeg(cls, image_data_bytesio: BytesIO, save_path: str) -> bool:
+        """
+        이미지 바이너리 데이터를 받아, 필요할 때만 JPEG로 변환하여 저장합니다.
+        성공 시 True, 실패 시 False를 반환합니다.
+        """
+        try:
+            # 버퍼의 내용을 복사하여 원본 BytesIO 객체에 영향을 주지 않도록 함
+            image_data_bytesio.seek(0)
+            temp_buffer = BytesIO(image_data_bytesio.read())
+            
+            # Pillow로 이미지 열어 포맷과 모드 확인
+            with Image.open(temp_buffer) as img:
+                is_jpeg = img.format == 'JPEG'
+                is_compatible_mode = img.mode in ('RGB', 'L')
+
+                # 조건 1: 이미 JPEG이고, 호환되는 모드(RGB, L)인 경우
+                if is_jpeg and is_compatible_mode:
+                    # 재압축 없이 원본 바이너리 데이터를 그대로 저장
+                    logger.debug(f"Saving to {save_path}")
+                    image_data_bytesio.seek(0) # 원본 버퍼 포인터 리셋
+                    with open(save_path, 'wb') as f:
+                        f.write(image_data_bytesio.read())
+                    return True
+                
+                # 조건 2: 그 외의 모든 경우 (PNG, WEBP, RGBA/CMYK JPEG 등)
+                else:
+                    logger.debug(f"Image format '{img.format}'. Converting to JPEG for {save_path}")
+                    # RGB로 변환
+                    if img.mode not in ('RGB', 'L'):
+                        rgb_img = img.convert('RGB')
+                        # 변환된 이미지 저장
+                        rgb_img.save(save_path, 'JPEG', quality=95)
+                        rgb_img.close()
+                    else:
+                        # 모드는 정상이지만 포맷이 다른 경우 (PNG, WEBP 등)
+                        img.save(save_path, 'JPEG', quality=95)
+                    return True
+
+        except UnidentifiedImageError:
+            # Pillow가 이미지로 인식하지 못하는 경우, 원본 데이터라도 저장
+            logger.warning(f"UnidentifiedImageError for {save_path}. Saving raw data as fallback.")
+            image_data_bytesio.seek(0)
+            with open(save_path, 'wb') as f:
+                f.write(image_data_bytesio.read())
+            return True # 저장은 했으므로 True 반환
+        except Exception as e:
+            logger.error(f"Failed to intelligently save image to {save_path}: {e}")
+            logger.error(traceback.format_exc())
+            return False
 
 
     # endregion 유틸
