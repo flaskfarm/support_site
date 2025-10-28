@@ -31,7 +31,6 @@ class SiteFc2com(SiteAvBase):
     site_char = 'F'
     module_char = 'E'
 
-    SELENIUM_TIMEOUT = 5
     CACHE_EXPIRATION_SECONDS = 120
 
     site_base_url = 'https://adult.contents.fc2.com'
@@ -370,7 +369,8 @@ class SiteFc2com(SiteAvBase):
     @classmethod
     def _get_page_content(cls, driver, url, wait_for_locator):
         driver.get(url)
-        WebDriverWait(driver, cls.SELENIUM_TIMEOUT).until(EC.presence_of_element_located(wait_for_locator))
+        timeout = cls.config.get('selenium_timeout', 10)
+        WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
         page_source = driver.page_source
         if "お探しのページは見つかりませんでした。" in page_source:
             return None, page_source
@@ -389,8 +389,8 @@ class SiteFc2com(SiteAvBase):
 
         if upgrade_size:
             if match := re.search(r'/w(\d+)/', src):
-                if int(match.group(1)) < 600:
-                    normalized_src = src.replace(f'/w{match.group(1)}/', '/w600/')
+                if int(match.group(1)) < 1000:
+                    normalized_src = src.replace(f'/w{match.group(1)}/', '/w1000/')
 
         if normalized_src.startswith('//'): return 'https:' + normalized_src
         if normalized_src.startswith('/'): return urljoin(base_url, src)
