@@ -398,24 +398,23 @@ class SiteDaumTv(SiteDaum):
             else:
                 entity.plot += f'\n\n{plot_text[0].strip()}'
 
-        # 썸네일
-        epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
-        if epi_thumbs:
-            thumb_url = cls.process_image_url(epi_thumbs[0])
-            entity.thumb.append(EntityThumb(aspect='landscape', value=thumb_url, site=cls.site_name, score=-10))
-            '''
-            if 'alt' in epi_thumbs[0].attrib and epi_thumbs[0].attrib['alt']:
-                sub = re.compile('\[.+\]')
-                tmp = epi_thumbs[0].attrib['alt'].split('|')
-                tmp = sub.sub('', tmp[0]).strip()
-                if tmp:
-                    entity.title = tmp
-            '''
-
         # 관련 영상
         related_video_elements = root.xpath('//div[@id="episode-play"]/following-sibling::div[1]//ul/li')
-        if include_kakao and related_video_elements:
-            entity.extras.extend(cls.get_kakao_video_list(related_video_elements))
+        if related_video_elements:
+            extras = cls.get_kakao_video_list(related_video_elements)
+            if include_kakao and extras:
+                entity.extras.extend(extras)
+            for extra in extras:
+                if "예고" in extra.title:
+                    continue
+                if extra.thumb:
+                    entity.thumb.append(EntityThumb(aspect='landscape', value=extra.thumb, site=cls.site_name, score=100))
+
+        # 썸네일, 관련 영상의 썸네일을 먼저 사용하고 없을 경우 사용
+        epi_thumbs = root.xpath('//div[@id="tvpColl"]//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
+        if epi_thumbs and not entity.thumb:
+            thumb_url = cls.process_image_url(epi_thumbs[0])
+            entity.thumb.append(EntityThumb(aspect='landscape', value=thumb_url, site=cls.site_name, score=80))
 
         ret['data'] = entity.as_dict()
         #logger.debug(ret['data'])
