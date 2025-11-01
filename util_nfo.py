@@ -7,6 +7,12 @@ from flask import Response
 
 from support import SupportFile
 from .setup import P, logger, app
+from support import SupportYaml
+try:
+    import yaml
+except ImportError:
+    P.logger.warning("PyYAML is not installed. YAML download feature will not work.")
+    yaml = None
 
 
 class UtilNfo(object):
@@ -128,3 +134,114 @@ class UtilNfo(object):
         elif output == 'save':
             if savepath is not None:
                 return SupportFile.write_file(savepath, text)
+
+    @classmethod
+    def make_yaml_movie(cls, info, output='string', filename=None):
+        """
+        메타데이터(info)를 받아 YAML 문자열 또는 파일 응답을 생성합니다.
+        """
+        try:
+            yaml_data = cls._make_yaml_movie(info)
+            if yaml_data is None:
+                return None
+
+            if output == 'file':
+                if filename is None:
+                    filename = f"{info.get('originaltitle', 'movie').upper()}.yaml"
+                
+                if yaml:
+                    yaml_string = yaml.dump(yaml_data, allow_unicode=True, sort_keys=False, indent=2)
+                else:
+                    # yaml 라이브러리가 없는 경우 에러 처리
+                    return "PyYAML library not installed."
+                
+                from flask import Response
+                return Response(
+                    yaml_string,
+                    mimetype='application/x-yaml',
+                    headers={'Content-disposition': f'attachment; filename="{filename}"'}
+                )
+            
+            return yaml_data
+            
+        except Exception as e:
+            logger.error(f"Error in make_yaml_movie: {e}")
+            logger.error(traceback.format_exc())
+            return None
+
+    @classmethod
+    def _make_yaml_movie(cls, info):
+        """
+        _make_nfo_movie와 유사한 구조로, 메타데이터를 YAML용 딕셔너리로 변환합니다.
+        """
+        try:
+            # 기본 템플릿 생성
+            yaml_data = {
+                'primary': True,
+                'code': info.get('code', ''),
+                'title': info.get('title', ''),
+                'original_title': info.get('originaltitle', ''),
+                'title_sort': info.get('sorttitle', ''),
+                'originally_available_at': info.get('premiered', ''),
+                'year': info.get('year'),
+                'studio': info.get('studio', ''),
+                'content_rating': info.get('mpaa', ''),
+                'tagline': info.get('tagline', ''),
+                'summary': info.get('plot', ''),
+                'genres': info.get('genre') or [], 'collections': info.get('tag') or [],
+                'countries': info.get('country') or [],
+                'directors': [],
+                'roles': [],
+                'posters': [],
+                'art': [],
+                'extras': []
+            }
+
+            # 감독
+            if director := info.get('director'):
+                yaml_data['directors'].append(director)
+
+            # 평점
+            if ratings := info.get('ratings'):
+                if isinstance(ratings, list) and ratings:
+                    try:
+                        yaml_data['rating'] = float(ratings[0]['value']) * 2 if ratings[0]['max'] == 5 else float(ratings[0]['value'])
+                    except: pass
+            
+            # 썸네일 (포스터, 랜드스케이프)
+            if thumbs := info.get('thumb'):
+                for item in thumbs:
+                    if item.get('aspect') == 'poster':
+                        yaml_data['posters'].append({'url': item.get('value')})
+                    elif item.get('aspect') == 'landscape':
+                        yaml_data['art'].append({'url': item.get('value')})
+            
+            # 팬아트
+            if fanarts := info.get('fanart'):
+                for item in fanarts:
+                    yaml_data['art'].append({'url': item})
+            
+            # 부가 영상
+            if extras := info.get('extras'):
+                for item in extras:
+                    if item.get('content_type') == 'trailer':
+                        yaml_data['extras'].append({
+                            'mode': 'url', 'type': 'trailer', 'title': item.get('title'),
+                            'url': item.get('content_url'), 'thumb': ''
+                        })
+            
+            # 배우
+            if actors := info.get('actor'):
+                for item in actors:
+                    yaml_data['roles'].append({
+                        'name': item.get('name', ''),
+                        'role': item.get('originalname', ''),
+                        'photo': item.get('thumb', '')
+                    })
+
+            return yaml_data
+        except Exception as e:
+            logger.error(f"Error in _make_yaml_movie: {e}")
+            logger.error(traceback.format_exc())
+            return None
+
