@@ -729,6 +729,7 @@ MGS_LABEL_MAP = {
     "DOCL": ["077DOCL"],
     "DOG": ["231DOG", "419DOG"],
     "DOHI": ["258DOHI"],
+    "DOJN": ["858DOJN"],
     "DOKI": ["052DOKI"],
     "DOKS": ["258DOKS"],
     "DOKU": ["077DOKU"],

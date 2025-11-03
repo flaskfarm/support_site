@@ -1237,26 +1237,6 @@ class SiteDmm(SiteAvBase):
         label_part_for_retry = ""
         num_part_for_retry = ""
 
-        # --- ID 레이블 특별 처리 (DMM 검색 최적화) ---
-
-        # Case 1: '16id-045', '16id-0045' 같은 형식. 문자열 전체가 이 패턴과 일치해야 함.
-        match1 = re.match(r'^(\d{2})(id)[-_]?(\d{3,4})$', temp_keyword)
-        if match1:
-            series, _, number = match1.groups()
-            # DMM 검색 형식('id' + 시리즈 + 번호)으로 재조합. 번호는 패딩 불필요.
-            keyword_for_url = f"id{series}{number}"
-            logger.debug(f"DMM Keyword Gen (ID Special Case 1): Optimized '{temp_keyword}' -> '{keyword_for_url}'")
-            return keyword_for_url, "", ""
-
-        # Case 2: '55id16045' 같은 DMM CID 형식. 문자열 전체가 이 패턴과 일치해야 함.
-        match2 = re.match(r'^\d{2}id\d{5}$', temp_keyword)
-        if match2:
-            # 이 형식은 이미 DMM 검색에 최적화되어 있으므로, 그대로 사용.
-            keyword_for_url = temp_keyword
-            logger.debug(f"DMM Keyword Gen (ID Special Case 2): Using '{temp_keyword}' as is.")
-            return keyword_for_url, "", ""
-
-        # --- ID 레이블이 아닌 경우, 기존의 일반 검색어 생성 로직 수행(YAML 파서) ---
         parsed_ui_code, label_for_search, num_part = cls._parse_ui_code(temp_keyword, 'unknown')
 
         # 파서가 유의미한 결과를 반환했는지 확인 (레이블과 숫자가 모두 있거나, 하이픈이 있는 경우)
