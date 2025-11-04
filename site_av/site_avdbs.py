@@ -46,7 +46,7 @@ class SiteAvdbs(SiteAvBase):
         final_info = None
         if cls.config['use_local_db']:
             final_info = cls._search_from_local_db(name_variations_to_search)
-        if final_info is None:
+        if final_info is None and cls.config['use_web_search']:
             final_info = cls._search_from_web(original_input_name)
         if final_info is not None:
             entity_actor["name"] = final_info["name"]
@@ -274,6 +274,7 @@ class SiteAvdbs(SiteAvBase):
             "use_local_db": db.get_bool("jav_censored_avdbs_use_local_db"),
             "local_db_path": db.get("jav_censored_avdbs_local_db_path"),
             "image_url_prefix": db.get("jav_actor_img_url_prefix").rstrip('/'),
+            "use_web_search": db.get_bool("jav_censored_avdbs_use_web_search"),
         })
 
         res = cls.get_response(SITE_BASE_URL)

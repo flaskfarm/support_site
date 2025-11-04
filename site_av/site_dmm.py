@@ -239,82 +239,39 @@ class SiteDmm(SiteAvBase):
                 item.title = raw_title_node if raw_title_node and raw_title_node != "Not Found" else item.ui_code
 
                 # 4. item.score 계산
-                item_code_for_strict_compare = "" # 아이템의 "레이블+5자리숫자" (DMM 검색형식과 유사)
-                item_ui_code_base_for_score = ""  # 아이템의 "레이블+원본숫자" (패딩X)
-
-                if label_for_score_item and num_raw_for_score_item:
-                    item_code_for_strict_compare = label_for_score_item + num_raw_for_score_item.zfill(5)
-                    item_ui_code_base_for_score = label_for_score_item + num_raw_for_score_item
-                elif item.ui_code: # _parse_ui_code가 결과를 못냈을 경우의 폴백
-                    cleaned_ui_code_for_score = item.ui_code.replace("-","").lower()
-                    # cleaned_ui_code_for_score에서 레이블과 숫자 분리 시도 (간단화)
-                    temp_match_score = re.match(r'([a-z]+)(\d+)', cleaned_ui_code_for_score)
-                    if temp_match_score:
-                        item_code_for_strict_compare = temp_match_score.group(1) + temp_match_score.group(2).zfill(5)
-                        item_ui_code_base_for_score = temp_match_score.group(1) + temp_match_score.group(2)
-                    else:
-                        item_code_for_strict_compare = cleaned_ui_code_for_score
-                        item_ui_code_base_for_score = cleaned_ui_code_for_score
-
                 current_score_val = 0
-                # --- 점수 계산 로직 ---
-                # 0순위: 파싱된 레이블과 숫자를 이용한 유연한 100점/99점 비교
-                # _parse_ui_code가 양쪽 모두에 대해 유의미한 label과 num을 반환했을 때만 실행
-                if label_for_score_item and num_raw_for_score_item:
-                    # 검색어의 파싱 결과 (_parse_ui_code는 이미 호출되었으므로, 변수 재사용)
-                    _, kw_label_part, kw_num_part = cls._parse_ui_code(original_keyword.lower())
+                
+                # [기준 1] 원본 키워드에서 전체 레이블과 숫자 추출
+                keyword_parsed_ui_code, _, keyword_num = cls._parse_ui_code(original_keyword.lower())
+                keyword_full_label = keyword_parsed_ui_code.split('-')[0].upper()
+                keyword_num_norm = keyword_num.lstrip('0') or '0'
 
-                    # 아이템의 레이블과 숫자
-                    item_label_part = label_for_score_item.lower()
-                    item_num_part = num_raw_for_score_item
-                    
-                    # 숫자 부분을 비교하기 위해 앞의 0을 제거
-                    kw_num_norm = kw_num_part.lstrip('0') or '0'
-                    item_num_norm = item_num_part.lstrip('0') or '0'
-                    
-                    # 숫자 부분이 일치하고, 레이블 중 하나가 다른 하나로 끝나는 경우
-                    if kw_num_norm == item_num_norm and (kw_label_part.endswith(item_label_part) or item_label_part.endswith(kw_label_part)):
-                        current_score_val = 100 # 기본 100점
-                        if kw_label_part != item_label_part:
-                            current_score_val -= 1 # 숫자 접두사 차이 페널티
-
-                # 1. DMM 검색용 키워드와 아이템의 "레이블+5자리숫자" 형태가 정확히 일치
-                if current_score_val == 0 and keyword_for_url and item_code_for_strict_compare and keyword_for_url == item_code_for_strict_compare: 
-                    current_score_val = 100
+                # [기준 2] 현재 아이템에서 전체 레이블과 숫자 추출
+                # item.ui_code는 이미 '73SPSE-003'과 같이 완전히 파싱된 상태
+                item_full_label = item.ui_code.split('-')[0].upper()
+                item_num_norm = num_raw_for_score_item.lstrip('0') or '0'
                 
-                # 2. 아이템의 "레이블+원본숫자"가 DMM 검색용 키워드와 일치
-                elif current_score_val == 0 and item_ui_code_base_for_score == keyword_for_url:
-                    current_score_val = 100
+                # --- 본격적인 점수 계산 ---
+                # 0순위: 숫자 부분이 정확히 일치하는 경우
+                if keyword_num_norm == item_num_norm:
+                    if keyword_full_label == item_full_label:
+                        # 전체 레이블과 숫자 모두 완벽 일치
+                        current_score_val = 100
+                    elif keyword_full_label.endswith(item_full_label) or item_full_label.endswith(keyword_full_label):
+                        # 숫자는 같지만, 전체 레이블이 포함 관계
+                        current_score_val = 99
+                    else:
+                        # 숫자는 같지만, 레이블이 전혀 다름
+                        current_score_val = 80
                 
-                # 3. 앞의 '0'을 제거한 숫자 부분 비교
-                elif current_score_val == 0 and item_ui_code_base_for_score.replace("0", "") == keyword_for_url.replace("0", ""): 
-                    current_score_val = 80 
+                # 1순위: 폴백 로직 (숫자가 다른 경우)
+                elif keyword_for_url and (keyword_for_url in item.code.lower().replace('_', '')):
+                    current_score_val = 75
                 
-                # 4. DMM 검색용 키워드가 아이템의 "레이블+원본숫자"에 포함
-                elif current_score_val == 0 and keyword_for_url and item_ui_code_base_for_score and keyword_for_url in item_ui_code_base_for_score:
-                    current_score_val = score
-                
-                # 5. 초기 입력 키워드의 각 부분이 아이템 코드에 포함
-                elif current_score_val == 0 and len(keyword_processed_parts_for_score) == 2 and \
-                    keyword_processed_parts_for_score[0] in item.code.lower() and \
-                    keyword_processed_parts_for_score[1] in item.code.lower():
-                    current_score_val = score
-
-                # 6. 초기 입력 키워드의 일부가 아이템 코드에 포함
-                elif current_score_val == 0 and len(keyword_processed_parts_for_score) > 0 and \
-                    (keyword_processed_parts_for_score[0] in item.code.lower() or \
-                    (len(keyword_processed_parts_for_score) > 1 and keyword_processed_parts_for_score[1] in item.code.lower())):
-                    current_score_val = 70
-                
-                # 최종 폴백
-                elif current_score_val == 0: 
+                # 2순위: 최종 폴백
+                else:
                     current_score_val = 60
-
-                # CID 직접 비교 로직으로 점수 재조정
-                # 검색어(1sw00124)와 아이템 CID(1sw00124)가 정확히 일치하면 100점으로 설정
-                if content_id_or_cid and keyword_for_url.replace('00', '0') == content_id_or_cid.replace('00', '0'):
-                    current_score_val = 100
-
+                
                 item.score = current_score_val
                 if current_score_val < 100 and score > 20: score -= 5 # 다음 아이템의 기본 점수 감소
 
