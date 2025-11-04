@@ -1628,6 +1628,7 @@ class SiteAvBase:
                     search_label_template = template_parts[2] if len(template_parts) > 2 else None
 
                     groups = match.groups()
+                    groups = tuple('' if g is None else g for g in groups)
                     final_label_part = label_template.format(*groups)
                     final_num_part = num_template.format(*groups)
 
