@@ -240,36 +240,62 @@ class SiteDmm(SiteAvBase):
 
                 # 4. item.score 계산
                 current_score_val = 0
-                
-                # [기준 1] 원본 키워드에서 전체 레이블과 숫자 추출
-                keyword_parsed_ui_code, _, keyword_num = cls._parse_ui_code(original_keyword.lower())
-                keyword_full_label = keyword_parsed_ui_code.split('-')[0].upper()
-                keyword_num_norm = keyword_num.lstrip('0') or '0'
 
-                # [기준 2] 현재 아이템에서 전체 레이블과 숫자 추출
-                # item.ui_code는 이미 '73SPSE-003'과 같이 완전히 파싱된 상태
-                item_full_label = item.ui_code.split('-')[0].upper()
-                item_num_norm = num_raw_for_score_item.lstrip('0') or '0'
-                
-                # --- 본격적인 점수 계산 ---
-                # 0순위: 숫자 부분이 정확히 일치하는 경우
-                if keyword_num_norm == item_num_norm:
-                    if keyword_full_label == item_full_label:
-                        # 전체 레이블과 숫자 모두 완벽 일치
-                        current_score_val = 100
-                    elif keyword_full_label.endswith(item_full_label) or item_full_label.endswith(keyword_full_label):
-                        # 숫자는 같지만, 전체 레이블이 포함 관계
-                        current_score_val = 99
+                # [전처리] 표준화된 UI Code를 (레이블 파트, 넘버 파트)로 분할하는 함수
+                def get_label_num_parts(ui_code_str):
+                    if '-' in ui_code_str:
+                        parts = ui_code_str.upper().split('-', 1)
+                        return parts[0], parts[1]
                     else:
-                        # 숫자는 같지만, 레이블이 전혀 다름
-                        current_score_val = 80
+                        # 방어 코드: 하이픈이 없는 경우 전체를 레이블로 간주
+                        return ui_code_str.upper(), ''
+
+                # [전처리] 레이블 파트에서 (숫자 접두사, 문자 레이블)을 분해하는 함수
+                def get_prefix_label(label_part_str):
+                    match = re.match(r'^(\d+)([A-Z].*)$', label_part_str)
+                    if match:
+                        return match.group(1), match.group(2)
+                    else:
+                        return '', label_part_str
+
+                # [1] 키워드와 아이템 코드를 표준 UI Code로 변환
+                kw_ui_code, _, _ = cls._parse_ui_code(original_keyword.lower())
+                item_ui_code = item.ui_code # item.ui_code는 이미 표준화된 상태
+
+                # [2] 각 UI Code를 레이블/넘버 파트로 분할
+                kw_label_part, kw_num_part = get_label_num_parts(kw_ui_code)
+                item_label_part, item_num_part = get_label_num_parts(item_ui_code)
+
+                # --- 본격적인 점수 계산 ---
+                # 규칙 4, 5의 기본 조건: 넘버 파트가 정확히 일치해야 함
+                if kw_num_part == item_num_part and kw_num_part != '':
+                    # 넘버 파트가 일치하므로, 이제 레이블 파트를 분석
+                    kw_prefix, kw_label = get_prefix_label(kw_label_part)
+                    item_prefix, item_label = get_prefix_label(item_label_part)
+
+                    # 레이블의 문자 부분이 정확히 일치하는지 확인
+                    if kw_label == item_label:
+                        # 규칙 1: 모든 게 정확히 일치 (숫자 접두사 포함)
+                        if kw_prefix == item_prefix:
+                            current_score_val = 100
+                        # 규칙 2: 한쪽에만 숫자 접두사가 있는 경우
+                        elif (kw_prefix and not item_prefix) or (not kw_prefix and item_prefix):
+                            current_score_val = 99
+                        # 규칙 3: 둘 다 숫자 접두사가 있지만 다른 경우
+                        elif kw_prefix != item_prefix:
+                            current_score_val = 80
+                    else:
+                        # 넘버는 같지만 레이블의 문자 부분이 다름 (예: ID-123 vs ATID-123)
+                        current_score_val = 60
                 
-                # 1순위: 폴백 로직 (숫자가 다른 경우)
-                elif keyword_for_url and (keyword_for_url in item.code.lower().replace('_', '')):
-                    current_score_val = 75
+                # CID 직접 비교
+                elif content_id_or_cid and keyword_for_url and (keyword_for_url.replace('00', '0') == content_id_or_cid.replace('00', '0')):
+                    # 파서가 실패했지만, 검색 URL과 CID가 일치하는 경우
+                    # 98점으로 설정하여, 파서 기반의 99점짜리 유사 품번보다는 낮게 책정
+                    current_score_val = 98
                 
-                # 2순위: 최종 폴백
                 else:
+                    # 넘버 파트가 다르거나 없는 경우
                     current_score_val = 60
                 
                 item.score = current_score_val
