@@ -108,15 +108,7 @@ class SiteJavdb(SiteAvBase):
                 item.ui_code = item_ui_code
 
                 # --- 점수 계산 ---
-                kw_std_code = kw_label_part.lower() + kw_num_part.zfill(5) if kw_num_part.isdigit() else kw_label_part.lower() + kw_num_part
-                item_std_code = item_label_part.lower() + item_num_part.zfill(5) if item_num_part.isdigit() else item_label_part.lower() + item_num_part
-
-                if kw_std_code == item_std_code:
-                    item.score = 100
-                elif kw_ui_code.lower() == item.ui_code.lower():
-                    item.score = 95
-                else:
-                    item.score = 60
+                item.score = cls._calculate_score(original_keyword, item.ui_code)
                 if not item.score:
                     item.score = 20
 
@@ -252,40 +244,47 @@ class SiteJavdb(SiteAvBase):
             entity.original = {}
 
             # === 2. 메타데이터 파싱 ===
-            if not keyword:
-                try:
-                    keyword_cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache") # 'jav_censored_...'로 수정
-                    keyword = keyword_cache.get(code)
-                    if keyword:
-                        logger.debug(f"JavDB Info: Restored keyword '{keyword}' from cache for {code}.")
-                except Exception as e_cache:
-                    logger.warning(f"JavDB Info: Failed to get keyword from cache for {code}: {e_cache}")
-
-            # 페이지에서 품번을 추출하여 검증/폴백용으로 준비
+            # 페이지 내 품번을 최우선으로, 키워드는 폴백으로 사용
+            # 1. 페이지에서 품번을 추출합니다 (두 가지 XPath 시도).
             raw_ui_code_from_page = ""
             if id_panel_block := tree.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()'):
                 raw_ui_code_from_page = id_panel_block[0].strip()
             elif h2_code_node := tree.xpath('//h2[@class="title is-4"]/strong[1]/text()'):
                 raw_ui_code_from_page = h2_code_node[0].strip()
 
-            if keyword:
-                trusted_ui_code, _, _ = cls._parse_ui_code(keyword)
-                logger.debug(f"JavDB Info: Using trusted UI code '{trusted_ui_code}' from keyword '{keyword}'.")
+            # 2. 페이지 품번이 존재하면 그것을 최종 UI Code로 확정합니다.
+            if raw_ui_code_from_page:
+                entity.ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+                logger.debug(f"JavDB Info: UI Code set from page -> '{entity.ui_code}'")
 
-                # 페이지 품번과 교차 검증
-                if raw_ui_code_from_page:
-                    parsed_pid_from_page, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+                # (선택적 검증) 키워드가 있다면 페이지 품번과 비교
+                if original_keyword:
+                    trusted_ui_code, _, _ = cls._parse_ui_code(original_keyword)
+                    core_page = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
                     core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code.upper())
-                    core_page = re.sub(r'[^A-Z0-9]', '', parsed_pid_from_page.upper())
                     if not (core_trusted in core_page or core_page in core_trusted):
-                        logger.warning(f"JavDB Info: Significant UI code mismatch detected!")
-                        logger.warning(f"  - Trusted UI Code: {trusted_ui_code}")
-                        logger.warning(f"  - Page UI Code (for verification): {parsed_pid_from_page}")
-            else:
-                trusted_ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page if raw_ui_code_from_page else original_code_for_url)
-                logger.debug(f"JavDB Info: No keyword. Using UI code '{trusted_ui_code}' from page/URL.")
+                        logger.warning(f"JavDB Info: Keyword mismatch!")
+                        logger.warning(f"  - Keyword (parsed): {trusted_ui_code}")
+                        logger.warning(f"  - Final UI Code (from page): {entity.ui_code}")
 
-            entity.ui_code = trusted_ui_code
+            else:
+                # 3. 페이지 품번이 없을 경우, 키워드를 폴백으로 사용
+                logger.warning(f"JavDB Info: ID not found on page. Falling back to keyword.")
+                if not original_keyword:
+                    try:
+                        keyword_cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
+                        original_keyword = keyword_cache.get(code)
+                    except Exception as e_cache:
+                        logger.warning(f"JavDB Info: Failed to get keyword from cache: {e_cache}")
+
+                if original_keyword:
+                    entity.ui_code, _, _ = cls._parse_ui_code(original_keyword)
+                    logger.debug(f"JavDB Info: UI Code set from keyword (fallback) -> '{entity.ui_code}'")
+                else:
+                    # 키워드도 없으면 URL의 고유 ID를 최후의 폴백으로 사용 (품번이 아님을 인지)
+                    logger.error(f"JavDB Info: No keyword available. Using URL part as last resort.")
+                    entity.ui_code, _, _ = cls._parse_ui_code(original_code_for_url)
+
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
 
             current_ui_code_for_image = entity.ui_code.lower()

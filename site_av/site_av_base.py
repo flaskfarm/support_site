@@ -1834,6 +1834,54 @@ class SiteAvBase:
 
 
     @classmethod
+    def _calculate_score(cls, original_keyword, item_ui_code):
+        """
+        모든 사이트에서 사용하는 표준 점수 계산기.
+        """
+        try:
+            # [1단계: 표준화] 키워드를 표준 UI Code로 변환
+            kw_ui_code, _, _ = cls._parse_ui_code(original_keyword)
+            # item_ui_code는 이미 표준화된 상태로 전달됨
+
+            # [2단계: 분할] UI Code를 '레이블 파트'와 '넘버 파트'로 분할
+            kw_label_part, kw_num_part = (kw_ui_code.split('-', 1) + [''])[:2] if '-' in kw_ui_code else (kw_ui_code, '')
+            item_label_part, item_num_part = (item_ui_code.split('-', 1) + [''])[:2] if '-' in item_ui_code else (item_ui_code, '')
+
+            # --- 넘버 파트 정규화 (숫자로만 구성된 경우에만 적용) ---
+            # 'G02'는 그대로, '003'은 '3'으로 변환
+            if kw_num_part.isdigit(): kw_num_part = kw_num_part.lstrip('0') or '0'
+            if item_num_part.isdigit(): item_num_part = item_num_part.lstrip('0') or '0'
+            
+            # --- [3단계: 비교 및 점수 부여] ---
+            # 최우선 조건: 넘버 파트가 정확히 일치해야 함
+            if kw_num_part == item_num_part and kw_num_part != '':
+                # 넘버가 일치하므로 레이블 파트를 분석
+                
+                # 레이블 파트에서 (숫자 접두사, 문자 레이블) 분해
+                kw_match = re.match(r'^(\d+)([A-Z].*)$', kw_label_part)
+                item_match = re.match(r'^(\d+)([A-Z].*)$', item_label_part)
+
+                kw_prefix, kw_label = (kw_match.group(1), kw_match.group(2)) if kw_match else ('', kw_label_part)
+                item_prefix, item_label = (item_match.group(1), item_match.group(2)) if item_match else ('', item_label_part)
+                
+                # 레이블의 '문자' 부분이 정확히 일치하는지 확인
+                if kw_label == item_label:
+                    if kw_prefix == item_prefix:
+                        return 100 # 모든 게 정확히 일치
+                    elif (kw_prefix and not item_prefix) or (not kw_prefix and item_prefix):
+                        return 99 # 한쪽에만 숫자 접두사
+                    elif kw_prefix != item_prefix:
+                        return 80 # 둘 다 있지만 불일치
+                else:
+                    return 60 # 넘버는 같지만 문자 레이블이 다름
+            else:
+                return 60 # 넘버 파트가 다름
+        except Exception as e:
+            logger.error(f"Score calculation error: {e}. Keyword: '{original_keyword}', Item: '{item_ui_code}'")
+            return 20
+
+
+    @classmethod
     def A_P(cls, text: str) -> str:
         """
         HTML 태그를 정제하고 기본적인 텍스트를 정리하는 유틸리티 메서드.

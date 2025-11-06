@@ -239,67 +239,8 @@ class SiteDmm(SiteAvBase):
                 item.title = raw_title_node if raw_title_node and raw_title_node != "Not Found" else item.ui_code
 
                 # 4. item.score 계산
-                current_score_val = 0
-
-                # [전처리] 표준화된 UI Code를 (레이블 파트, 넘버 파트)로 분할하는 함수
-                def get_label_num_parts(ui_code_str):
-                    if '-' in ui_code_str:
-                        parts = ui_code_str.upper().split('-', 1)
-                        return parts[0], parts[1]
-                    else:
-                        # 방어 코드: 하이픈이 없는 경우 전체를 레이블로 간주
-                        return ui_code_str.upper(), ''
-
-                # [전처리] 레이블 파트에서 (숫자 접두사, 문자 레이블)을 분해하는 함수
-                def get_prefix_label(label_part_str):
-                    match = re.match(r'^(\d+)([A-Z].*)$', label_part_str)
-                    if match:
-                        return match.group(1), match.group(2)
-                    else:
-                        return '', label_part_str
-
-                # [1] 키워드와 아이템 코드를 표준 UI Code로 변환
-                kw_ui_code, _, _ = cls._parse_ui_code(original_keyword.lower())
-                item_ui_code = item.ui_code # item.ui_code는 이미 표준화된 상태
-
-                # [2] 각 UI Code를 레이블/넘버 파트로 분할
-                kw_label_part, kw_num_part = get_label_num_parts(kw_ui_code)
-                item_label_part, item_num_part = get_label_num_parts(item_ui_code)
-
-                # --- 본격적인 점수 계산 ---
-                # 규칙 4, 5의 기본 조건: 넘버 파트가 정확히 일치해야 함
-                if kw_num_part == item_num_part and kw_num_part != '':
-                    # 넘버 파트가 일치하므로, 이제 레이블 파트를 분석
-                    kw_prefix, kw_label = get_prefix_label(kw_label_part)
-                    item_prefix, item_label = get_prefix_label(item_label_part)
-
-                    # 레이블의 문자 부분이 정확히 일치하는지 확인
-                    if kw_label == item_label:
-                        # 규칙 1: 모든 게 정확히 일치 (숫자 접두사 포함)
-                        if kw_prefix == item_prefix:
-                            current_score_val = 100
-                        # 규칙 2: 한쪽에만 숫자 접두사가 있는 경우
-                        elif (kw_prefix and not item_prefix) or (not kw_prefix and item_prefix):
-                            current_score_val = 99
-                        # 규칙 3: 둘 다 숫자 접두사가 있지만 다른 경우
-                        elif kw_prefix != item_prefix:
-                            current_score_val = 80
-                    else:
-                        # 넘버는 같지만 레이블의 문자 부분이 다름 (예: ID-123 vs ATID-123)
-                        current_score_val = 60
-                
-                # CID 직접 비교
-                elif content_id_or_cid and keyword_for_url and (keyword_for_url.replace('00', '0') == content_id_or_cid.replace('00', '0')):
-                    # 파서가 실패했지만, 검색 URL과 CID가 일치하는 경우
-                    # 98점으로 설정하여, 파서 기반의 99점짜리 유사 품번보다는 낮게 책정
-                    current_score_val = 98
-                
-                else:
-                    # 넘버 파트가 다르거나 없는 경우
-                    current_score_val = 60
-                
-                item.score = current_score_val
-                if current_score_val < 100 and score > 20: score -= 5 # 다음 아이템의 기본 점수 감소
+                item.score = cls._calculate_score(original_keyword, item.ui_code)
+                if item.score > 20: item.score -= 5
 
                 # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
@@ -558,6 +499,12 @@ class SiteDmm(SiteAvBase):
         cid_part = code[len(cls.module_char)+len(cls.site_char):]
         
         entity = EntityMovie(cls.site_name, code)
+        
+        # CID를 파싱하여 UI Code를 최우선으로 설정
+        entity.ui_code, _, _ = cls._parse_ui_code(cid_part, entity.content_type)
+        identifier_parsed = True
+        logger.debug(f"DMM Info: UI Code set from CID '{cid_part}' -> '{entity.ui_code}'")
+
         entity.country = ["일본"]
         entity.mpaa = "청소년 관람불가"
         entity.thumb = []
@@ -573,7 +520,7 @@ class SiteDmm(SiteAvBase):
         detail_url = None
         api_data = None
 
-        identifier_parsed = False
+        # 키워드는 '검증용'으로만 사용
         trusted_ui_code_from_keyword = ""
         trusted_keyword = None
         if keyword:
@@ -588,9 +535,7 @@ class SiteDmm(SiteAvBase):
 
         if trusted_keyword:
             trusted_ui_code_from_keyword, _, _ = cls._parse_ui_code(trusted_keyword)
-            logger.debug(f"DMM Info: Using trusted UI code '{trusted_ui_code_from_keyword}' from keyword/cache '{trusted_keyword}'.")
-            entity.ui_code = trusted_ui_code_from_keyword
-            identifier_parsed = True
+            logger.debug(f"DMM Info: Verifying against trusted UI code '{trusted_ui_code_from_keyword}' from keyword '{trusted_keyword}'.")
 
         # === 1. 타입별 데이터 소스 분기 ===
         if entity.content_type in ['videoa', 'vr', 'amateur']:
@@ -686,20 +631,6 @@ class SiteDmm(SiteAvBase):
                     original_plot = cls.A_P(plot_val)
                     entity.original['plot'] = original_plot
                     entity.plot = cls.trans(original_plot)
-
-                id_to_parse_from_page = content.get('makerContentId') or cid_part
-                parsed_ui_code_from_page, _, _ = cls._parse_ui_code(id_to_parse_from_page, entity.content_type)
-
-                if identifier_parsed:
-                    core_trusted = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
-                    core_page = re.sub(r'[^A-Z0-9]', '', parsed_ui_code_from_page.upper())
-                    if not (core_trusted in core_page or core_page in core_trusted):
-                        logger.warning(f"DMM Info: Significant UI code mismatch detected!")
-                        logger.warning(f"  - Trusted UI Code (from keyword): {entity.ui_code}")
-                        logger.warning(f"  - Page UI Code (for verification): {parsed_ui_code_from_page}")
-                else:
-                    entity.ui_code = parsed_ui_code_from_page
-                    identifier_parsed = True
 
                 premiered_val = content.get('deliveryStartDate')
                 if premiered_val and isinstance(premiered_val, str):
@@ -806,20 +737,8 @@ class SiteDmm(SiteAvBase):
                         continue
 
                     if "品番" in key_dvd:
-                        if value_text_all_dvd:
-                            parsed_ui_code_from_page, _, _ = cls._parse_ui_code(value_text_all_dvd, entity.content_type)
-
-                            if identifier_parsed:
-                                core_trusted = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
-                                core_page = re.sub(r'[^A-Z0-9]', '', parsed_ui_code_from_page.upper())
-                                if not (core_trusted in core_page or core_page in core_trusted):
-                                    logger.warning(f"DMM Info: Significant UI code mismatch detected!")
-                                    logger.warning(f"  - Trusted UI Code (from keyword): {entity.ui_code}")
-                                    logger.warning(f"  - Page UI Code (for verification): {parsed_ui_code_from_page}")
-                            else:
-                                entity.ui_code = parsed_ui_code_from_page
-                                identifier_parsed = True
-
+                        # 페이지 내 품번('品番')은 더 이상 UI Code를 덮어쓰지 않고 무시
+                        pass
                     elif "収録時間" in key_dvd: 
                         m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd)
                         if m_rt_dvd: entity.runtime = int(m_rt_dvd.group(1))
@@ -912,6 +831,13 @@ class SiteDmm(SiteAvBase):
                         entity.plot = cls.trans(original_plot_dvd)
                 else: 
                     logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
+
+            # 최종 검증: 확정된 UI Code와 키워드 기반 UI Code가 다른지 확인
+            if trusted_ui_code_from_keyword:
+                core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code_from_keyword.upper())
+                core_cid = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
+                if not (core_trusted in core_cid or core_cid in core_trusted):
+                    logger.warning(f"DMM Info Mismatch: Keyword '{trusted_keyword}' (parsed as '{trusted_ui_code_from_keyword}') led to a result with a different final UI code '{entity.ui_code}'.")
 
             if identifier_parsed:
                 ui_code_for_image = entity.ui_code.lower()

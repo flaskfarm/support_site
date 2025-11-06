@@ -73,16 +73,9 @@ class SiteJav321(SiteAvBase):
             item_num_norm = item_num_part.lstrip('0') or '0'
 
             # 점수 부여
-            if kw_num_norm == item_num_norm and (kw_label_part.lower().endswith(item_label_part.lower()) or item_label_part.lower().endswith(kw_label_part.lower())):
-                item.score = 100 # 기본 점수
-                if kw_label_part.lower() != item_label_part.lower():
-                    item.score -= 1 # 접두사 차이 페널티
-            
-            # elif를 사용하여, 위 조건이 실패했을 때만 기존의 ui_code 비교 수행
-            elif kw_ui_code.lower() == item_ui_code.lower():
-                item.score = 95 # ui_code가 정확히 일치하면 95점
-            else:
-                item.score = 60 # 그 외는 60점
+            item.score = cls._calculate_score(original_keyword, item.ui_code)
+            if not item.score:
+                item.score = 20
 
             # logger.debug(f"Jav321 Score: SearchFull='{search_full_code}', ItemFull='{item_full_code}' -> Score={item.score}")
             # logger.debug(f"Jav321 Score: SearchPure='{search_pure_code}', ItemPure='{item_pure_code}'")
@@ -193,6 +186,13 @@ class SiteJav321(SiteAvBase):
 
         try:
             # === 2. 메타데이터 파싱 ===
+            url_pid = code[2:]
+            entity.ui_code, _, _ = cls._parse_ui_code(url_pid)
+            entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+            logger.debug(f"Jav321 Info: UI Code set from URL PID '{url_pid}' -> '{entity.ui_code}'")
+
+            # 키워드는 '검증용'으로만 사용
+            trusted_ui_code_from_keyword = ""
             if not keyword:
                 try:
                     cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
@@ -203,15 +203,8 @@ class SiteJav321(SiteAvBase):
                     logger.warning(f"[{cls.site_name} Info] Failed to get keyword from cache: {e}")
 
             if keyword:
-                trusted_ui_code, _, _ = cls._parse_ui_code(keyword)
-                logger.debug(f"Jav321 Info: Using trusted UI code '{trusted_ui_code}' from keyword '{keyword}'.")
-            else:
-                url_pid = code[2:]
-                trusted_ui_code, _, _ = cls._parse_ui_code(url_pid)
-                logger.debug(f"Jav321 Info: No keyword. Using UI code '{trusted_ui_code}' from URL part '{url_pid}'.")
-
-            entity.ui_code = trusted_ui_code
-            entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+                trusted_ui_code_from_keyword, _, _ = cls._parse_ui_code(keyword)
+                logger.debug(f"Jav321 Info: Verifying against trusted UI code '{trusted_ui_code_from_keyword}' from keyword '{keyword}'.")
 
             tagline_h3_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[1]/h3')
             if tagline_h3_nodes:
@@ -243,15 +236,15 @@ class SiteJav321(SiteAvBase):
                     if current_key == "品番":
                         pid_value_raw = (b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0].strip()
                         if pid_value_raw:
-                            # 페이지의 품번은 검증용으로만 사용.
+                            # 페이지의 품번은 '검증용'으로만 사용
                             parsed_pid_from_page, _, _ = cls._parse_ui_code(pid_value_raw)
-                            core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code.upper())
+                            core_final = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
                             core_page = re.sub(r'[^A-Z0-9]', '', parsed_pid_from_page.upper())
 
-                            if not (core_trusted in core_page or core_page in core_trusted):
-                                logger.warning(f"Jav321 Info: Significant UI code mismatch detected!")
-                                logger.warning(f"  - Trusted UI Code: {trusted_ui_code}")
-                                logger.warning(f"  - Page UI Code (for verification): {parsed_pid_from_page}")
+                            if not (core_final in core_page or core_page in core_final):
+                                logger.warning(f"Jav321 Info: Page PID mismatch detected!")
+                                logger.warning(f"  - Final UI Code (from URL): {entity.ui_code}")
+                                logger.warning(f"  - Page PID (for verification): {parsed_pid_from_page}")
 
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
@@ -315,6 +308,15 @@ class SiteJav321(SiteAvBase):
                                 rating_float = float(rating_val_cleaned)
                                 entity.ratings = [EntityRatings(rating_float, max=5, name=cls.site_name)]
                             except ValueError: pass
+
+            # 최종 검증: 키워드 기반 UI Code와 최종 UI Code 비교
+            if trusted_ui_code_from_keyword:
+                core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code_from_keyword.upper())
+                core_final = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
+                if not (core_trusted in core_final or core_final in core_trusted):
+                    logger.warning(f"Jav321 Info: Keyword mismatch!")
+                    logger.warning(f"  - Keyword (parsed): {trusted_ui_code_from_keyword}")
+                    logger.warning(f"  - Final UI Code (from URL): {entity.ui_code}")
 
             if raw_h3_title_text:
                 tagline_candidate_text = raw_h3_title_text
