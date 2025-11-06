@@ -71,25 +71,10 @@ class SiteJavbus(SiteAvBase):
 
                 # --- ui_code 파싱 및 점수 계산 로직 ---
                 raw_ui_code_from_page = node.xpath(".//date")[0].text_content().strip()
-                item_ui_code, item_label_part, item_num_part = cls._parse_ui_code(raw_ui_code_from_page)
+                item_ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
                 item.ui_code = item_ui_code
 
-                # --- 비교용 표준 코드 생성 (5자리 패딩으로 통일) ---
-                kw_std_code = kw_label_part + kw_num_part.zfill(5) if kw_num_part.isdigit() else kw_label_part + kw_num_part
-                item_std_code = item_label_part + item_num_part.zfill(5) if item_num_part.isdigit() else item_label_part + item_num_part
-
-                if kw_std_code.lower() == item_std_code.lower():
-                    item.score = 100
-                elif kw_ui_code.lower() == item.ui_code.lower():
-                    item.score = 95 # 하이픈 유무 차이
-                else:
-                    # 부분 일치 점수
-                    kw_parts = set(kw_ui_code.lower().replace('-', ' ').split())
-                    item_parts = set(item.ui_code.lower().replace('-', ' ').split())
-                    if kw_parts.issubset(item_parts):
-                        item.score = 80
-                    else:
-                        item.score = 60
+                item.score = cls._calculate_score(original_keyword, item.ui_code)
                 if not item.score:
                     item.score = 20
 
@@ -167,40 +152,35 @@ class SiteJavbus(SiteAvBase):
             # === 2. 메타데이터 파싱 ===
             info_node = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")[0]
 
-            if not keyword:
-                try:
-                    cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
-                    keyword = cache.get(code)
-                    if keyword:
-                        logger.debug(f"[{cls.site_name} Info] Restored keyword '{keyword}' from cache for code '{code}'.")
-                except Exception as e:
-                    logger.warning(f"[{cls.site_name} Info] Failed to get keyword from cache: {e}")
-
-            # 페이지에서 "識別碼"를 가져와 검증/폴백용으로 준비
+            # 페이지 내 품번을 최우선으로 사용, 키워드는 폴백으로 사용
+            # 1. 페이지에서 "識別碼"(식별 코드)를 가져옵니다.
             ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/span[not(@class='header')]//text()")
             if not ui_code_val_nodes:
                 ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/text()[normalize-space()]")
             raw_ui_code_from_page = "".join(ui_code_val_nodes).strip()
 
-            if keyword:
-                trusted_ui_code, _, _ = cls._parse_ui_code(keyword)
-                logger.debug(f"JavBus Info: Using trusted UI code '{trusted_ui_code}' from keyword '{keyword}'.")
-
-                # 페이지 품번과 교차 검증
-                if raw_ui_code_from_page:
-                    parsed_pid_from_page, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
-                    core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code.upper())
-                    core_page = re.sub(r'[^A-Z0-9]', '', parsed_pid_from_page.upper())
-                    if not (core_trusted in core_page or core_page in core_trusted):
-                        logger.warning(f"JavBus Info: Significant UI code mismatch detected!")
-                        logger.warning(f"  - Trusted UI Code: {trusted_ui_code}")
-                        logger.warning(f"  - Page UI Code (for verification): {parsed_pid_from_page}")
+            # 2. 페이지 품번이 존재하면 그것을 최종 UI Code로 확정합니다.
+            if raw_ui_code_from_page:
+                entity.ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
+                logger.debug(f"JavBus Info: UI Code set from page '識別碼' -> '{entity.ui_code}'")
             else:
-                # keyword가 없으면 페이지 정보(폴백)를 신뢰.
-                trusted_ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
-                logger.debug(f"JavBus Info: No keyword. Using UI code '{trusted_ui_code}' from page.")
+                # 3. 페이지 품번이 없을 경우, 키워드를 폴백으로 사용합니다.
+                logger.warning(f"JavBus Info: '識別碼' not found on page. Falling back to keyword.")
+                if not keyword:
+                    try:
+                        cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
+                        keyword = cache.get(code)
+                    except Exception as e:
+                        logger.warning(f"[{cls.site_name} Info] Failed to get keyword from cache: {e}")
+                
+                if keyword:
+                    entity.ui_code, _, _ = cls._parse_ui_code(keyword)
+                    logger.debug(f"JavBus Info: UI Code set from keyword (fallback) -> '{entity.ui_code}'")
+                else:
+                    # 키워드도 없으면 URL 일부를 최후의 폴백으로 사용
+                    logger.error(f"JavBus Info: No keyword available. Using URL part as last resort.")
+                    entity.ui_code, _, _ = cls._parse_ui_code(original_code_for_url)
 
-            entity.ui_code = trusted_ui_code
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
 
             h3_text = tree.xpath("normalize-space(//div[@class='container']/h3/text())")

@@ -116,22 +116,8 @@ class SiteMgstage(SiteAvBase):
                 item.ui_code = item_ui_code
                 item.code = cls.module_char + cls.site_char + pid_from_link
 
-                # 3. 정규화된 품번으로 점수 계산 (5자리 패딩으로 통일)
-                kw_std_code = kw_label_part.lower() + kw_num_part.zfill(5) if kw_num_part.isdigit() else kw_label_part.lower() + kw_num_part
-                item_std_code = item_label_part.lower() + item_num_part.zfill(5) if item_num_part.isdigit() else item_label_part.lower() + item_num_part
-
-                if kw_std_code.lower() == item_std_code.lower():
-                    item.score = 100
-                elif kw_ui_code.lower().replace('-', '') == item.ui_code.lower().replace('-', ''):
-                    item.score = 95
-                else:
-                    # 검색어의 레이블/숫자와 결과의 레이블/숫자를 비교하여 부분 점수 부여
-                    kw_label, kw_num = kw_ui_code.split('-', 1) if '-' in kw_ui_code else (kw_ui_code, "")
-                    item_label, item_num = item.ui_code.split('-', 1) if '-' in item.ui_code else (item.ui_code, "")
-                    if kw_label.lower() == item_label.lower() and kw_num in item_num:
-                        item.score = 80
-                    else:
-                        item.score = 60
+                # 3. 점수 계산
+                item.score = cls._calculate_score(original_ui_code, item.ui_code)
                 if not item.score:
                     item.score = 20
 
