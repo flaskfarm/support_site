@@ -500,6 +500,7 @@ class SiteDmm(SiteAvBase):
         cid_part = code[len(cls.module_char)+len(cls.site_char):]
         
         entity = EntityMovie(cls.site_name, code)
+        entity.content_type = current_content_type
         
         # CID를 파싱하여 UI Code를 최우선으로 설정
         entity.ui_code, _, _ = cls._parse_ui_code(cid_part, entity.content_type)
@@ -515,7 +516,6 @@ class SiteDmm(SiteAvBase):
         entity.tag = []
         entity.original = {}
         ui_code_for_image = ""
-        entity.content_type = current_content_type
 
         tree = None
         detail_url = None
