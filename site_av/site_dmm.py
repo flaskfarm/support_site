@@ -240,7 +240,8 @@ class SiteDmm(SiteAvBase):
 
                 # 4. item.score 계산
                 item.score = cls._calculate_score(original_keyword, item.ui_code)
-                if item.score > 20: item.score -= 5
+                if not item.score:
+                    item.score = 20
 
                 # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
@@ -499,6 +500,7 @@ class SiteDmm(SiteAvBase):
         cid_part = code[len(cls.module_char)+len(cls.site_char):]
         
         entity = EntityMovie(cls.site_name, code)
+        entity.content_type = current_content_type
         
         # CID를 파싱하여 UI Code를 최우선으로 설정
         entity.ui_code, _, _ = cls._parse_ui_code(cid_part, entity.content_type)
@@ -514,7 +516,6 @@ class SiteDmm(SiteAvBase):
         entity.tag = []
         entity.original = {}
         ui_code_for_image = ""
-        entity.content_type = current_content_type
 
         tree = None
         detail_url = None
