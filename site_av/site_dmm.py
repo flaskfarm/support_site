@@ -240,7 +240,8 @@ class SiteDmm(SiteAvBase):
 
                 # 4. item.score 계산
                 item.score = cls._calculate_score(original_keyword, item.ui_code)
-                if item.score > 20: item.score -= 5
+                if not item.score:
+                    item.score = 20
 
                 # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
