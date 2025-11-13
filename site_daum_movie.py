@@ -1,21 +1,18 @@
-import re
-import base64
 import urllib.parse
 
 from lxml.html import HtmlElement
 
-from . import SiteDaum, SiteUtil
-from .entity_base import (EntityActor, EntityExtra2, EntityMovie2, EntityReview,
+from . import SiteDaum
+from .site_util import caching, encode_base64, score_to_stars
+from .entity_base import (EntityActor, EntityMovie2, EntityReview,
                           EntityRatings, EntitySearchItemMovie, EntityThumb)
 from .setup import *
 
 
 class SiteDaumMovie(SiteDaum):
-    site_base_url = 'https://search.daum.net'
-    module_char = 'M'
-    site_char = 'D'
 
-    DEFAULT_QUERY = {
+    module_char = 'M'
+    default_query = {
         "w": "cin",
         "coll": "movie-main",
         "spt": "movie-info",
@@ -26,17 +23,16 @@ class SiteDaumMovie(SiteDaum):
     @classmethod
     def search(cls, keyword: str, year: int = None) -> dict[str, str | list]:
         search_results = []
+        keyword = cls.refine_keyword(keyword)
         logger.debug(f'Daum movie search: {keyword=} {year=}')
         # 실제 1900년 영화라면?
         if year and int(year) == 1900:
             year = None
-        encoded_keyword = base64.urlsafe_b64encode(keyword.encode('utf-8')).decode('utf-8')
-        cache_key = f"movie:search:{encoded_keyword}:{year or '1900'}"
+        cache_key = f"daum:movie:search:{encode_base64(keyword)}:{year or '1900'}"
         try:
             # 캐시 활용
-            if cls.CACHE_ENABLE and (cached := cls.get_cache(cache_key)):
+            if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
                 return cached
-
             # request
             search_keywords = [f"영화 {keyword}", keyword]
             if year:
@@ -45,67 +41,45 @@ class SiteDaumMovie(SiteDaum):
 
             for search_keyword in search_keywords:
                 logger.debug(f"Try searching for '{search_keyword}'")
-                query = cls.DEFAULT_QUERY.copy()
-                query['w'] = 'tot'
-                query['q'] = search_keyword
+                query = cls.get_request_query(w='tot', q=search_keyword)
                 html = cls.get_tree(cls.get_request_url(query=query))
                 if results := cls.get_movies(html):
                     search_results.extend(results)
                     break
             else:
-                logger.warning(f"No movie found: '{keyword}'")
-        except Exception:
-            logger.exception(f"Failed to search: {keyword=} {year=}")
-        if search_results:
-            # 스코어
-            for idx, sr in enumerate(search_results):
-                if SiteUtil.compare(keyword, sr['title']):
-                    if year and year != 1900:
-                        discrepancy = abs(sr['year'] - year)
-                        if discrepancy == 0:
-                            score = 100
-                        elif discrepancy < 2:
-                            score = 90
-                        else:
-                            score = 85
-                    else:
-                        score = 80
-                else:
-                    score = max(75 - (idx * 5), 0)
-                sr['score'] = score
-            search_results = sorted(search_results, key=lambda x:x.get('score', 0), reverse=True)
-            ret = {'ret': 'success', 'data': search_results, 'cached': False}
-            if cls.CACHE_ENABLE:
-                cls.set_cache(cache_key, ret)
-            return ret
-        return {'ret': 'empty'}
+                logger.warning(f"검색 결과가 없습니다: '{keyword}'")
+            if search_results:
+                cls.score_search_results(search_results, keyword, year)
+                search_results = sorted(search_results, key=lambda x:x.get('score', 0), reverse=True)
+                ret = {'ret': 'success', 'data': search_results}
+            else:
+                ret = {'ret': 'empty'}
+        except Exception as e:
+            logger.exception(f"검색에 실패했습니다: {keyword=} {year=}")
+            ret = {'ret': 'exception', 'data': repr(e)}
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
+        return ret
 
     @classmethod
     def info(cls, code: str) -> dict:
         code = code.split('#')[0]
         logger.debug(f'Daum movie info: {code=}')
-        cache_key = f"site_daum_movie:info:{code}"
+        cache_key = f"daum:movie:info:{code[2:]}"
         try:
-            if cls.CACHE_ENABLE and (cached := cls.get_cache(cache_key)):
+            if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
                 return cached
-
             # request
-            query = cls.DEFAULT_QUERY.copy()
-            query['q'] = '영화'
-            query['spId'] = code[2:]
+            query = cls.get_request_query(q='영화', spId=code[2:])
             html = cls.get_tree(cls.get_request_url(query=query))
             if results := cls.get_movies(html, mode="info"):
-                ret = {
-                    'ret': 'success',
-                    'data': results[0],
-                    'cached': False
-                }
-                if cls.CACHE_ENABLE:
-                    cls.set_cache(cache_key, ret)
-                return ret
-        except Exception:
-            logger.exception(f"Failed to get info: {code=}")
-        return {'ret': 'empty'}
+                ret = {'ret': 'success', 'data': results[0]}
+            else:
+                ret = {'ret': 'empty'}
+        except Exception as e:
+            logger.exception(f"정보 탐색에 실패했습니다: {code=}")
+            ret = {'ret': 'exception', 'data': repr(e)}
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
+        return ret
 
     @classmethod
     def get_movies(cls, html: HtmlElement, mode: str = "search") -> tuple:
@@ -113,19 +87,19 @@ class SiteDaumMovie(SiteDaum):
         movies = []
         if container is None:
             logger.warning("No movie container found...")
-            return movies
+            return tuple(movies)
 
         # 정보, 출연/제작, 영상, 포토, 시리즈
-        card_tab = cls.parse_card_tab(c_section_tab) if (c_section_tab := container.find(".//div[@class='c-section-tab']")) is not None else {}
+        card_tab = cls.parse_card_tab(container)
 
         # code, title, link
-        card_title = cls.parse_card_title(c_tit_exact) if (c_tit_exact := container.find(".//div[@class='c-tit-exact']")) is not None else {}
+        card_title = cls.parse_card_title(container)
         if not (card_title.get('code') and card_title.get('title')):
             logger.warning("No title and code found...")
-            return movies
+            return tuple(movies)
 
         # poster, description, premiered, countries, genres, runtime, mpaa, ratings, customer
-        card_info = cls.parse_card_section_info(cont_info) if (cont_info := container.find(".//div[@class='cont_info']")) is not None else {}
+        card_info = cls.parse_card_section_info(container)
 
         # title in english, year
         title_in_english = year = None
@@ -154,7 +128,7 @@ class SiteDaumMovie(SiteDaum):
             primary_movie.link = card_title.get('link') or ""
             primary_movie.image_url = card_info.get('image') or card_info.get('thumb') or ""
             primary_movie.title_en = title_in_english or ""
-            primary_movie.desc = "\n".join((", ".join( card_info.get('감독') + card_info.get('개요')), card_info.get('줄거리') or ""))
+            primary_movie.desc = "\n".join((", ".join( (card_info.get('감독') or "") + (card_info.get('개요') or "") ), card_info.get('줄거리') or ""))
             primary_movie.score = 100
             primary_movie.originaltitle = primary_movie.title if "한국" in card_info.get('개요') or () else title_in_english or ""
         else:
@@ -181,96 +155,42 @@ class SiteDaumMovie(SiteDaum):
                 for same_xpath in same_title_xpaths:
                     if not (div_tags := container.xpath(same_xpath)):
                         continue
-                    movies.extend(cls.get_additional_movies(div_tags[0]))
+                    movies.extend(cls.parse_additional_movies(div_tags[0]))
 
                 # series
                 if '시리즈' in card_tab:
-                    query = cls.DEFAULT_QUERY.copy()
-                    query['q'] = f"{primary_movie.title} 시리즈"
-                    query['spId'] = primary_movie.code[2:]
-                    query['spt'] = 'movie-series'
+                    query = cls.get_request_query(q=f"{primary_movie.title} 시리즈", spId=primary_movie.code[2:], spt='movie-series')
                     series_html = cls.get_tree(cls.get_request_url(query=query))
                     if (series_container := series_html.find(".//div[@disp-attr='EM1']//div[@class='cont_series']/div")) is not None:
-                        movies.extend(movie for movie in cls.get_additional_movies(series_container) if movie.code != primary_movie.code)
+                        movies.extend(movie for movie in cls.parse_additional_movies(series_container) if movie.code != primary_movie.code)
             except Exception:
                 logger.exception(f"Failed to search more movies...")
         else:
             # people
             try:
-                if any('출연' in tab for tab in card_tab):
-                    query = cls.DEFAULT_QUERY.copy()
-                    query['q'] = f"{primary_movie.title} 출연진"
-                    query['spId'] = primary_movie.code[2:]
-                    query['spt'] = 'movie-casting'
-                    people_html = cls.get_tree(cls.get_request_url(query=query))
-                    if (cast_container := people_html.find(".//div[@id='em1Coll']//div[@class='cont_cast']")) is not None:
-                        people = cls.parse_people(cast_container)
-                        order_actor = 0
-                        for person in people:
-                            try:
-                                match person.get('category'):
-                                    case 'director':
-                                        primary_movie.director.append(person.get('name'))
-                                    case 'producer':
-                                        primary_movie.producers.append(person.get('name'))
-                                    case 'writer':
-                                        # SjvaAgent에서 credits을 플렉스 writers로 저장 중
-                                        primary_movie.credits.append(person.get('name'))
-                                    case 'actor':
-                                        entity = EntityActor('', site=cls.site_name)
-                                        entity.name = person.get('name')
-                                        entity.order = order_actor
-                                        if person.get('role'):
-                                            role = re.sub(r'\s역$', '', person.get('role'))
-                                            if not role == '출연':
-                                                entity.role = role
-                                        if person.get('thumb'):
-                                            entity.thumb = person.get('thumb')
-                                        primary_movie.actor.append(entity)
-                                        order_actor += 1
-                            except Exception:
-                                logger.exception(f"Failed to parse a person...")
+                if card_tab.get('출연'):
+                    people_html = cls.get_tree(card_tab.get('출연'))
+                    data = cls.parse_movie_people(people_html)
+                    primary_movie.director.extend(data.get('director'))
+                    primary_movie.producers.extend(data.get('producer'))
+                    primary_movie.credits.extend(data.get('writer'))
+                    primary_movie.actor.extend(data.get('actor'))
             except Exception:
                 logger.exception(f"Failed to parse cast and crew...")
 
             # clip
             try:
-                if any('영상' in tab for tab in card_tab):
-                    query = cls.DEFAULT_QUERY.copy()
-                    query['q'] = f"{primary_movie.title} 영상"
-                    query['spId'] = primary_movie.code[2:]
-                    query['spt'] = 'movie-clip'
-                    clip_html = cls.get_tree(cls.get_request_url(query=query))
-                    if (clip_container := clip_html.find(".//div[@id='em1Coll']//div[@class='cont_vod']")) is not None:
-                        for item_thumb in clip_container.xpath(".//li//div[@class='item-thumb']"):
-                            try:
-                                clip_data = cls.parse_thumb_and_bundle(item_thumb)
-                                if not clip_data:
-                                    continue
-                                extra = EntityExtra2()
-                                extra.thumb = clip_data.get('thumb') or ""
-                                extra.content_url = clip_data.get('link') or ""
-                                labels = clip_data.get('labels') or ("", "")
-                                if labels[0]:
-                                    extra.title = labels[0]
-                                if '예고' not in extra.title:
-                                    extra.content_type = 'Featurette'
-                                if labels[1]:
-                                    date = cls.parse_date_text(labels[1])
-                                    extra.premiered = date.strftime('%Y-%m-%d')
-                                primary_movie.extras.append(extra)
-                            except Exception:
-                                logger.exception(f"Failed to parse a clip...")
+                if card_tab.get('영상'):
+                    clip_html = cls.get_tree(card_tab.get('영상'))
+                    if (clip_container := clip_html.xpath(".//div[@id='em1Coll']//div[@class='cont_vod']")):
+                        primary_movie.extras.extend(cls.parse_clips(clip_container[0]))
             except Exception:
                 logger.exception(f"Failed to parse clips...")
 
             # art
             try:
                 if any('포토' in tab for tab in card_tab):
-                    query = cls.DEFAULT_QUERY.copy()
-                    query['q'] = f"{primary_movie.title} 포토"
-                    query['spId'] = primary_movie.code[2:]
-                    query['spt'] = 'movie-photo'
+                    query = cls.get_request_query(q=f"{primary_movie.title} 포토", spId=primary_movie.code[2:], spt='movie-photo')
                     photo_html = cls.get_tree(cls.get_request_url(query=query))
                     stills = []
                     posters = []
@@ -308,16 +228,14 @@ class SiteDaumMovie(SiteDaum):
             # review
             try:
                 if any('평점' in tab for tab in card_tab):
-                    query = cls.DEFAULT_QUERY.copy()
-                    query['q'] = f"{primary_movie.title} 전문가평점"
-                    query['spId'] = primary_movie.code[2:]
-                    query['spt'] = 'movie-review'
+                    query = cls.get_request_query(q=f"{primary_movie.title} 전문가평점", spId=primary_movie.code[2:], spt='movie-review')
                     review_html = cls.get_tree(cls.get_request_url(query=query))
                     for li_tag in review_html.xpath(".//div[@id='em1Coll']//div[@class='cont_score']//li"):
                         try:
                             texts = cls.iter_text(li_tag, excludes=(",", "|", "/", "점"))
                             if len(texts) == 3:
-                                primary_movie.review.append(EntityReview(cls.site_name, author=texts[0], source="Cine21", text=texts[-1], rating=float(texts[1])))
+                                stars = score_to_stars(float(texts[1]))
+                                primary_movie.review.append(EntityReview(cls.site_name, author=texts[0], source="Cine21", text=f"{stars}/{texts[1]} {texts[-1]}", rating=float(texts[1])))
                         except Exception:
                             logger.exception(f"Failed to parse a review...")
             except Exception:
@@ -325,7 +243,7 @@ class SiteDaumMovie(SiteDaum):
         return tuple(movie.as_dict() for movie in movies)
 
     @classmethod
-    def get_additional_movies(cls, html: HtmlElement) -> list[dict]:
+    def parse_additional_movies(cls, html: HtmlElement) -> list:
         """
         동명영화, 시리즈 등의 포스터 형식 영화 목록
         """
@@ -359,3 +277,39 @@ class SiteDaumMovie(SiteDaum):
             except Exception:
                 logger.exception(f"Failed to search more movie...")
         return additionals
+
+    @classmethod
+    def parse_movie_people(cls, container: HtmlElement) -> dict:
+        data = {
+            'director': [],
+            'producer': [],
+            'writer': [],
+            'actor': []
+        }
+        if (cast_container := container.find(".//div[@id='em1Coll']//div[@class='cont_cast']")) is not None:
+            people = cls.parse_people(cast_container)
+            order_actor = 0
+            for person in people:
+                try:
+                    match person.get('category'):
+                        case 'director':
+                            data.director.append(person.get('name'))
+                        case 'producer':
+                            data.producers.append(person.get('name'))
+                        case 'writer':
+                            # SjvaAgent에서 credits을 플렉스 writers로 저장 중
+                            data.credits.append(person.get('name'))
+                        case 'actor':
+                            entity = EntityActor('', site=cls.site_name)
+                            entity.name = person.get('name')
+                            entity.order = order_actor
+                            if person.get('role'):
+                                if '출연' not in person.get('role'):
+                                    entity.role = person.get('role')
+                            if person.get('thumb'):
+                                entity.thumb = person.get('thumb')
+                            data.actor.append(entity)
+                            order_actor += 1
+                except Exception:
+                    logger.exception(f"Failed to parse a person...")
+        return data

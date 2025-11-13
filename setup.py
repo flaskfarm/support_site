@@ -1,9 +1,3 @@
-import os
-import functools
-from typing import Iterable
-
-import redis
-
 from plugin import *
 
 setting = {
@@ -41,62 +35,4 @@ logger = P.logger
 
 P.cache = F.get_cache('support_site')
 
-REDIS_EXPIRE = 21600 # in seconds (6 hours)
 REDIS_KEY_PLUGIN = 'flaskfarm:support_site'
-try:
-    if not F.config.get('use_celery'):
-        raise Exception('use_celery=False')
-    redis_port = F.config.get('redis_port') or os.environ.get('REDIS_PORT') or 6379
-    # decode_responses=True
-    REDIS_CONN = redis.Redis(host='localhost', port=redis_port, decode_responses=True)
-except Exception:
-    logger.exception("redis 연결 실패")
-    REDIS_CONN = None
-
-
-def check_redis(func: callable) -> callable:
-    @functools.wraps(func)
-    def wrap(*args, **kwds) -> str | int | None:
-        if REDIS_CONN:
-            return func(*args, **kwds)
-    return wrap
-
-
-@check_redis
-def hset(key: str, field: str = None, value: str = None, mapping: dict = None, expire: int = REDIS_EXPIRE) -> None:
-    if mapping:
-        REDIS_CONN.hset(key, mapping=mapping)
-    else:
-        REDIS_CONN.hset(key, field, value)
-    if REDIS_CONN.ttl(key) < 0:
-        REDIS_CONN.expire(key, time=expire)
-
-
-@check_redis
-def hget(key: str, field: str) -> str | None:
-    return REDIS_CONN.hget(key, field)
-
-
-@check_redis
-def hgetall(key: str) -> dict:
-    return REDIS_CONN.hgetall(key)
-
-
-@check_redis
-def scan_iter(expression: str) -> Iterable[str]:
-    for key in REDIS_CONN.scan_iter(expression):
-        yield key
-
-
-try:
-    '''
-    cursor = '0'
-    while cursor != 0:
-        cursor, keys = REDIS_CONN.scan(cusor=cursor, match=f'{REDIS_KEY_PLUGIN}:*', count=5000)
-        if keys:
-            REDIS_CONN.delete(*keys)
-    '''
-    for key in scan_iter(f'{REDIS_KEY_PLUGIN}:*'):
-        REDIS_CONN.delete(key)
-except Exception:
-    logger.exception("redis 플러그인 데이터 초기화 실패")

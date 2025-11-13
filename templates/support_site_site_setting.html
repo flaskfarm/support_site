@@ -14,6 +14,7 @@
     {{ macros.m_tab_head('naver', '네이버 API', false) }}
     {{ macros.m_tab_head('imgur', 'imgur', false) }}
     {{ macros.m_tab_head('naver_login', '네이버 로그인 API', false) }}
+    {{ macros.m_tab_head('common', '일반', false) }}
   {{ macros.m_tab_head_end() }}
 </nav>
 
@@ -25,6 +26,11 @@
   <div id="site_daum_use_proxy_div" class="collapse">
   {{ macros.setting_input_text('site_daum_proxy_url', 'Proxy URL', value=arg['site_daum_proxy_url']) }}
   </div>
+  {{ macros.setting_checkbox('site_daum_use_cache', 'Cache 사용', value=arg['site_daum_use_cache'], desc=None) }}
+  <div id="site_daum_use_cache_div" class="collapse">
+  {{ macros.setting_input_int('site_daum_cache_expiry', 'Cache 수명', desc=['단위: 초'], value=arg['site_daum_cache_expiry']) }}
+  </div>
+  {{ macros.setting_input_textarea('site_daum_headers', 'HTTP 헤더', value=arg['site_daum_headers'], row='6', desc=['지정하지 않으면 일반 탭의 기본 HTTP 헤더를 사용', '형식: JSON']) }}
   <!--
   {{ macros.m_hr() }}
   {{ macros.setting_input_text_and_buttons('site_daum_test', 'Test', [['site_daum_test_btn', 'Test']], value=arg['site_daum_test'],  desc=['영화 or 방송제목']) }}
@@ -33,14 +39,18 @@
 
 {{ macros.m_tab_content_start('wavve', false) }}
   {{ macros.setting_input_textarea('site_wavve_credential', 'Credential', value=arg['site_wavve_credential'], row='6') }}
-  {{ macros.setting_checkbox('site_wavve_use_proxy', 'Proxy 사용', value=arg['site_wavve_use_proxy'], desc=None) }}
   {{ macros.setting_input_text_and_buttons('site_wavve_profile', '프로필', [['site_wavve_login_btn', 'Credential 갱신']],value=arg['site_wavve_profile'], desc=['계정 정보','형식: {"id": "아이디", "password": "비밀번호", "profile": "0부터 시작하는 프로필 번호", "device_id": "갱신시 자동 입력"}','잦은 로그인 시도시 이전 Credential Expire', 'id, password 값이 있을 경우 자동으로 Credential 갱신']) }}
+  {{ macros.setting_checkbox('site_wavve_use_proxy', 'Proxy 사용', value=arg['site_wavve_use_proxy'], desc=None) }}
   <div id="site_wavve_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_wavve_proxy_url', 'Proxy URL', value=arg['site_wavve_proxy_url'], desc=None) }}
   </div>
+  {{ macros.setting_checkbox('site_wavve_use_cache', 'Cache 사용', value=arg['site_wavve_use_cache'], desc=None) }}
+  <div id="site_wavve_use_cache_div" class="collapse">
+  {{ macros.setting_input_int('site_wavve_cache_expiry', 'Cache 수명', desc=['단위: 초'], value=arg['site_wavve_cache_expiry']) }}
+  </div>
   {{ macros.setting_input_textarea('site_wavve_patterns_title', '제목 정규식', value=arg['site_wavve_patterns_title'], row='6', desc=['파일명으로 사용할 제목을 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 title 그룹의 문자열을 사용', '기본값: ^(?P<title>.*)$', '예시: ^(?P<title>1박2일) 시즌.*$']) }}
   {{ macros.setting_input_textarea('site_wavve_patterns_episode', '회차 번호 정규식', value=arg['site_wavve_patterns_episode'], row='6', desc=['파일명으로 사용할 회차 번호를 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 episode 그룹의 문자열을 회차 번호로 판단', '회차번호는 0보다 크고 최대 5자리까지만 인정', '기본값: ^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$', '']) }}
-  {{ macros.setting_input_textarea('site_wavve_headers', 'HTTP 기본 헤더', value=arg['site_wavve_headers'], row='6', desc=['http 요청시 사용할 기본 헤더', 'JSON 형식으로 입력']) }}
+  {{ macros.setting_input_textarea('site_wavve_headers', 'HTTP 헤더', value=arg['site_wavve_headers'], row='6', desc=['지정하지 않으면 일반 탭의 기본 HTTP 헤더를 사용', '형식: JSON']) }}
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('tving', false) }}
@@ -53,6 +63,11 @@
   <div id="site_tving_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_tving_proxy_url', 'Proxy URL', value=arg['site_tving_proxy_url'], desc=None) }}
   </div>
+  {{ macros.setting_checkbox('site_tving_use_cache', 'Cache 사용', value=arg['site_tving_use_cache'], desc=None) }}
+  <div id="site_tving_use_cache_div" class="collapse">
+  {{ macros.setting_input_int('site_tving_cache_expiry', 'Cache 수명', desc=['단위: 초'], value=arg['site_tving_cache_expiry']) }}
+  </div>
+  {{ macros.setting_input_textarea('site_tving_headers', 'HTTP 헤더', value=arg['site_tving_headers'], row='6', desc=['지정하지 않으면 일반 탭의 기본 HTTP 헤더를 사용', '형식: JSON']) }}
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('watcha', false) }}
@@ -61,6 +76,11 @@
   <div id="site_watcha_use_proxy_div" class="collapse">
   {{ macros.setting_input_text('site_watcha_proxy_url', 'Proxy URL', value=arg['site_watcha_proxy_url']) }}
   </div>
+  {{ macros.setting_checkbox('site_watcha_use_cache', 'Cache 사용', value=arg['site_watcha_use_cache'], desc=None) }}
+  <div id="site_watcha_use_cache_div" class="collapse">
+  {{ macros.setting_input_int('site_watcha_cache_expiry', 'Cache 수명', desc=['단위: 초'], value=arg['site_watcha_cache_expiry']) }}
+  </div>
+  {{ macros.setting_input_textarea('site_watcha_headers', 'HTTP 헤더', value=arg['site_watcha_headers'], row='6', desc=['지정하지 않으면 일반 탭의 기본 HTTP 헤더를 사용', '형식: JSON']) }}
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('naver', false) }}
@@ -84,6 +104,12 @@
   {{ macros.info_text('site_naver_login_access_token', 'Access Token', arg['site_naver_login_access_token']) }}
   {{ macros.info_text('site_naver_login_access_token_time', 'Access Token 발급시간', arg['site_naver_login_access_token_time'], desc=['한시간 동안 유효하며 자동갱신']) }}
 {{ macros.m_tab_content_end() }}
+
+{{ macros.m_tab_content_start('common', false) }}
+{{ macros.setting_input_textarea('site_common_headers', 'HTTP 기본 헤더', value=arg['site_common_headers'], row='6', desc=['HTTP 헤더를 지정하지 않은 사이트는 이 값을 사용', '형식: JSON']) }}
+{{ macros.setting_input_textarea('site_common_loose_match_shows', '느슨한 매칭 적용 TV 쇼', value=arg['site_common_loose_match_shows'], row='6', desc=['Daum의 TV 쇼와 OTT의 TV 쇼를 매칭할 때 느슨한 조건을 적용해야 하는 TV 쇼의 Daum 코드(KD1234) 목록', '느슨한 조건: 제목 일치', '엄격한 조건: 제목 일치 그리고 첫 방영일 또는 스튜디오 일치', '구분: 공백/줄바꿈/콤마/파이프', ]) }}
+{{ macros.m_tab_content_end() }}
+
 </form>
 </div>
 
@@ -96,6 +122,10 @@ $(document).ready(function(){
   use_collapse("site_wavve_use_proxy");
   use_collapse("site_tving_use_proxy");
   use_collapse("site_watcha_use_proxy");
+  use_collapse("site_daum_use_cache");
+  use_collapse("site_wavve_use_cache");
+  use_collapse("site_tving_use_cache");
+  use_collapse("site_watcha_use_cache");
 });
 
 $('#site_daum_use_proxy').change(function() {
@@ -112,6 +142,22 @@ $('#site_tving_use_proxy').change(function() {
 
 $('#site_watcha_use_proxy').change(function() {
   use_collapse('site_watcha_use_proxy');
+});
+
+$('#site_daum_use_cache').change(function() {
+  use_collapse('site_daum_use_cache');
+});
+
+$('#site_wavve_use_cache').change(function() {
+  use_collapse('site_wavve_use_cache');
+});
+
+$('#site_tving_use_cache').change(function() {
+  use_collapse('site_tving_use_cache');
+});
+
+$('#site_watcha_use_cache').change(function() {
+  use_collapse('site_watcha_use_cache');
 });
 
 
@@ -152,7 +198,7 @@ $("body").on('click', '#site_naver_login_btn', function(e) {
   var url = "https://nid.naver.com/oauth2.0/authorize?response_type=code&client_id=" + client_id + "&redirect_uri=" + callback + "&state=" + state;
   console.log(url);
   var win = window.open(url, "_blank", 'width=800,height=500');
-  
+
 });
 </script>
 {% endblock %}

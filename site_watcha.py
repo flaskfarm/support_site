@@ -1,10 +1,10 @@
 from http.cookies import SimpleCookie
 
 from . import SiteUtil
-from .entity_base import (EntityActor, EntityExtra, EntityExtra2, EntityMovie,
-                          EntityMovie2, EntityRatings, EntityReview,
+from .site_util import caching, encode_base64
+from .entity_base import (EntityActor, EntityMovie2, EntityReview,
                           EntitySearchItemFtv, EntitySearchItemMovie,
-                          EntitySearchItemTv, EntityShow, EntityThumb)
+                          EntityShow, EntityThumb)
 from .setup import *
 
 
@@ -12,48 +12,42 @@ class SiteWatcha(object):
     site_name = 'watcha'
     site_base_url = 'https://thetvdb.com'
 
-    """
     default_headers = {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
-        'x-watchaplay-client': 'WatchaPlay-WebApp',
-        'x-watchaplay-client-language': 'ko',
-        'x-watchaplay-client-region' : 'KR',
-        'x-watchaplay-client-version' : '1.0.0',
-        'referer': 'https://pedia.watcha.com/',
-        'origin': 'https://pedia.watcha.com',
-        'x-watcha-client': 'watcha-WebApp',
-        'x-watcha-client-language': 'ko',
-        'x-watcha-client-region': 'KR',
-        'x-watcha-client-version': '2.0.0',
-    }
-    """
-    default_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 Edg/132.0.0.0',
-        'X-Watcha-Client-Language': 'ko',
-        'X-Watcha-Client-Region': 'KR',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
         'X-Frograms-Client-Version': '2.1.0',
         'X-Frograms-Client': 'Galaxy-Web-App',
         'X-Frograms-App-Code': 'Galaxy',
         'X-Frograms-Galaxy-Language': 'ko',
         'X-Frograms-Galaxy-Region': 'KR',
         'X-Frograms-Version': '2.1.0',
+        'X-Frograms-Device-Name': 'Chrome:142.0.0.0 Windows:NT 10.0'
     }
 
     IMAGE_QUALITIES = ['xlarge', 'large', 'medium', 'small']
     POSTER_QUALITIES = ['hd', *IMAGE_QUALITIES]
     STILLCUT_QUALITIES = ['original', 'fullhd', *IMAGE_QUALITIES]
 
+    cache_enable = False
+    cache_expiry = 60
+
     @classmethod
-    def initialize(cls, watcha_cookie: str, use_proxy: bool = False, proxy_url: str = None) -> None:
+    def initialize(cls, watcha_cookie: str, use_proxy: bool = False, proxy_url: str = None, cache_enable: bool = False, cache_expiry: int = 60, headers: str = None, common_headers: str = None) -> None:
         cookies = SimpleCookie()
         try:
             cookies.load(watcha_cookie)
-        except:
-            logger.error(traceback.format_exc())
-            logger.error('입력한 쿠키 값을 확인해 주세요.')
+        except Exception:
+            logger.exception('입력한 쿠키 값을 확인해 주세요.')
         cls._watcha_cookie = {key:morsel.value for key, morsel in cookies.items()}
         cls._use_proxy = use_proxy
         cls._proxy_url = proxy_url if cls._use_proxy else None
+        load_headers = headers if headers else common_headers
+        try:
+            if load_headers.strip():
+                cls.default_headers = json.loads(load_headers)
+        except Exception:
+            logger.warning(f'헤더 값을 확인하세요: {load_headers=}')
+        cls.cache_enable = cache_enable
+        cls.cache_expiry = cache_expiry
 
     @classmethod
     def _search_api(cls, keyword, content_type='movies'):
@@ -203,6 +197,10 @@ class SiteWatchaMovie(SiteWatcha):
 
     @classmethod
     def search(cls, keyword, year=1900):
+        logger.debug(f'Watcha Movie search: {keyword=} {year=}')
+        cache_key = f"watcha:movie:search:{encode_base64(keyword)}:{str(year)}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             data = cls.search_api(keyword)
@@ -236,6 +234,7 @@ class SiteWatchaMovie(SiteWatcha):
             if result_list:
                 ret['ret'] = 'success'
                 ret['data'] = result_list
+                caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
             else:
                 ret['ret'] = 'empty'
         except Exception as e:
@@ -248,6 +247,10 @@ class SiteWatchaMovie(SiteWatcha):
 
     @classmethod
     def info(cls, code, like_count=100):
+        logger.debug(f'Watcha Movie info: {code=} {like_count=}')
+        cache_key = f"watcha:movie:info:{code[2:]}:{str(like_count)}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             entity = EntityMovie2(cls.site_name, code)
@@ -259,48 +262,13 @@ class SiteWatchaMovie(SiteWatcha):
             cls.info_collection(code, entity, like_count=like_count)
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
-            return ret
+            caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         return ret
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 class SiteWatchaTv(SiteWatcha):
@@ -327,6 +295,10 @@ class SiteWatchaTv(SiteWatcha):
     # 로마도 검색할 경우 리턴이 Rome이다.
     @classmethod
     def search(cls, keyword, year=None, season_count=None):
+        logger.debug(f'Watcha TV search: {keyword=} {year=} {season_count=}')
+        cache_key = f"watcha:tv:search:{encode_base64(keyword)}:{year}:{season_count}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             data = cls.search_api(keyword)
@@ -434,6 +406,7 @@ class SiteWatchaTv(SiteWatcha):
             if result_list:
                 ret['ret'] = 'success'
                 ret['data'] = result_list
+                caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
             else:
                 ret['ret'] = 'empty'
         except Exception as e:
@@ -446,6 +419,10 @@ class SiteWatchaTv(SiteWatcha):
 
     @classmethod
     def info(cls, code):
+        logger.debug(f'Watcha TV info: {code=}')
+        cache_key = f"watcha:tv:info:{code[2:]}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             entity = EntityShow(cls.site_name, code)
@@ -454,7 +431,7 @@ class SiteWatchaTv(SiteWatcha):
             cls.info_basic(code, entity)
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
-            return ret
+            caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
