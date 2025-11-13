@@ -1,5 +1,10 @@
+import re
+import base64
+import functools
 import urllib.parse
+from typing import Any, Callable, Sequence
 
+from numpy import isin
 import requests
 from tool import ToolUtil
 import lxml.html
@@ -12,30 +17,36 @@ class SiteUtil(object):
     session = requests.Session()
 
     default_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
         'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language' : 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
     }
+    loose_match_shows = []
 
     @classmethod
-    def initialize(cls):
-        logger.debug('Request session has been initialized.')
+    def initialize(cls, headers: str = None, loose_match_shows: str = None) -> None:
         cls.session = requests.Session()
+        logger.debug('Request session has been initialized.')
+        try:
+            cls.default_headers = json.loads(headers)
+        except Exception:
+            logger.warning('기본 헤더 값을 확인하세요.')
+        cls.loose_match_shows = tuple(show for show in re.split(r'[\s,|]+', loose_match_shows or '') if show)
 
     @classmethod
-    def get_tree(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
-        text = cls.get_text(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify)
+    def get_tree(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=None):
+        text = cls.get_text(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify, timeout=timeout)
         if text is None:
             return
         return lxml.html.fromstring(text)
 
     @classmethod
-    def get_text(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
-        res = cls.get_response(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify)
+    def get_text(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=None):
+        res = cls.get_response(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify, timeout=timeout)
         return res.text
 
     @classmethod
-    def get_response(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None):
+    def get_response(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=None):
         proxies = None
         if proxy_url is not None and proxy_url != '':
             proxies = {"http"  : proxy_url, "https" : proxy_url}
@@ -43,14 +54,14 @@ class SiteUtil(object):
             headers = cls.default_headers
         if post_data is None:
             if verify == None:
-                res = cls.session.get(url, headers=headers, proxies=proxies, cookies=cookies)
+                res = cls.session.get(url, headers=headers, proxies=proxies, cookies=cookies, timeout=timeout)
             else:
-                res = cls.session.get(url, headers=headers, proxies=proxies, cookies=cookies, verify=verify)
+                res = cls.session.get(url, headers=headers, proxies=proxies, cookies=cookies, timeout=timeout, verify=verify)
         else:
             if verify == None:
-                res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies)
+                res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies, timeout=timeout)
             else:
-                res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies, verify=verify)
+                res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies, timeout=timeout, verify=verify)
         if not 300 > res.status_code > 199:
             logger.warning(f'http_code={res.status_code} url="{res.url}" "body="{res.text}"')
         return res
@@ -600,6 +611,17 @@ class SiteUtil(object):
     }
 
     @classmethod
+    def is_same_channel(cls, channel1: str, channel2: str) -> bool:
+        ch1 = channel1.replace(" ", "").upper().strip()
+        ch2 = channel2.replace(" ", "").upper().strip()
+        if ch1 == ch2:
+            logger.debug(f"채널명이 일치합니다: '{channel1}' == '{channel2}'")
+            return True
+        else:
+            logger.debug(f"채널명이 다릅니다: '{channel1}' != '{channel2}'")
+            return False
+
+    @classmethod
     def normalize_url(cls, url: str, scheme: str ='https') -> str:
         if url.startswith('http'):
             return url
@@ -607,3 +629,127 @@ class SiteUtil(object):
         if not parsed.netloc:
             parsed = urllib.parse.urlparse(f"{parsed.scheme}://{url.strip('/')}", scheme=scheme)
         return urllib.parse.urlunparse(parsed)
+
+
+def push_cache(key: str, data: dict, expiry: int = 60) -> None:
+    if not key:
+        logger.error(f"캐시 키가 없습니다: {key=}")
+        return
+    key = f'{REDIS_KEY_PLUGIN}:{key}'
+    if not data:
+        logger.error(f"캐시 데이터가 없습니다: {key=}")
+        return
+    if expiry is None or expiry <= 0:
+        expiry = 60
+    try:
+        P.cache.set(key, json.dumps(data, separators=(',', ':')), ex=expiry)
+    except Exception:
+        logger.exception(f'캐시를 저장할 수 없습니다: {key=}')
+
+
+def pull_cache(key: str) -> dict | list | str | None:
+    """
+    framework 패키지의 __init__.py 에서 get_cache가 None으로 초기화되어 있어서 동일한 함수 이름을 피해야 함.
+    """
+    if not key:
+        logger.error(f"캐시 키가 없습니다: {key=}")
+        return
+    key = f'{REDIS_KEY_PLUGIN}:{key}'
+    try:
+        if cached := P.cache.get(key):
+            data = json.loads(cached)
+            return data
+        else:
+            pass
+
+    except Exception:
+        logger.exception(f"캐시를 가져올 수 없습니다: {key=}")
+
+
+def caching(func: Callable, key: str = None, expiry: int = None, cache_enable: bool = False, force_push: bool = False, print_log: bool = False) -> Callable:
+    @functools.wraps(func)
+    def wrapper(*args,  **kwargs) -> dict | list | str | None:
+
+        def __push_cache() -> dict | list | str | None:
+            if result := func(*args, **kwargs):
+                if print_log:
+                    logger.debug(f'Cache set: {key}')
+                push_cache(key, result, expiry)
+            return result
+
+        match cache_enable, force_push:
+            case True, True:
+                return __push_cache()
+            case True, False:
+                if result := pull_cache(key):
+                    if print_log:
+                        logger.debug(f'Cache hit: {key}')
+                    # 캐시로 불러온 데이터는 key 타입이 str 이기 때문에 다시 정수로 변환 (타 플러그인에서 int로 처리할 수 있도록)
+                    if episodes := deep_get(result, ('data', 'extra_info', 'episodes')):
+                        for ep_num in tuple(episodes.keys()):
+                            episodes[int(ep_num)] = episodes.pop(ep_num)
+                    return result
+                else:
+                    return __push_cache()
+            case False, _:
+                return func(*args, **kwargs)
+
+    return wrapper
+
+
+def encode_base64(text: str = '') -> str:
+    if not text:
+        return ''
+    try:
+        encoded = base64.urlsafe_b64encode(text.encode('utf-8')).decode('utf-8')
+        return encoded.rstrip('=')
+    except Exception:
+        logger.exception(f"base64 인코딩 실패: {text=}")
+    return text
+
+
+def decode_base64(text: str = '') -> str:
+    if not text:
+        return ''
+    try:
+        padding_needed = -len(text) % 4
+        padded_text = text + '=' * padding_needed
+        decoded = base64.urlsafe_b64decode(padded_text.encode('utf-8')).decode('utf-8')
+        if not decoded:
+            raise Exception("디코딩 결과가 비어있습니다")
+        return decoded
+    except Exception:
+        logger.exception(f"디코딩 실패: {text=}")
+    return text
+
+
+def score_to_stars(score: float, max_score: float = 10.0, stars: int = 5) -> str:
+    score = max(0, min(max_score, score))
+    rate = score / max(1, max_score)
+    score_to_stars = stars * rate
+    full = int(score_to_stars)
+    half = 1 if score_to_stars - full > 0.5 else 0
+    return "★" * full + "☆" * half
+
+
+def get_default_headers(user_headers: str, common_headers: str) -> dict:
+    load_headers = user_headers if user_headers else common_headers
+    try:
+        if load_headers.strip():
+            return json.loads(load_headers)
+        raise Exception(f'헤더 값이 없습니다.')
+    except Exception:
+        logger.warning(f'헤더 값을 확인하세요: {load_headers}')
+    return {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+        'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language' : 'ko,en-US;q=0.9,en;q=0.8,de;q=0.7,zh-CN;q=0.6,zh;q=0.5,lb;q=0.4',
+    }
+
+
+def deep_get(obj: dict, keys: Sequence) -> Any:
+    for key in keys:
+        if not isinstance(obj, dict):
+            return None
+        obj = obj.get(key)
+    return obj

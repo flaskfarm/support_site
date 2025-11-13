@@ -1,4 +1,6 @@
-from . import SiteUtil, SupportWavve
+from . import SupportWavve
+from .site_util import SiteUtil
+from .site_util import caching, encode_base64
 from .entity_base import (EntityActor, EntityMovie2, EntityRatings,
                           EntitySearchItemMovie, EntitySearchItemTv,
                           EntityShow, EntityThumb)
@@ -15,6 +17,14 @@ movie_mpaa_map = {'0' : u'전체 관람가', '12': u'12세 관람가', '15': u'1
 
 class SiteWavve(object):
     site_name = 'wavve'
+
+    cache_enable = False
+    cache_expiry = 60
+
+    @classmethod
+    def initialize(cls, cache_enable: bool = False, cache_expiry: int = 60) -> None:
+        cls.cache_enable = cache_enable
+        cls.cache_expiry = cache_expiry
 
     @classmethod
     def change_daum_channelname(cls, channelname):
@@ -41,6 +51,10 @@ class SiteWavveTv(SiteWavve):
 
     @classmethod
     def search(cls, keyword, **kwargs):
+        logger.debug(f'Wavve TV search: {keyword=}')
+        cache_key = f"wavve:tv:search:{encode_base64(keyword)}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             search_list = SupportWavve.search_tv(keyword)
@@ -69,35 +83,70 @@ class SiteWavveTv(SiteWavve):
             else:
                 ret['ret'] = 'empty'
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"검색에 실패했습니다: {keyword=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
 
 
     @classmethod
     def apply_tv_by_search(cls, show, force_search_title=None):
         try:
+            """
+            2025.11.12 halfaider
+
+            Daum 검색 결과에 wavve_id가 있으면 바로 적용
+            wavve는 tving과 달리 메타데이터 플러그인의 info()에서 wavve_id가 있는지 검사하지 않음
+
+            """
+            if wavve_id := (show.get('extra_info') or {}).get('wavve_id'):
+                info = caching(SupportWavve.vod_programs_programid, f"wavve:tv:programs:{wavve_id}", cls.cache_expiry, cls.cache_enable)(wavve_id)
+                if info:
+                    cls._apply_tv_by_program(show, info)
+                    return
             keyword = force_search_title if force_search_title is not None else show['title']
             data = cls.search(keyword)
             if data['ret'] == 'success':
                 data = data['data']
                 for item in data:
-                    if SiteUtil.compare_show_title(item['title'], keyword) and SiteUtil.compare(cls.change_daum_channelname(item['title']), keyword):
-                        info = SupportWavve.vod_programs_programid(item['code'][2:])
-                        # 2021-10-03  JTBC2 부자의 탄생
-                        # Daum 검색 -> 회차정보 없음 -> 동명 드라마 에피 정보가 들어가버림
-                        # 스튜디오로나 첫날짜가 같다면 동일로 판단. 이것들 정보가 항상 있는지 파악 못함
-                        if info:
-                            if show['studio'] == info['cpname'] or show['premiered'] == info['firstreleasedate']:
-                                cls._apply_tv_by_program(show, info)
-                                break
-                            else:
-                                logger.debug(f'Not match: {show["title"]=} {show["studio"]=} {info["cpname"]=} {show["premiered"]=} {info["firstreleasedate"]=}')
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+                    refined_keyword = SiteUtil.get_show_compare_text(keyword).lower()
+                    refined_title = SiteUtil.get_show_compare_text(item['title']).lower()
+                    if not (
+                        SiteUtil.compare(refined_title, refined_keyword) or
+                        SiteUtil.compare(cls.change_daum_channelname(item['title']), keyword)
+                    ):
+                        logger.debug(f'Not match: {show["title"]=} {item["title"]=}')
+                        continue
+                    info = caching(SupportWavve.vod_programs_programid, f"wavve:tv:programs:{item['code'][2:]}", cls.cache_expiry, cls.cache_enable)(item['code'][2:])
+                    if not info:
+                        continue
+                    # 2021-10-03  JTBC2 부자의 탄생
+                    # Daum 검색 -> 회차정보 없음 -> 동명 드라마 에피 정보가 들어가버림
+                    # 스튜디오로나 첫날짜가 같다면 동일로 판단. 이것들 정보가 항상 있는지 파악 못함
+                    """
+                    2025.11.11 halfaider
+                    기존에는 TV 쇼의 타이틀 뿐만 아니라 첫방영일 혹은 스튜디오 정보도 같아야 동일한 TV쇼로 취급
+                    하지만 스튜디오와 첫방영일 정보까지 비교하기에는 파싱된 데이터가 부실함
+                    스튜디오 별칭 목록을 만들어서 예외를 허용하는 방식을 시도했으나 별칭 목록을 관리하는 것이 번거로움
+                    그래서 기본 매칭과 엄격한 매칭을 나눠서 판단하기로 결정
+
+                    - 기본 매칭: 타이틀 일치
+                    - 엄격한 매칭: 타이틀 일치, 첫방영일 혹은 스튜디오가 일치
+
+                    엄격한 조건으로 검증해야 하는 TV 쇼의 타이틀을 목록화(블랙리스트)
+                    """
+                    if (
+                        show.get('code') not in SiteUtil.loose_match_shows
+                        and show['premiered'] != info['firstreleasedate']
+                        and not SiteUtil.is_same_channel(show['studio'], info['cpname'])
+                    ):
+                        logger.debug(f'Not match: {show["title"]=} {item["title"]=} {show["studio"]=} {info["cpname"]=} {show["premiered"]=} {info["firstreleasedate"]=}')
+                        continue
+                    cls._apply_tv_by_program(show, info)
+                    break
+        except Exception:
+            logger.exception('TV 쇼 매칭 중 오류가 발생했습니다.')
 
 
     @classmethod
@@ -114,7 +163,8 @@ class SiteWavveTv(SiteWavve):
             page = 1
             epi = None
             while True:
-                episode_data = SupportWavve.vod_program_contents_programid(program_info['programid'], page=page)
+                cache_key = f"wavve:tv:programs:{program_info['programid']}:episodes:page:{page}"
+                episode_data = caching(SupportWavve.vod_program_contents_programid, cache_key, cls.cache_expiry, cls.cache_enable)(program_info['programid'], page=page)
                 for epi in episode_data['list']:
                     try:
                         tmp = epi['episodenumber'].split('-')
@@ -123,10 +173,11 @@ class SiteWavveTv(SiteWavve):
                         else:
                             epi_no = int(tmp[1]) / 2
                     except: continue
-                    if epi_no not in show['extra_info']['episodes']:
-                        show['extra_info']['episodes'][epi_no] = {}
+                    epi_num = epi_no
+                    if epi_num not in show['extra_info']['episodes']:
+                        show['extra_info']['episodes'][epi_num] = {}
 
-                    show['extra_info']['episodes'][epi_no][cls.site_name] = {
+                    show['extra_info']['episodes'][epi_num][cls.site_name] = {
                         'code' : cls.module_char + cls.site_char + epi['contentid'],
                         'thumb' : SiteUtil.normalize_url(epi['image']),
                         'plot' : epi['synopsis'].replace('<br>', '\r\n'),
@@ -155,6 +206,14 @@ class SiteWavveTv(SiteWavve):
 
     @classmethod
     def info(cls, code, all_episode=True):
+        logger.debug(f'Wavve TV info: {code=} {all_episode=}')
+        cache_key = f"wavve:tv:info:{code[2:]}"
+        if all_episode:
+            cache_key += f":episodes:all"
+        else:
+            cache_key += f":episodes:page:1"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             code = cls.trim_program_id(code)
@@ -180,10 +239,10 @@ class SiteWavveTv(SiteWavve):
             ret['ret'] = 'success'
             ret['data'] = show
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"정보 탐생에 실패했습니다: {code=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
 
 
@@ -208,6 +267,10 @@ class SiteWavveMovie(SiteWavve):
 
     @classmethod
     def search(cls, keyword, year=1900):
+        logger.debug(f'Wavve Movie search: {keyword=} {year=}')
+        cache_key = f"wavve:movie:search:{encode_base64(keyword)}:{year}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             search_list = cls.search_api(keyword)
@@ -236,15 +299,19 @@ class SiteWavveMovie(SiteWavve):
             else:
                 ret['ret'] = 'empty'
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"검색에 실패했습니다: {keyword=} {year=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
 
 
     @classmethod
     def info(cls, code):
+        logger.debug(f'Wavve Movie info: {code=}')
+        cache_key = f"wavve:movie:info:{code[2:]}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             code = cls.trim_program_id(code)
@@ -300,10 +367,9 @@ class SiteWavveMovie(SiteWavve):
                 entity.extra_info['wavve_stream']['kodi'] = 'plugin://metadata.sjva.movie/?action=play&code=%s' % code
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
-            return ret
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"정보 탐색에 실패했습니다: {code=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret

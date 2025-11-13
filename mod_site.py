@@ -3,17 +3,22 @@ from .setup import *
 
 class ModuleSite(PluginModuleBase):
     db_default = {
-        f'db_version' : '1.1',
+        f'db_version' : '1.2',
         f"site_wavve_credential": "",
         f"site_wavve_use_proxy": "False",
         f"site_wavve_proxy_url": "",
         f"site_wavve_profile":'{"id": "", "password": "", "profile": "0", "device_id": ""}',
         'site_wavve_patterns_episode': '^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$',
         'site_wavve_patterns_title': '^(?P<title>.*)$',
-        'site_wavve_headers': '{"Accept":"*/*","Accept-Language":"ko,en-US;q=0.9,en;q=0.8,de;q=0.7,zh-CN;q=0.6,zh;q=0.5,lb;q=0.4","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"}',
+        'site_wavve_headers': '',
+        'site_wavve_use_cache' : 'False',
+        'site_wavve_cache_expiry' : '60',
         'site_daum_cookie' : '',
         'site_daum_use_proxy' : 'False',
         'site_daum_proxy_url' : '',
+        'site_daum_headers': '',
+        'site_daum_use_cache' : 'False',
+        'site_daum_cache_expiry' : '60',
         'site_daum_test' : '오버 더 레인보우',
         'site_tving_id' : '',
         'site_tving_pw' : '',
@@ -22,6 +27,9 @@ class ModuleSite(PluginModuleBase):
         'site_tving_deviceid' : '',
         'site_tving_use_proxy' : 'False',
         'site_tving_proxy_url' : '',
+        'site_tving_use_cache' : 'False',
+        'site_tving_cache_expiry' : '60',
+        'site_tving_headers': '',
         'site_naver_key': '',
         'site_imgur_client_id': '',
         'site_imgur_client_secret': '',
@@ -32,12 +40,17 @@ class ModuleSite(PluginModuleBase):
         'site_watcha_cookie' : '',
         'site_watcha_use_proxy' : 'False',
         'site_watcha_proxy_url' : '',
+        'site_watcha_headers': '{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36","X-Frograms-Client-Version":"2.1.0","X-Frograms-Client":"Galaxy-Web-App","X-Frograms-App-Code":"Galaxy","X-Frograms-Galaxy-Language":"ko","X-Frograms-Galaxy-Region":"KR","X-Frograms-Version":"2.1.0","X-Frograms-Device-Name":"Chrome:142.0.0.0 Windows:NT 10.0"}',
+        'site_watcha_use_cache' : 'False',
+        'site_watcha_cache_expiry' : '60',
         'site_naver_login_client_id' : '',
         'site_naver_login_client_secret' : '',
         'site_naver_login_refresh_token' : '',
         'site_naver_login_refresh_token_time' : '',
         'site_naver_login_access_token' : '',
         'site_naver_login_access_token_time' : '',
+        'site_common_loose_match_shows' : '',
+        'site_common_headers' : '{"Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8","Accept-Language":"ko,en-US;q=0.9,en;q=0.8,de;q=0.7,zh-CN;q=0.6,zh;q=0.5,lb;q=0.4","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"}',
     }
 
     def __init__(self, P):
@@ -140,13 +153,7 @@ class ModuleSite(PluginModuleBase):
             self.__naver_init()
         if flag_watcha:
             self.__watcha_init()
-
-        if any((flag_wavve, flag_daum, flag_tving, flag_naver, flag_watcha)):
-            try:
-                from . import SiteUtil
-                SiteUtil.initialize()
-            except:
-                logger.error(traceback.format_exc())
+        self.__util_init()
 
     def plugin_load(self):
         self.__wavve_init()
@@ -154,6 +161,7 @@ class ModuleSite(PluginModuleBase):
         self.__tving_init()
         self.__naver_init()
         self.__watcha_init()
+        self.__util_init()
 
     def plugin_load_celery(self):
         '''
@@ -167,6 +175,16 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get('site_wavve_credential'),
             P.ModelSetting.get_bool('site_wavve_use_proxy'),
             P.ModelSetting.get('site_wavve_proxy_url'),
+            P.ModelSetting.get('site_wavve_profile'),
+            P.ModelSetting.get_list('site_wavve_patterns_episode'),
+            P.ModelSetting.get_list('site_wavve_patterns_title'),
+            P.ModelSetting.get('site_wavve_headers'),
+            P.ModelSetting.get('site_common_headers')
+        )
+        from .site_wavve import SiteWavve
+        SiteWavve.initialize(
+            P.ModelSetting.get_bool('site_wavve_use_cache'),
+            P.ModelSetting.get_int('site_wavve_cache_expiry')
         )
 
     def __daum_init(self):
@@ -175,6 +193,10 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get('site_daum_cookie'),
             P.ModelSetting.get_bool('site_daum_use_proxy'),
             P.ModelSetting.get('site_daum_proxy_url'),
+            P.ModelSetting.get_bool('site_daum_use_cache'),
+            P.ModelSetting.get_int('site_daum_cache_expiry'),
+            P.ModelSetting.get('site_daum_headers'),
+            P.ModelSetting.get('site_common_headers')
         )
 
     def __tving_init(self):
@@ -184,6 +206,13 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get_bool('site_tving_use_proxy'),
             P.ModelSetting.get('site_tving_proxy_url'),
             P.ModelSetting.get('site_tving_deviceid'),
+            P.ModelSetting.get('site_tving_headers'),
+            P.ModelSetting.get('site_common_headers')
+        )
+        from .site_tving import SiteTving
+        SiteTving.initialize(
+            P.ModelSetting.get_bool('site_tving_use_cache'),
+            P.ModelSetting.get_int('site_tving_cache_expiry')
         )
 
     def __naver_init(self):
@@ -198,6 +227,17 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get('site_watcha_cookie'),
             P.ModelSetting.get_bool('site_watcha_use_proxy'),
             P.ModelSetting.get('site_watcha_proxy_url'),
+            P.ModelSetting.get_bool('site_watcha_use_cache'),
+            P.ModelSetting.get_int('site_watcha_cache_expiry'),
+            P.ModelSetting.get('site_watcha_headers'),
+            P.ModelSetting.get('site_common_headers')
+        )
+
+    def __util_init(self):
+        from .site_util import SiteUtil
+        SiteUtil.initialize(
+            P.ModelSetting.get('site_common_headers'),
+            P.ModelSetting.get('site_common_loose_match_shows')
         )
 
     def migration(self) -> None:
@@ -208,5 +248,7 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.set('site_wavve_patterns_episode', '^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$')
             P.ModelSetting.set('site_wavve_patterns_title', '^(?P<title>.*)$')
             version = '1.1'
+        elif version == '1.1':
+            version = '1.2'
         P.logger.debug(f'최종 DB 버전: {version}')
         P.ModelSetting.set('db_version', version)

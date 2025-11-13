@@ -4,6 +4,7 @@ from .entity_base import (EntityActor, EntityMovie2, EntityRatings,
                           EntityShow, EntityThumb)
 from .setup import *
 from .site_util import SiteUtil
+from .site_util import caching, encode_base64
 
 tv_mpaa_map = {'CPTG0100' : u'모든 연령 시청가', 'CPTG0200' : u'7세 이상 시청가', 'CPTG0300' : u'12세 이상 시청가', 'CPTG0400' : u'15세 이상 시청가', 'CPTG0500' : u'19세 이상 시청가'}
 
@@ -92,6 +93,14 @@ class SiteTving(object):
     site_name = 'tving'
     tving_base_image = 'https://image.tving.com'
 
+    cache_enable = False
+    cache_expiry = 60
+
+    @classmethod
+    def initialize(cls, cache_enable: bool = False, cache_expiry: int = 60) -> None:
+        cls.cache_enable = cache_enable
+        cls.cache_expiry = cache_expiry
+
     @classmethod
     def change_to_premiered(cls, broadcast_date):
         tmp = str(broadcast_date)
@@ -153,15 +162,17 @@ class SiteTvingTv(SiteTving):
             if True:
                 page = 1
                 while True:
-                    episode_data = SupportTving.get_frequency_programid(program_info['code'], page=page)
+                    cache_key = f"tving:tv:programs:{program_info['code']}:episodes:page:{page}"
+                    episode_data = caching(SupportTving.get_frequency_programid, cache_key, cls.cache_expiry, cls.cache_enable)(program_info['code'], page=page)
                     for epi_all in episode_data['result']:
                         try:
                             epi = epi_all['episode']
-                            if epi['frequency'] not in show['extra_info']['episodes']:
-                                show['extra_info']['episodes'][int(epi['frequency'])] = {}
+                            epi_num = epi['frequency']
+                            if epi_num not in show['extra_info']['episodes']:
+                                show['extra_info']['episodes'][epi_num] = {}
 
                             tmp = cls.tving_base_image + epi['image'][0]['url'] if len(epi['image']) > 0 else ''
-                            show['extra_info']['episodes'][int(epi['frequency'])][cls.site_name] = {
+                            show['extra_info']['episodes'][epi_num][cls.site_name] = {
                                 'code' : cls.module_char + cls.site_char + epi['code'],
                                 'thumb' : tmp,
                                 'plot' : epi['synopsis']['ko'],
@@ -181,19 +192,37 @@ class SiteTvingTv(SiteTving):
     @classmethod
     def apply_tv_by_search(cls, show, apply_plot=True, apply_image=True, force_search_title=None):
         try:
+            """
+            2025.11.12 halfaider
+
+            tving은 wavve와 달리 메타데이터 플러그인 info()에서 Daum 검색 결과에 tving_id가 있는지 검사
+            tving_id가 있으면 바로 _apply_tv_by_program()을 호출
+            tving_id가 없으면 apply_tv_by_search()을 호출
+            """
             keyword = force_search_title if force_search_title is not None else show['title']
             data = cls.search_api(keyword)
             if data:
                 for item in data:
                     if item['gubun'] != 'VODBC':
                         continue
-                    if item['ch_nm'].replace(' ', '').lower() == show['studio'].replace(' ', '').lower() and (item['mast_nm'].replace(' ', '').lower() == keyword.replace(' ', '').lower() or item['mast_nm'].replace(' ', '').lower().find(keyword.replace(' ', '').lower()) != -1 or keyword.replace(' ', '').lower().find(item['mast_nm'].replace(' ', '').lower()) != -1):
-                        # 시작일로 체크
-                        tving_program = SupportTving.get_program_programid(item['mast_cd'])
-                        cls._apply_tv_by_program(show, tving_program, apply_plot=apply_plot, apply_image=apply_image)
-                        break
-
-                        #if show['premiered'] == ''
+                    refined_keyword = keyword.replace(' ', '').lower()
+                    refined_name = item['mast_nm'].replace(' ', '').lower()
+                    if not (
+                        SiteUtil.compare_show_title(item['mast_nm'], keyword)
+                        or refined_name.find(refined_keyword) > -1
+                        or refined_keyword.find(refined_name) > -1
+                    ):
+                        #logger.debug(f'Not match: {show["title"]=} {item["mast_nm"]=}')
+                        continue
+                    if (
+                        show.get('code') not in SiteUtil.loose_match_shows
+                        and not SiteUtil.is_same_channel(show['studio'], item['ch_nm'])
+                    ):
+                        logger.debug(f'Not match: {show["title"]=} {item["mast_nm"]=} {show["studio"]=} {item["ch_nm"]=}')
+                        continue
+                    tving_program = SupportTving.get_program_programid(item['mast_cd'])
+                    cls._apply_tv_by_program(show, tving_program, apply_plot=apply_plot, apply_image=apply_image)
+                    break
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -214,6 +243,10 @@ class SiteTvingTv(SiteTving):
 
     @classmethod
     def search(cls, keyword, **kwargs):
+        logger.debug(f'Tving TV search: {keyword=}')
+        cache_key = f"tving:tv:search:{encode_base64(keyword)}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             search_list = cls.search_api(keyword)
@@ -238,14 +271,18 @@ class SiteTvingTv(SiteTving):
             else:
                 ret['ret'] = 'empty'
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"검색에 실패했습니다: {keyword=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
 
     @classmethod
     def info(cls, code):
+        logger.debug(f'Tving TV info: {code=}')
+        cache_key = f"tving:tv:info:{code}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             tving_program = SupportTving.get_program_programid(code[2:])
@@ -292,12 +329,11 @@ class SiteTvingTv(SiteTving):
             cls._apply_tv_by_program(show, tving_program)
             ret['ret'] = 'success'
             ret['data'] = show
-
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"정보 탐색에 실패했습니다: {code=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
 
     @classmethod
@@ -314,6 +350,10 @@ class SiteTvingMovie(SiteTving):
 
     @classmethod
     def search(cls, keyword, year=1900):
+        logger.debug(f'Tving Movie search: {keyword=} {year=}')
+        cache_key = f"tving:movie:search:{encode_base64(keyword)}:{year}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             ret = {}
             search_list = cls.search_api(keyword)
@@ -338,18 +378,21 @@ class SiteTvingMovie(SiteTving):
                 ret['data'] = result_list
             else:
                 ret['ret'] = 'empty'
-
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"검색에 실패했습니다: {keyword=} {year=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
 
 
 
     @classmethod
     def info(cls, code):
+        logger.debug(f'Tving Movie info: {code=}')
+        cache_key = f"tving:movie:info:{code}"
+        if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            return cached
         try:
             logger.debug('tving info code:%s', code)
             ret = {}
@@ -406,11 +449,9 @@ class SiteTvingMovie(SiteTving):
 
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
-            return ret
         except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"정보 탐색에 실패했습니다: {code=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
+        caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
-
