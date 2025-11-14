@@ -4,7 +4,6 @@ import functools
 import urllib.parse
 from typing import Any, Callable, Sequence
 
-from numpy import isin
 import requests
 from tool import ToolUtil
 import lxml.html
