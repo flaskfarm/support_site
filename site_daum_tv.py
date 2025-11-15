@@ -3,6 +3,7 @@ from datetime import datetime
 
 from lxml import etree
 from lxml.html import HtmlElement
+from numpy import add
 
 from . import SiteDaum
 from .site_util import caching, encode_base64, decode_base64
@@ -398,7 +399,7 @@ class SiteDaumTv(SiteDaum):
         for item_thumb_tag in html.xpath(".//ul/li//div[@class='item-thumb']"):
             code = title = thumb = year = link = studio = date = None
             data = cls.parse_thumb_and_bundle(item_thumb_tag)
-            if not data or not (query := data.get('query')):
+            if not data or not (query := data.get('query')) or not query.get("spId"):
                 continue
             try:
                 if query.get("spId"):
@@ -432,11 +433,16 @@ class SiteDaumTv(SiteDaum):
                    "link": link or "",
                    "status": -1,
                    "date": date or "",
-                   "spId": query.get("spId") or "",
+                   "spId": int(query["spId"]),
                 })
             except Exception:
                 logger.exception(f"Failed to search more show...")
-        return additionals
+        # sjva 에이전트에서 출시일 순(마지막을 최근 시즌으로)으로 인식
+        try:
+            return sorted(additionals, key=lambda x: (x['year'], x['spId']))
+        except Exception:
+            logger.exception(f"시리즈 정렬 실패")
+            return additionals
 
     @classmethod
     def parse_sub_title(cls, container: HtmlElement) -> dict:
