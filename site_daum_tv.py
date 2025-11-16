@@ -3,7 +3,6 @@ from datetime import datetime
 
 from lxml import etree
 from lxml.html import HtmlElement
-from numpy import add
 
 from . import SiteDaum
 from .site_util import caching, encode_base64, decode_base64
