@@ -13,15 +13,10 @@ def check_packages(packages: Sequence[tuple[str, str]]) -> None:
 
 
 # support_site 에 필요한 파이썬 패키지 설치
+# 그 외 패키지는 모듈 관리자에 의해 설치되도록
 check_packages((
     ("xmltodict", "xmltodict"),
     ("lxml", "lxml"),
-    ("cloudscraper", "cloudscraper"),
-    ("tmdbsimple", "tmdbsimple"),
-    ("tvdb_api", "tvdb_api"),
-    ("requests_cache", "requests-cache"),
-    ("discord", "discord.py"),
-    ("dateutil", "dateutils"),
 ))
 
 from support import SupportSC
