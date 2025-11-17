@@ -303,6 +303,18 @@ class SiteDaumTv(SiteDaum):
         if epi_thumbs and not entity.thumb:
             entity.thumb.append(EntityThumb(aspect='landscape', value=cls.process_image_url(epi_thumbs[0]), site=cls.site_name, score=80))
 
+        # 게스트 정보
+        for guest_container in container.xpath('.//div[@id="episode-guest"]/following-sibling::div[1]/ul/li//div[@class="item-thumb"]'):
+            guest_data = cls.parse_thumb_and_bundle(guest_container)
+            if guest_data.get('query') and (ppkey := guest_data.get('query').get('ppkey')):
+                entity.extra_info.setdefault('guests', [])
+                entity.extra_info['guests'].append({
+                    'name': guest_data.get('title'),
+                    'image': guest_data.get('image') or guest_data.get('thumb'),
+                    'link': guest_data.get('link'),
+                    'id': ppkey,
+                })
+
         ret['data'] = entity.as_dict()
         return caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
 
@@ -386,7 +398,8 @@ class SiteDaumTv(SiteDaum):
             except Exception as e:
                 logger.warning(repr(e))
         if current_episodes:
-            logger.debug(f'The episode numbers of "{show_title}" : {current_episodes}')
+            #logger.debug(f"{show_title}: episodes='{current_episodes}'")
+            pass
         return last_ep_no, last_ep_url
 
     @classmethod
@@ -608,12 +621,14 @@ class SiteDaumTv(SiteDaum):
                     next_epno_page = SiteDaum.get_tree(last_ep_url)
                     page_last_episode_no, page_last_episode_url = cls.parse_episode_list(next_epno_page, episodes, spid, title)
                     if last_ep_no == page_last_episode_no or last_ep_url == page_last_episode_url:
-                        logger.debug(f'No more episode information after: {page_last_episode_no}')
+                        logger.debug(f'마지막 에피소드 도달: {page_last_episode_no}')
                         break
                     last_ep_no = page_last_episode_no
                     last_ep_url = page_last_episode_url
                 except Exception:
                     logger.exception(f"code='{spid}' title='{title}'")
+            else:
+                logger.debug(f'에피소드 목록 100회 조회: {last_ep_no=} {last_ep_url=}')
         return caching(lambda: episodes, cache_key, cls.cache_expiry, cls.cache_enable)()
 
     @classmethod
