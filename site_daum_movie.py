@@ -254,10 +254,13 @@ class SiteDaumMovie(SiteDaum):
             if not data or not (query := data.get('query')):
                 continue
             try:
+                if data.get('title'):
+                    title = data.get('title')
+                if data.get('labels') and not title:
+                    title = data.get('labels')[0]
                 if query.get("spId"):
                     code = cls.module_char + cls.site_char + query.get('spId')
                 if query.get("q"):
-                    title = query.get("q")
                     query['w'] = 'cin'
                     link = cls.get_request_url(query=query)
                 if data.get('thumb'):
@@ -276,6 +279,10 @@ class SiteDaumMovie(SiteDaum):
                 additionals.append(additional)
             except Exception:
                 logger.exception(f"Failed to search more movie...")
+        try:
+            return sorted(additionals, key=lambda x: (x.year, int(x.code[2:])))
+        except Exception:
+            logger.exception(f"시리즈/동명 정렬 실패")
         return additionals
 
     @classmethod
