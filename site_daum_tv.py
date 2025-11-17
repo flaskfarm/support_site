@@ -395,12 +395,17 @@ class SiteDaumTv(SiteDaum):
         동명프로그램, 시리즈
         """
         additionals = []
-        for item_thumb_tag in html.xpath(".//ul/li//div[@class='item-thumb']"):
+        item_thumb_tags = html.xpath(".//ul/li//div[@class='item-thumb']") or html.xpath(".//div[@class='item-thumb']")
+        for item_thumb_tag in item_thumb_tags:
             code = title = thumb = year = link = studio = date = None
             data = cls.parse_thumb_and_bundle(item_thumb_tag)
             if not data or not (query := data.get('query')) or not query.get("spId"):
                 continue
             try:
+                if data.get('title'):
+                    title = data.get('title')
+                if data.get('labels') and not title:
+                    title = data.get('labels')[0]
                 if query.get("spId"):
                     code = cls.module_char + cls.site_char + query.get('spId')
                 if query.get("q"):
@@ -411,8 +416,7 @@ class SiteDaumTv(SiteDaum):
                     thumb = data.get('thumb')
                 if data.get('descs'):
                     studio = data.get('descs').get('studio')
-                    if data.get('편성'):
-                        schedule_text = data.get('편성')
+                    if schedule_text := data.get('descs').get('편성'):
                         year_text = re.sub("\D", "", schedule_text)
                         if year_text:
                             year = int(year_text)
@@ -440,8 +444,8 @@ class SiteDaumTv(SiteDaum):
         try:
             return sorted(additionals, key=lambda x: (x['year'], x['spId']))
         except Exception:
-            logger.exception(f"시리즈 정렬 실패")
-            return additionals
+            logger.exception(f"시리즈/동명 정렬 실패")
+        return additionals
 
     @classmethod
     def parse_sub_title(cls, container: HtmlElement) -> dict:

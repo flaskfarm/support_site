@@ -200,12 +200,13 @@ class SiteDaum(object):
             data['labels'] = cls.iter_text(bundle_div)
             if (desc_list := bundle_div.xpath(".//dl")):
                 data['descs'] = cls.parse_description_list(desc_list[0])
-            if (bundle_a := bundle_div.xpath(".//div[@class='item-contents']//a")):
+            if (bundle_a := bundle_div.xpath(".//div[@class='item-title']//a")):
                 href = bundle_a[0].get('href') or ""
                 url_splits = urllib.parse.urlsplit(href)
                 query = dict(urllib.parse.parse_qsl(url_splits.query))
                 data['query'] = query or {}
                 data['link'] = href if url_splits.netloc else cls.get_request_url(query=query)
+                data['title'] = bundle_a[0].text_content().strip()
         return data
 
     @classmethod
