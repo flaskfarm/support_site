@@ -239,7 +239,7 @@ class SiteWavveTv(SiteWavve):
             ret['ret'] = 'success'
             ret['data'] = show
         except Exception as e:
-            logger.exception(f"정보 탐생에 실패했습니다: {code=}")
+            logger.exception(f"정보 탐색에 실패했습니다: {code=}")
             ret['ret'] = 'exception'
             ret['data'] = str(e)
         caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
