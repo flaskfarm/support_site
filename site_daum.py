@@ -471,8 +471,11 @@ class SiteDaum(object):
                 '''
                 if (div_tag := li_tag.find('.//div[@data-id]')) is not None and (data_id := div_tag.get('data-id')):
                     item['data_id'] = data_id
-                if item.get('link'):
+                elif item.get('link'):
                     item['data_id'] = item['link'].rsplit('/')[-1]
+                if not isinstance(item.get('data_id'), str) or not item.get('data_id').isdigit():
+                    logger.warning(f"영상 ID가 숫자가 아닙니다: '{item.get('data_id')}'")
+                    continue
                 if item:
                     clips.append(EntityExtra(
                         item['content_type'] or 'Clip',
