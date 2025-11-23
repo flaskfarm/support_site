@@ -292,16 +292,17 @@ class SiteDaumTv(SiteDaum):
             clips = cls.parse_clips(related_video_elements[0])
             if include_kakao and clips:
                 entity.extras.extend(clips)
-            for clip in clips:
+            for idx, clip in enumerate(clips):
                 if '예고' in clip.title:
                     continue
                 if clip.thumb:
-                    entity.thumb.append(EntityThumb(aspect='landscape', thumb=clip.thumb, site=cls.site_name, score=100))
+                    entity.thumb.append(EntityThumb(aspect='landscape', value=clip.thumb, thumb=clip.thumb, site=cls.site_name, score=100 - idx))
 
         # 썸네일, 관련 영상의 썸네일을 먼저 사용하고 없을 경우 사용
         epi_thumbs = container.xpath('.//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
         if epi_thumbs and not entity.thumb:
-            entity.thumb.append(EntityThumb(aspect='landscape', value=cls.process_image_url(epi_thumbs[0]), site=cls.site_name, score=80))
+            thumb = cls.process_image_url(epi_thumbs[0])
+            entity.thumb.append(EntityThumb(aspect='landscape', value=thumb, thumb=thumb, site=cls.site_name, score=80))
 
         # 게스트 정보
         for guest_container in container.xpath('.//div[@id="episode-guest"]/following-sibling::div[1]/ul/li//div[@class="item-thumb"]'):
