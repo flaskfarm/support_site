@@ -369,8 +369,19 @@ class SiteFc2com(SiteAvBase):
     @classmethod
     def _get_page_content(cls, driver, url, wait_for_locator):
         driver.get(url)
+
+        # 성인 인증 쿠키 주입 (이미 접속한 상태에서)
+        try:
+            driver.add_cookie({'name': 'coc', 'value': '1', 'domain': '.fc2.com', 'path': '/'})
+            driver.add_cookie({'name': 'mgs_agef', 'value': '1', 'domain': '.fc2.com', 'path': '/'})
+            # 필요한 경우 페이지 새로고침
+            # driver.refresh() 
+        except Exception as e:
+            logger.debug(f"[{cls.site_name}] Failed to add cookies: {e}")
+
         timeout = cls.config.get('selenium_timeout', 10)
         WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
+
         page_source = driver.page_source
         if "お探しのページは見つかりませんでした。" in page_source:
             return None, page_source

@@ -201,20 +201,43 @@ class SiteJavbus(SiteAvBase):
 
             all_p_tags_in_info = info_node.xpath("./p")
             genre_header_p_node = actor_header_p_node = None
+            
             for p_tag_node_loop in all_p_tags_in_info:
-                header_text = p_tag_node_loop.xpath("normalize-space(./span[@class='header']/text())")
-                if "類別:" in header_text: genre_header_p_node = p_tag_node_loop
-                elif "演員" in header_text: actor_header_p_node = p_tag_node_loop
+                full_text = p_tag_node_loop.xpath("string(.)").strip()
+                if full_text.startswith("類別:"): 
+                    genre_header_p_node = p_tag_node_loop
+                elif full_text.startswith("演員:"):
+                    actor_header_p_node = p_tag_node_loop
 
             for p_tag in all_p_tags_in_info:
                 header_span = p_tag.xpath("./span[@class='header']")
-                if not header_span or not header_span[0].text: continue
-                key = header_span[0].text.strip().replace(":", "")
+                if not header_span: continue
+                
+                header_text = header_span[0].text_content().strip()
+                key = header_text.replace(":", "").strip()
+                
                 if key in ["類別", "演員"]: continue
-                value = "".join(header_span[0].xpath("./following-sibling::node()/text()")).strip()
+
+                full_p_text = p_tag.xpath("string(.)").strip()
+                
+                # 헤더 부분 제거 (예: "識別碼: DVDES-532" -> "DVDES-532")
+                if full_p_text.startswith(header_text):
+                    value = full_p_text[len(header_text):].strip()
+                else:
+                    value_nodes = header_span[0].xpath("./following-sibling::node()")
+                    value = ""
+                    for node in value_nodes:
+                        if isinstance(node, str):
+                            value += node
+                        elif hasattr(node, 'text_content'):
+                            value += node.text_content()
+                    value = value.strip()
+
                 if not value or value == "----": continue
 
-                if key == "發行日期":
+                if key == "識別碼":
+                    pass 
+                elif key == "發行日期":
                     if value != "0000-00-00": entity.premiered, entity.year = value, int(value[:4])
                 elif key == "長度":
                     try: entity.runtime = int(value.replace("分鐘", "").strip())
