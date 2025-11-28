@@ -2,9 +2,10 @@
 import os
 import re
 import time
+import socket
 import traceback
 from datetime import timedelta
-from urllib.parse import urlencode, unquote_plus
+from urllib.parse import urlencode, unquote_plus, urlparse
 import random
 import json
 # python 확장
@@ -44,6 +45,25 @@ except ImportError:
     _IMAGEHASH_AVAILABLE = False
     hfun = phash = average_hash = None
 
+# Selenium Imports
+try:
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException, WebDriverException
+    is_selenium_available = True
+except ImportError:
+    is_selenium_available = False
+
+# Stealth Import
+try:
+    from selenium_stealth import stealth
+    is_stealth_available = True
+except ImportError:
+    is_stealth_available = False
+
+
 class SiteAvBase:
     site_name = None
     site_char = None
@@ -61,7 +81,11 @@ class SiteAvBase:
 
     _cs_scraper_instance = None  # cloudscraper 인스턴스 캐싱용 (선택적)
     _cs_scraper_no_verify_instance = None # SSL 검증 안하는 인스턴스 캐싱용
-    
+
+    _cf_cookies = {}
+    _cf_cookie_timestamp = 0
+    CF_COOKIE_EXPIRY = 3600
+
     ################################################
     # region 기본적인 것들
 
@@ -114,6 +138,250 @@ class SiteAvBase:
         else:
             logger.warning(f"get_text: Received non-2xx status code {res.status_code} for URL: {url}")
             return None
+
+
+    # ---------------------------------------------------------
+    # region Selenium & FlareSolverr Common Methods
+    # ---------------------------------------------------------
+
+    @classmethod
+    def _get_selenium_driver(cls):
+        if not is_selenium_available:
+            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다.")
+        
+        selenium_url = cls.config.get('selenium_url')
+        if not selenium_url: raise Exception("Selenium 서버 URL이 설정되지 않았습니다.")
+        
+        driver_type = cls.config.get('selenium_driver_type', 'chrome')
+        logger.debug(f"[{cls.site_name}] Preparing Selenium driver. Type: {driver_type}")
+
+        if driver_type == 'firefox':
+            options = webdriver.FirefoxOptions()
+            options.add_argument('--headless')
+        else:
+            options = webdriver.ChromeOptions()
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--disable-blink-features=AutomationControlled")
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option('useAutomationExtension', False)
+            options.add_argument("--disable-infobars")
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
+            proxy_url = cls.config["proxy_url"]
+            if driver_type == 'firefox':
+                if '@' in proxy_url:
+                    parsed_proxy = urlparse(proxy_url)
+                    proxy_url = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
+                parsed_proxy = urlparse(proxy_url)
+                options.set_preference("network.proxy.type", 1)
+                options.set_preference("network.proxy.http", parsed_proxy.hostname)
+                options.set_preference("network.proxy.http_port", parsed_proxy.port)
+                options.set_preference("network.proxy.ssl", parsed_proxy.hostname)
+                options.set_preference("network.proxy.ssl_port", parsed_proxy.port)
+            else:
+                options.add_argument(f'--proxy-server={proxy_url}')
+
+        original_timeout = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(30) 
+            driver = webdriver.Remote(command_executor=selenium_url, options=options)
+            
+            if driver_type == 'chrome':
+                # Stealth 적용 로직 (생략 - 기존과 동일)
+                stealth_applied = False
+                if is_stealth_available:
+                    try:
+                        stealth(driver,
+                            languages=["en-US", "en"],
+                            vendor="Google Inc.",
+                            platform="Win32",
+                            webgl_vendor="Intel Inc.",
+                            renderer="Intel Iris OpenGL Engine",
+                            fix_hairline=True,
+                        )
+                        stealth_applied = True
+                    except ValueError: pass
+                
+                if not stealth_applied:
+                    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                        "source": """
+                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                            window.navigator.chrome = { runtime: {} };
+                            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                            const originalQuery = window.navigator.permissions.query;
+                            window.navigator.permissions.query = (parameters) => (
+                                parameters.name === 'notifications' ?
+                                Promise.resolve({ state: Notification.permission }) :
+                                originalQuery(parameters)
+                            );
+                        """
+                    })
+            return driver
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패: {e}")
+            raise
+        finally:
+            socket.setdefaulttimeout(original_timeout)
+
+
+    @classmethod
+    def _quit_selenium_driver(cls, driver):
+        if driver:
+            try: driver.quit()
+            except: pass
+
+
+    @classmethod
+    def _get_page_content_selenium(cls, driver, url, wait_for_locator):
+        """
+        Selenium을 사용하여 페이지 내용을 가져옵니다.
+        공통적인 성인 인증 클릭 및 Cloudflare 우회 로직이 포함되어 있습니다.
+        """
+        driver.get(url)
+        time.sleep(3) # 로딩 대기
+
+        # 1. 공통 성인 인증 버튼 처리
+        try:
+            # 일반적인 텍스트 기반 탐색
+            enter_btns = driver.find_elements(By.XPATH, '//a[contains(text(), "I am over 18")] | //button[contains(text(), "I am over 18")] | //a[contains(@href, "adult")] | //a[contains(text(), "Enter")] | //a[contains(@class, "btn_yes")]')
+            if enter_btns:
+                # logger.debug(f"[{cls.site_name}] Adult verification button found. Clicking...")
+                enter_btns[0].click()
+                time.sleep(2)
+        except: pass
+
+        # 2. Cloudflare Turnstile (Shadow DOM)
+        if "Just a moment" in driver.title or "Cloudflare" in driver.title:
+            logger.debug(f"[{cls.site_name}] Cloudflare detected. Attempting bypass...")
+            try:
+                driver.execute_script("""
+                    setInterval(() => {
+                        function findAndClick(root) {
+                            const checkbox = root.querySelector('input[type="checkbox"]');
+                            if (checkbox && !checkbox.checked) {
+                                checkbox.click();
+                                return true;
+                            }
+                            const all = root.querySelectorAll('*');
+                            for (let el of all) {
+                                if (el.shadowRoot) findAndClick(el.shadowRoot);
+                            }
+                        }
+                        findAndClick(document);
+                    }, 1000);
+                """)
+                time.sleep(8)
+            except Exception as e:
+                logger.debug(f"[{cls.site_name}] Bypass script error: {e}")
+
+        # 3. 결과 대기
+        timeout = cls.config.get('selenium_timeout', 30)
+        try:
+            WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
+        except TimeoutException:
+            # 타임아웃 시 디버깅용 파일 저장
+            try:
+                import os
+                tmp_dir = '/data/tmp'
+                if not os.path.exists(tmp_dir): os.makedirs(tmp_dir, exist_ok=True)
+                timestamp = int(time.time())
+                
+                # HTML 저장
+                # filename = f"{cls.site_name}_timeout_{timestamp}.html"
+                # with open(os.path.join(tmp_dir, filename), 'w', encoding='utf-8') as f:
+                #     f.write(driver.page_source)
+                
+                # 스크린샷 저장
+                driver.save_screenshot(os.path.join(tmp_dir, f"{cls.site_name}_timeout_{timestamp}.png"))
+                logger.error(f"[{cls.site_name}] Timeout waiting for element. Screenshot saved.")
+            except: pass
+            
+            return None, driver.page_source
+
+        return html.fromstring(driver.page_source), driver.page_source
+
+
+    @classmethod
+    def _get_page_content_flaresolverr(cls, url, validator=None):
+        """
+        FlareSolverr를 사용하여 페이지 내용을 가져옵니다.
+        쿠키 재사용 및 재시도 로직이 포함되어 있습니다.
+        """
+        flaresolverr_url = cls.config.get('flaresolverr_url', '').rstrip('/')
+        if not flaresolverr_url: return None, None
+        
+        api_url = f"{flaresolverr_url}/v1"
+        payload = {
+            "cmd": "request.get",
+            "url": url,
+            "maxTimeout": 60000,
+        }
+        
+        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
+            payload["proxy"] = {"url": cls.config['proxy_url']}
+
+        # 재시도 루프 (최대 3회)
+        for attempt in range(3):
+            # 쿠키 재사용 로직
+            if cls._cf_cookies and (time.time() - cls._cf_cookie_timestamp < cls.CF_COOKIE_EXPIRY):
+                cookies_payload = []
+                for k, v in cls._cf_cookies.items():
+                    cookie_dict = {
+                        "name": k, 
+                        "value": v,
+                        "domain": urlparse(url).hostname,
+                        "path": "/"
+                    }
+                    cookies_payload.append(cookie_dict)
+                payload["cookies"] = cookies_payload
+
+            try:
+                # logger.debug(f"[{cls.site_name}] Requesting FlareSolverr (Attempt {attempt+1}): {url}")
+                res = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=65)
+                
+                if res.status_code == 200:
+                    data = res.json()
+                    if data.get('status') == 'ok':
+                        html_source = data['solution']['response']
+                        tree = html.fromstring(html_source)
+                        
+                        # 쿠키 갱신
+                        if 'cookies' in data['solution']:
+                            new_cookies = {}
+                            for c in data['solution']['cookies']:
+                                new_cookies[c['name']] = c['value']
+                            cls._cf_cookies.update(new_cookies)
+                            cls._cf_cookie_timestamp = time.time()
+
+                        # 결과 검증 (Validator)
+                        if validator:
+                            if validator(tree):
+                                return tree, html_source
+                            else:
+                                logger.debug(f"[{cls.site_name}] FlareSolverr success but validation failed. Retrying...")
+                                time.sleep(2)
+                                continue
+                        else:
+                            return tree, html_source
+                    else:
+                        logger.warning(f"[{cls.site_name}] FlareSolverr error: {data}")
+                else:
+                    logger.warning(f"[{cls.site_name}] FlareSolverr HTTP Error: {res.status_code}")
+            except Exception as e:
+                logger.error(f"[{cls.site_name}] FlareSolverr Connection Error: {e}")
+            
+            # 실패 시 잠시 대기 후 재시도
+            time.sleep(2)
+        
+        return None, None
+
+    # ---------------------------------------------------------
+    # endregion Selenium & FlareSolverr Common Methods
+    # ---------------------------------------------------------
 
 
     @classmethod

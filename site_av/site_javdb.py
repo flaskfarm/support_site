@@ -1,37 +1,12 @@
-import re, time
-import traceback
+# -*- coding: utf-8 -*-
+import re
+import urllib.parse as py_urllib_parse
 from lxml import html
 import os 
-import urllib.parse as py_urllib_parse
-from PIL import Image
-import socket
-from urllib.parse import urlparse
-import base64
-import zipfile
-from io import BytesIO
-import requests
-
-# Selenium imports
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, WebDriverException
-    is_selenium_available = True
-except ImportError:
-    is_selenium_available = False
-
-# selenium-stealth import
-try:
-    from selenium_stealth import stealth
-    is_stealth_available = True
-except ImportError:
-    is_stealth_available = False
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
-from ..setup import P, logger, path_data
+from ..setup import P, logger, F, path_data
 from .site_av_base import SiteAvBase
 
 SITE_BASE_URL = 'https://javdb.com'
@@ -42,10 +17,6 @@ class SiteJavdb(SiteAvBase):
     module_char = 'C'
     default_headers = SiteAvBase.base_default_headers.copy()
     default_headers.update({"Referer": SITE_BASE_URL + "/"})
-
-    _cf_cookies = {} # { 'cookie_name': 'value', ... }
-    _cf_cookie_timestamp = 0
-    CF_COOKIE_EXPIRY = 3600 # 1시간
 
     ################################################
     # region SEARCH
@@ -80,14 +51,16 @@ class SiteJavdb(SiteAvBase):
         
         # 1순위: FlareSolverr 사용
         if cls.config.get('use_flaresolverr') and cls.config.get('flaresolverr_url'):
-            tree, _ = cls._get_page_content_flaresolverr(search_url)
+            validator = lambda t: t.xpath('//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]') or t.xpath('//div[contains(@class, "empty-message")]')
+            tree, _ = cls._get_page_content_flaresolverr(search_url, validator=validator)
             if tree is None:
                 logger.warning("JavDB Search: FlareSolverr failed. Falling back if possible.")
 
-        # 2순위: Selenium 사용 (FlareSolverr 실패 시 또는 미설정 시)
-        if tree is None and cls.config.get('use_selenium', False) and is_selenium_available:
+        # 2순위: Selenium 사용
+        if tree is None and cls.config.get('use_selenium', False):
             driver = None
             try:
+                from selenium.webdriver.common.by import By
                 driver = cls._get_selenium_driver()
                 wait_locator = (By.XPATH, '//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]')
                 tree, _ = cls._get_page_content_selenium(driver, search_url, wait_for_locator=wait_locator)
@@ -96,7 +69,7 @@ class SiteJavdb(SiteAvBase):
             finally:
                 cls._quit_selenium_driver(driver)
         
-        # 3순위: 일반 Requests (FlareSolverr/Selenium 모두 없을 때)
+        # 3순위: 일반 Requests
         if tree is None:
             custom_cookies_for_search = {'over18': '1'}
             res_for_search = cls.get_response_cs(search_url, cookies=custom_cookies_for_search)
@@ -107,13 +80,10 @@ class SiteJavdb(SiteAvBase):
                     logger.warning(f"JavDB Search: Status code {res_for_search.status_code} for URL: {res_for_search.url}")
                     if "cf-error-details" in html_content_text or "Cloudflare to restrict access" in html_content_text:
                         logger.error(f"JavDB Search: Cloudflare restriction page detected.")
-                
                 try:
                     tree = html.fromstring(html_content_text)
                 except Exception as e_parse:
                     logger.error(f"JavDB Search: Failed to parse HTML: {e_parse}")
-            else:
-                logger.error(f"JavDB Search: Failed to get response for keyword '{kw_ui_code}'.")
 
         if tree is None:
             return []
@@ -176,8 +146,7 @@ class SiteJavdb(SiteAvBase):
                             break
 
                 if manual: 
-                    # FlareSolverr를 쓸 때는 make_image_url(프록시)을 쓰지 않고 원본 URL 사용
-                    # (FlareSolverr가 이미지를 직접 다운로드해주진 않으므로)
+                    # FlareSolverr 사용 시에는 프록시 URL 생성을 피함 (이미지 직접 다운로드 불가)
                     if cls.config.get('use_proxy') and not cls.config.get('flaresolverr_url'):
                         item.image_url = cls.make_image_url(item.image_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
@@ -226,7 +195,7 @@ class SiteJavdb(SiteAvBase):
             ret["data"] = str(e)
             logger.exception(f"JavDB info error: {e}")
         return ret
-
+    
 
     @classmethod
     def __info(cls, code, keyword=None, fp_meta_mode=False):
@@ -254,14 +223,16 @@ class SiteJavdb(SiteAvBase):
         
         # 1순위: FlareSolverr 사용
         if cls.config.get('use_flaresolverr') and cls.config.get('flaresolverr_url'):
-            tree, _ = cls._get_page_content_flaresolverr(detail_url)
+            validator = lambda t: t.xpath('//h2[@class="title is-4"]')
+            tree, _ = cls._get_page_content_flaresolverr(detail_url, validator=validator)
             if tree is None:
                 logger.warning("JavDB Info: FlareSolverr failed.")
 
         # 2순위: Selenium 사용
-        if tree is None and cls.config.get('use_selenium', False) and is_selenium_available:
+        if tree is None and cls.config.get('use_selenium', False):
             driver = None
             try:
+                from selenium.webdriver.common.by import By
                 driver = cls._get_selenium_driver()
                 wait_locator = (By.XPATH, '//h2[@class="title is-4"]')
                 tree, _ = cls._get_page_content_selenium(driver, detail_url, wait_for_locator=wait_locator)
@@ -460,227 +431,18 @@ class SiteJavdb(SiteAvBase):
 
 
     @classmethod
-    def _get_page_content_flaresolverr(cls, url):
-        flaresolverr_url = cls.config.get('flaresolverr_url', '').rstrip('/')
-        if not flaresolverr_url: return None, None
-        
-        api_url = f"{flaresolverr_url}/v1"
-        payload = {
-            "cmd": "request.get",
-            "url": url,
-            "maxTimeout": 60000,
-        }
-        
-        # 프록시 설정
-        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
-            payload["proxy"] = {"url": cls.config['proxy_url']}
-
-        # 쿠키 재사용 로직
-        if cls._cf_cookies and (time.time() - cls._cf_cookie_timestamp < cls.CF_COOKIE_EXPIRY):
-            cookies_payload = []
-            for k, v in cls._cf_cookies.items():
-                cookie_dict = {
-                    "name": k, 
-                    "value": v,
-                    "domain": urlparse(url).hostname, # 도메인 필수
-                    "path": "/"                       # 경로 필수
-                }
-                cookies_payload.append(cookie_dict)
-            
-            payload["cookies"] = cookies_payload
-
-        try:
-            logger.debug(f"JavDB: Requesting FlareSolverr: {url}")
-            res = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=65)
-            if res.status_code == 200:
-                data = res.json()
-                if data.get('status') == 'ok':
-                    html_source = data['solution']['response']
-                    
-                    if 'cookies' in data['solution']:
-                        new_cookies = {}
-                        for c in data['solution']['cookies']:
-                            new_cookies[c['name']] = c['value']
-                        
-                        cls._cf_cookies.update(new_cookies)
-                        cls._cf_cookie_timestamp = time.time()
-
-                    return html.fromstring(html_source), html_source
-                else:
-                    logger.warning(f"JavDB: FlareSolverr returned error status: {data}")
-            else:
-                logger.warning(f"JavDB: FlareSolverr HTTP Error: {res.status_code}")
-        except Exception as e:
-            logger.error(f"JavDB: FlareSolverr Connection Error: {e}")
-        
-        return None, None
-
-
-    # --- Selenium 메서드 ---
-    @classmethod
-    def _get_page_content_selenium(cls, driver, url, wait_for_locator):
-        driver.get(url)
-        time.sleep(5)
-        
-        try:
-            enter_btns = driver.find_elements(By.XPATH, '//a[contains(text(), "I am over 18")] | //button[contains(text(), "I am over 18")]')
-            if enter_btns:
-                enter_btns[0].click()
-                time.sleep(2)
-        except: pass
-
-        if "Just a moment" in driver.title or "Cloudflare" in driver.title:
-            logger.debug(f"[{cls.site_name}] Cloudflare detected. Attempting bypass...")
-            try:
-                driver.execute_script("""
-                    setInterval(() => {
-                        function findAndClick(root) {
-                            const checkbox = root.querySelector('input[type="checkbox"]');
-                            if (checkbox && !checkbox.checked) {
-                                checkbox.click();
-                                return true;
-                            }
-                            const all = root.querySelectorAll('*');
-                            for (let el of all) {
-                                if (el.shadowRoot) findAndClick(el.shadowRoot);
-                            }
-                        }
-                        findAndClick(document);
-                    }, 1000);
-                """)
-                time.sleep(10)
-            except Exception as e:
-                logger.debug(f"[{cls.site_name}] Bypass script error: {e}")
-
-        timeout = cls.config.get('selenium_timeout', 20)
-        try:
-            WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
-        except TimeoutException:
-            try:
-                import os
-                tmp_dir = '/data/tmp'
-                if not os.path.exists(tmp_dir): os.makedirs(tmp_dir, exist_ok=True)
-                driver.save_screenshot(os.path.join(tmp_dir, f"javdb_fail_{int(time.time())}.png"))
-                logger.error(f"[{cls.site_name}] Timeout. Screenshot saved.")
-            except: pass
-            
-            return None, driver.page_source
-
-        return html.fromstring(driver.page_source), driver.page_source
-
-
-    @classmethod
-    def _get_selenium_driver(cls):
-        if not is_selenium_available:
-            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다.")
-        selenium_url = cls.config.get('selenium_url')
-        if not selenium_url: raise Exception("Selenium 서버 URL이 설정되지 않았습니다.")
-        
-        driver_type = cls.config.get('selenium_driver_type', 'chrome')
-        logger.debug(f"[{cls.site_name}] Preparing Selenium driver. Type: {driver_type}")
-
-        if driver_type == 'firefox':
-            options = webdriver.FirefoxOptions()
-            options.add_argument('--headless')
-        else:
-            options = webdriver.ChromeOptions()
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--disable-blink-features=AutomationControlled")
-            options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            options.add_experimental_option('useAutomationExtension', False)
-            options.add_argument("--disable-infobars")
-            options.add_argument("--window-size=1920,1080")
-            options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-
-        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
-            proxy_url = cls.config["proxy_url"]
-            if driver_type == 'firefox':
-                if '@' in proxy_url:
-                    parsed_proxy = urlparse(proxy_url)
-                    proxy_url = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
-                parsed_proxy = urlparse(proxy_url)
-                options.set_preference("network.proxy.type", 1)
-                options.set_preference("network.proxy.http", parsed_proxy.hostname)
-                options.set_preference("network.proxy.http_port", parsed_proxy.port)
-                options.set_preference("network.proxy.ssl", parsed_proxy.hostname)
-                options.set_preference("network.proxy.ssl_port", parsed_proxy.port)
-            else:
-                options.add_argument(f'--proxy-server={proxy_url}')
-
-        original_timeout = socket.getdefaulttimeout()
-        try:
-            socket.setdefaulttimeout(20)
-            driver = webdriver.Remote(command_executor=selenium_url, options=options)
-            
-            if driver_type == 'chrome' and is_stealth_available:
-                try:
-                    stealth(driver,
-                        languages=["en-US", "en"],
-                        vendor="Google Inc.",
-                        platform="Win32",
-                        webgl_vendor="Intel Inc.",
-                        renderer="Intel Iris OpenGL Engine",
-                        fix_hairline=True,
-                    )
-                    logger.debug(f"[{cls.site_name}] selenium-stealth applied.")
-                except ValueError as e:
-                    logger.warning(f"[{cls.site_name}] selenium-stealth failed (Remote Driver issue): {e}")
-                    logger.debug(f"[{cls.site_name}] Applying manual CDP stealth script instead.")
-                    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                        "source": """
-                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                            window.navigator.chrome = { runtime: {} };
-                            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-                            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                            const originalQuery = window.navigator.permissions.query;
-                            window.navigator.permissions.query = (parameters) => (
-                                parameters.name === 'notifications' ?
-                                Promise.resolve({ state: Notification.permission }) :
-                                originalQuery(parameters)
-                            );
-                        """
-                    })
-            elif driver_type == 'chrome':
-                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                    "source": """
-                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                        window.navigator.chrome = { runtime: {} };
-                        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-                        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                    """
-                })
-                logger.debug(f"[{cls.site_name}] Manual CDP stealth script applied.")
-
-            return driver
-        finally:
-            socket.setdefaulttimeout(original_timeout)
-
-
-    @classmethod
-    def _quit_selenium_driver(cls, driver):
-        if driver:
-            try: driver.quit()
-            except: pass
-
-
-    @classmethod
     def __img_urls(cls, tree):
         ret = {'ps': None, 'pl': None, 'arts': [], 'specific_poster_candidates': []}
         try:
-            # PL (메인 커버)
             pl_nodes = tree.xpath('//div[@class="column column-video-cover"]//img[@class="video-cover"]/@src')
             if pl_nodes:
                 pl_url = pl_nodes[0].strip()
                 ret['pl'] = "https:" + pl_url if pl_url.startswith("//") else pl_url
 
-            # Arts (샘플 이미지)
             arts_nodes = tree.xpath('//div[contains(@class, "preview-images")]/a[@class="tile-item"]/@href')
             arts_urls = ["https:" + href if href.startswith("//") else href for href in arts_nodes]
             ret['arts'] = list(dict.fromkeys(arts_urls))
 
-            # specific_poster_candidates
-            # JavDB는 VR 콘텐츠의 경우 첫 번째 샘플 이미지가 포스터일 수 있음
             if ret['arts']:
                 ret['specific_poster_candidates'].append(ret['arts'][0])
         except Exception as e:
@@ -692,22 +454,6 @@ class SiteJavdb(SiteAvBase):
     # endregion INFO
     ################################################
 
-    # --- 삭제할 코드 ---
-    @classmethod
-    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
-        if not ui_code_str or not isinstance(ui_code_str, str): 
-            return ""
-        ui_code_upper = ui_code_str.upper()
-        if '-' in ui_code_upper:
-            return ui_code_upper.split('-', 1)[0]
-        else: 
-            match = re.match(r'^([A-Z]+)', ui_code_upper)
-            if match:
-                return match.group(1)
-            return ui_code_upper
-
-
-
     ################################################
     # region SiteAvBase 메서드 오버라이드
 
@@ -715,13 +461,12 @@ class SiteJavdb(SiteAvBase):
     def set_config(cls, db):
         super().set_config(db)
         cls.config.update({
-            "use_selenium": db.get_bool(f"jav_censored_{cls.site_name}_use_selenium"),
+            "use_selenium": db.get_bool(f"jav_censored_{cls.site_name}_use_selenium"), 
             "use_flaresolverr": db.get_bool(f"jav_censored_{cls.site_name}_use_flaresolverr"),
             "crop_mode": db.get_list(f"jav_censored_{cls.site_name}_crop_mode", ","),
             "priority_labels": db.get_list(f"jav_censored_{cls.site_name}_priority_search_labels", ","),
         })
         cls.config['priority_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('priority_labels', []) if lbl.strip()}
-
 
 
     # endregion SiteAvBase 메서드 오버라이드

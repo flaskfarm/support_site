@@ -1,28 +1,12 @@
 # -*- coding: utf-8 -*-
 import re
 import os
-import traceback
 import time
-from urllib.parse import urljoin, urlparse
 from threading import Lock
-import base64
-import zipfile
-import socket
-from io import BytesIO
-
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, WebDriverException, InvalidSessionIdException
-    is_selenium_available = True
-except ImportError:
-    is_selenium_available = False
-
 from lxml import html
+
 from ..entity_av import EntityAVSearch
-from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
+from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
@@ -39,19 +23,18 @@ class SiteFc2com(SiteAvBase):
 
     _dynamic_suffix = "?dref=search_id"
     _page_source_cache = {}
-    _cache_lock = Lock() # 캐시 딕셔너리 접근을 보호하기 위한 Lock
+    _cache_lock = Lock()
 
     @classmethod
     def search(cls, keyword, manual=False):
-        if not is_selenium_available:
-            logger.warning(f"[{cls.site_name}] Selenium 라이브러리가 설치되지 않아 비활성화되었습니다. (pip install 'selenium<4.10')")
-            return {'ret': 'no_match', 'data': []}
+        # Selenium 필수 체크
         if not cls.config.get('selenium_url'):
-            logger.warning(f"[{cls.site_name}] Selenium URL이 설정되지 않아 비활성화되었습니다. (Censored 플러그인 설정 확인 필요)")
+            logger.warning(f"[{cls.site_name}] Selenium URL is not configured. FC2 search disabled.")
             return {'ret': 'no_match', 'data': []}
 
         driver = None
         try:
+            from selenium.webdriver.common.by import By
             driver = cls._get_selenium_driver()
 
             match = re.search(r'(\d{6,7})', keyword)
@@ -62,7 +45,8 @@ class SiteFc2com(SiteAvBase):
             search_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
 
             detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
-            tree, page_source_text = cls._get_page_content(driver, search_url, wait_for_locator=detail_page_wait_locator)
+            # 공용 메서드 호출
+            tree, page_source_text = cls._get_page_content_selenium(driver, search_url, wait_for_locator=detail_page_wait_locator)
 
             if page_source_text:
                 with cls._cache_lock:
@@ -101,17 +85,13 @@ class SiteFc2com(SiteAvBase):
             return {'ret': 'success', 'data': [item.as_dict()]}
         except Exception as e:
             logger.error(f'[{cls.site_name} Search] Exception: {e}')
-            logger.error(traceback.format_exc())
             return {'ret': 'exception', 'data': str(e)}
         finally:
-            if driver:
-                cls._quit_selenium_driver(driver)
+            cls._quit_selenium_driver(driver)
 
 
     @classmethod
     def info(cls, code, fp_meta_mode=False):
-        if not is_selenium_available:
-            return {'ret': 'error', 'data': 'Selenium library is not installed.'}
         if not cls.config.get('selenium_url'):
             return {'ret': 'error', 'data': 'Selenium URL is not set.'}
 
@@ -142,13 +122,13 @@ class SiteFc2com(SiteAvBase):
 
         if tree is None:
             try:
+                from selenium.webdriver.common.by import By
                 driver = cls._get_selenium_driver()
                 info_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
                 detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
-                tree, _ = cls._get_page_content(driver, info_url, wait_for_locator=detail_page_wait_locator)
+                tree, _ = cls._get_page_content_selenium(driver, info_url, wait_for_locator=detail_page_wait_locator)
             finally:
-                if driver:
-                    cls._quit_selenium_driver(driver)
+                cls._quit_selenium_driver(driver)
 
         if tree is None: return None
 
@@ -205,23 +185,15 @@ class SiteFc2com(SiteAvBase):
                 code_match = re.search(r'(\d+)$', entity.ui_code)
                 if code_match:
                     num_part = code_match.group(1)
-
-                    # 7자리로 패딩 후 앞 3자리 추출
                     padded_num = num_part.zfill(7)
                     sub_folder = padded_num[:3]
-
-                    # 전체 경로 조합
                     local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
                     server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format') # 예: /jav/uncen/{label}
+                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
                     base_path_part = base_save_format.format(label=entity.label) 
-
                     final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), sub_folder)
-
                     entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
                     entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-                    logger.debug(f"[{cls.site_name}] Custom image server path set for {entity.ui_code}: {entity.image_server_target_folder}")
-
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
 
@@ -237,157 +209,6 @@ class SiteFc2com(SiteAvBase):
         return entity
 
 
-    @classmethod
-    def _get_selenium_driver(cls):
-        if not is_selenium_available:
-            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다. (pip install 'selenium<4.10')")
-
-        selenium_url = cls.config.get('selenium_url')
-        if not selenium_url:
-            raise Exception("Selenium 서버 URL이 설정되지 않았습니다.")
-
-        driver_type = cls.config.get('selenium_driver_type', 'chrome')
-        logger.debug(f"[{cls.site_name}] Preparing Selenium driver. Type: {driver_type}")
-
-        if driver_type == 'firefox':
-            options = webdriver.FirefoxOptions()
-            options.add_argument('--headless')
-        else: # 기본값은 chrome
-            options = webdriver.ChromeOptions()
-            options.add_argument('--headless=new')
-            # Chrome 전용 자동화 탐지 우회 옵션
-            options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            options.add_experimental_option('useAutomationExtension', False)
-            options.add_argument('--disable-blink-features=AutomationControlled')
-
-        # 공통 옵션
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        options.add_argument(f'user-agent={user_agent}')
-        options.add_argument("--disable-infobars")
-
-        # --- START: 드라이버 타입에 따른 프록시 설정 분기 ---
-        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
-            proxy_url = cls.config["proxy_url"]
-            # logger.debug(f"[{cls.site_name}] Selenium using proxy: {proxy_url}")
-
-            # Firefox 프록시 설정
-            if driver_type == 'firefox':
-                if '@' in proxy_url:
-                    logger.warning(f"[{cls.site_name}] Authenticated proxy is not supported for Firefox. Using proxy without authentication info.")
-                    # 인증 정보 제거
-                    parsed_proxy = urlparse(proxy_url)
-                    proxy_url = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
-
-                logger.debug(f"[{cls.site_name}] Setting Firefox proxy via preferences: {proxy_url}")
-                parsed_proxy = urlparse(proxy_url)
-                options.set_preference("network.proxy.type", 1)
-                options.set_preference("network.proxy.http", parsed_proxy.hostname)
-                options.set_preference("network.proxy.http_port", parsed_proxy.port)
-                options.set_preference("network.proxy.ssl", parsed_proxy.hostname)
-                options.set_preference("network.proxy.ssl_port", parsed_proxy.port)
-                options.set_preference("network.proxy.no_proxies_on", f"localhost, 127.0.0.1, {urlparse(selenium_url).hostname}")
-
-            # Chrome 프록시 설정
-            else:
-                if '@' in proxy_url:
-                    try:
-                        parsed_proxy = urlparse(proxy_url)
-                        proxy_host, proxy_port = parsed_proxy.hostname, parsed_proxy.port
-                        proxy_user, proxy_pass = parsed_proxy.username, parsed_proxy.password
-                        proxy_scheme = parsed_proxy.scheme or 'http'
-
-                        manifest_json = """
-                        {
-                            "version": "1.0.0", "manifest_version": 2, "name": "Chrome Proxy",
-                            "permissions": [ "proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking" ],
-                            "background": { "scripts": ["background.js"] }
-                        }
-                        """
-                        background_js = f"""
-                        var config = {{
-                            mode: "fixed_servers",
-                            rules: {{
-                                singleProxy: {{
-                                    scheme: "{proxy_scheme}", host: "{proxy_host}", port: parseInt({proxy_port})
-                                }},
-                                bypassList: ["localhost", "127.0.0.1", "{urlparse(selenium_url).hostname}"]
-                            }}
-                        }};
-                        chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
-                        function callbackFn(details) {{
-                            return {{ authCredentials: {{ username: "{proxy_user}", password: "{proxy_pass}" }} }};
-                        }}
-                        chrome.webRequest.onAuthRequired.addListener(callbackFn,{{urls: ["<all_urls>"]}},['blocking']);
-                        """
-
-                        zip_buffer = BytesIO()
-                        with zipfile.ZipFile(zip_buffer, 'w') as zp:
-                            zp.writestr("manifest.json", manifest_json)
-                            zp.writestr("background.js", background_js)
-
-                        extension_b64 = base64.b64encode(zip_buffer.getvalue()).decode('utf-8')
-                        options.add_encoded_extension(extension_b64)
-                    except Exception as e:
-                        logger.error(f"[{cls.site_name}] Failed to create proxy auth extension, falling back: {e}")
-                        options.add_argument(f'--proxy-server={proxy_url}')
-                else:
-                    options.add_argument(f'--proxy-server={proxy_url}')
-
-        original_timeout = socket.getdefaulttimeout()
-        try:
-            socket.setdefaulttimeout(20)
-            logger.debug(f"[{cls.site_name}] Connecting to Selenium at: {selenium_url} (20s timeout)")
-            driver = webdriver.Remote(command_executor=selenium_url, options=options)
-
-            # Chrome 전용 자동화 탐지 우회 스크립트
-            if driver_type == 'chrome':
-                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-            return driver
-        except (socket.timeout, TimeoutError) as e:
-            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 시간이 20초를 초과했습니다: {e}")
-            raise WebDriverException("Selenium 서버 연결 시간 초과") from e
-        except WebDriverException as e:
-            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패: {e}")
-            raise
-        finally:
-            socket.setdefaulttimeout(original_timeout)
-
-
-    @classmethod
-    def _quit_selenium_driver(cls, driver):
-        if driver:
-            try:
-                driver.quit()
-            except Exception as e:
-                logger.warning(f"[{cls.site_name}] Exception during driver.quit(): {e}")
-
-
-    @classmethod
-    def _get_page_content(cls, driver, url, wait_for_locator):
-        driver.get(url)
-
-        # 성인 인증 쿠키 주입 (이미 접속한 상태에서)
-        try:
-            driver.add_cookie({'name': 'coc', 'value': '1', 'domain': '.fc2.com', 'path': '/'})
-            driver.add_cookie({'name': 'mgs_agef', 'value': '1', 'domain': '.fc2.com', 'path': '/'})
-            # 필요한 경우 페이지 새로고침
-            # driver.refresh() 
-        except Exception as e:
-            logger.debug(f"[{cls.site_name}] Failed to add cookies: {e}")
-
-        timeout = cls.config.get('selenium_timeout', 10)
-        WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
-
-        page_source = driver.page_source
-        if "お探しのページは見つかりませんでした。" in page_source:
-            return None, page_source
-        return html.fromstring(page_source), page_source
-
-
     @staticmethod
     def _extract_fc2com_title(h3_element):
         return ' '.join(h3_element.xpath(".//text()")).strip() if h3_element is not None else ""
@@ -397,12 +218,10 @@ class SiteFc2com(SiteAvBase):
     def _normalize_url(cls, src, base_url, upgrade_size=True):
         if not src: return None
         normalized_src = src
-
         if upgrade_size:
             if match := re.search(r'/w(\d+)/', src):
                 if int(match.group(1)) < 1000:
                     normalized_src = src.replace(f'/w{match.group(1)}/', '/w1000/')
-
         if normalized_src.startswith('//'): return 'https:' + normalized_src
         if normalized_src.startswith('/'): return urljoin(base_url, src)
         return normalized_src
