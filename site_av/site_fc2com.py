@@ -47,7 +47,7 @@ class SiteFc2com(SiteAvBase):
             logger.warning(f"[{cls.site_name}] Selenium 라이브러리가 설치되지 않아 비활성화되었습니다. (pip install 'selenium<4.10')")
             return {'ret': 'no_match', 'data': []}
         if not cls.config.get('selenium_url'):
-            logger.warning(f"[{cls.site_name}] Selenium URL이 설정되지 않아 비활성화되었습니다.")
+            logger.warning(f"[{cls.site_name}] Selenium URL이 설정되지 않아 비활성화되었습니다. (Censored 플러그인 설정 확인 필요)")
             return {'ret': 'no_match', 'data': []}
 
         driver = None
