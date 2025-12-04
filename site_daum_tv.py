@@ -1,3 +1,4 @@
+import re
 import urllib.parse
 from datetime import datetime
 
@@ -21,6 +22,9 @@ class SiteDaumTv(SiteDaum):
         'spt': 'tv-info',
         'DA': 'TVP',
         'rtmaxcoll': 'TVP'
+    }
+    patterns = {
+        'season': (re.compile(r'시즌\s?(?P<season>\d+)', re.IGNORECASE),),
     }
 
     @classmethod
@@ -59,7 +63,7 @@ class SiteDaumTv(SiteDaum):
         logger.debug(f"Daum TV info: {code=} {title=}")
         cache_key = f"daum:tv:info:{code[2:]}"
         try:
-            if cached :=caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
+            if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable, print_log=True)():
                 return cached
             # request
             query = cls.get_request_query(q=title if title else 'TV', spId=code[2:])
@@ -121,8 +125,12 @@ class SiteDaumTv(SiteDaum):
             # series
             if card_tab.get('시리즈'):
                 try:
-                    series_html = cls.get_tree(card_tab.get('시리즈'))
-                    entity.series = cls.parse_series(series_html, card_title.get('code'))
+                    url_parts = urllib.parse.urlparse(card_tab.get('시리즈'))
+                    query = dict(urllib.parse.parse_qsl(url_parts.query))
+                    query['w'] = 'tv'
+                    series_url = urllib.parse.urlunparse((url_parts.scheme, url_parts.netloc, url_parts.path, url_parts.params, urllib.parse.urlencode(query), url_parts.fragment))
+                    series_html = cls.get_tree(series_url)
+                    entity.series = cls.parse_series(series_html)
                 except Exception:
                     logger.exception(f"시리즈를 검색하는 도중 오류가 발생했습니다: {error_info}")
 
@@ -197,6 +205,7 @@ class SiteDaumTv(SiteDaum):
         # common fields
         entity.code = sjva_code
         entity.title = card_title.get('title')
+        entity.season = cls.parse_season_number(entity.title)
         entity.studio = card_info.get('studio') or ""
         entity.status = sub_title_info.get('status')
         entity.year = sub_title_info.get('year')
@@ -296,12 +305,14 @@ class SiteDaumTv(SiteDaum):
                 if '예고' in clip.title:
                     continue
                 if clip.thumb:
+                    # sjva 에이전트에서 항상 'value' 키로 접근하니 주의(thumb만 있으면 안 됨)
                     entity.thumb.append(EntityThumb(aspect='landscape', value=clip.thumb, thumb=clip.thumb, site=cls.site_name, score=100 - idx))
 
         # 썸네일, 관련 영상의 썸네일을 먼저 사용하고 없을 경우 사용
         epi_thumbs = container.xpath('.//div[@class="player_sch"]//a[@class="thumb_bf"]/img')
         if epi_thumbs and not entity.thumb:
             thumb = cls.process_image_url(epi_thumbs[0])
+            # sjva 에이전트에서 항상 'value' 키로 접근하니 주의(thumb만 있으면 안 됨)
             entity.thumb.append(EntityThumb(aspect='landscape', value=thumb, thumb=thumb, site=cls.site_name, score=80))
 
         # 게스트 정보
@@ -408,25 +419,27 @@ class SiteDaumTv(SiteDaum):
         """
         동명프로그램, 시리즈
         """
-        additionals = []
+        additionals = {}
+        seasons = {}
         item_thumb_tags = html.xpath(".//ul/li//div[@class='item-thumb']") or html.xpath(".//div[@class='item-thumb']")
         for item_thumb_tag in item_thumb_tags:
-            code = title = thumb = year = link = studio = date = None
+            code = title = thumb = year = link = studio = date = timestamp = schedule_text = season = None
             data = cls.parse_thumb_and_bundle(item_thumb_tag)
             if not data or not (query := data.get('query')) or not query.get("spId"):
                 continue
+            spId = int(query["spId"])
             try:
+                code = cls.module_char + cls.site_char + str(spId)
                 if data.get('title'):
                     title = data.get('title')
+                    season = cls.parse_season_number(title)
                 if data.get('labels') and not title:
                     title = data.get('labels')[0]
-                if query.get("spId"):
-                    code = cls.module_char + cls.site_char + query.get('spId')
                 if query.get("q"):
                     title = query.get("q")
                     query['w'] = 'tv'
                     link = cls.get_request_url(query=query)
-                if data.get('thumb'):
+                if data.get('thumb') and data.get('thumb').startswith('http'):
                     thumb = data.get('thumb')
                 if data.get('descs'):
                     studio = data.get('descs').get('studio')
@@ -440,23 +453,35 @@ class SiteDaumTv(SiteDaum):
                         if date_time:
                             date = date_time.strftime("%Y-%m-%d")
                             year = date_time.year
+                            timestamp = int(date_time.timestamp())
                             break
-                additionals.append({
-                   "code": code,
-                   "title": title,
-                   "year": year or 1900,
-                   "thumb": thumb or "",
-                   "studio": studio or "",
-                   "link": link or "",
-                   "status": -1,
-                   "date": date or "",
-                   "spId": int(query["spId"]),
-                })
+                additionals[spId] = {
+                    "code": code,
+                    "title": title,
+                    "year": year or 1900,
+                    "thumb": thumb or "",
+                    "studio": studio or "",
+                    "link": link or "",
+                    "status": -1,
+                    "date": date or "",
+                    "spId": spId,
+                    "timestamp": timestamp or 0,
+                    "schedule": schedule_text or "",
+                    "labels": data.get('labels') or [],
+                    "season": season or "",
+                }
+                seasons.setdefault(season, set()).add(spId)
             except Exception:
-                logger.exception(f"Failed to search more show...")
+                logger.exception(data)
+        for spids in seasons.values():
+            if len(spids) > 1:
+                # 중복되는 시즌이 있을 경우 처리
+                for spid in sorted(spids)[1:]:
+                    if additionals.get(spid):
+                        additionals[spid]['season'] = ""
         # sjva 에이전트에서 출시일 순(마지막을 최근 시즌으로)으로 인식
         try:
-            return sorted(additionals, key=lambda x: (x['year'], x['spId']))
+            return sorted(additionals.values(), key=lambda x: (x['year'], x['timestamp'], x['spId']))
         except Exception:
             logger.exception(f"시리즈/동명 정렬 실패")
         return additionals
@@ -522,9 +547,8 @@ class SiteDaumTv(SiteDaum):
             return []
 
     @classmethod
-    def parse_series(cls, container: HtmlElement, spid: str) -> list[dict]:
-        if (series_container := container.xpath(".//div[@id='tvpColl']//strong[contains(text(), '시리즈')]/following-sibling::div")):
-            #return [show for show in cls.parse_additional_shows(series_container[0]) if show.get('spId') != spid]
+    def parse_series(cls, container: HtmlElement) -> list[dict]:
+        if series_container := container.xpath(".//div[@id='tvpColl']//strong[contains(text(), '시리즈')]/following-sibling::div"):
             # 검색 결과에 본편을 제외하면 플렉스에서 매칭할 때 본편이 제외됨(series 필드가 있으면 그 값만 참조하는 것 같음)
             return cls.parse_additional_shows(series_container[0])
         else:
@@ -532,8 +556,8 @@ class SiteDaumTv(SiteDaum):
 
     @classmethod
     def parse_recent_clips(cls, container: HtmlElement) -> list[EntityExtra]:
-        if (recent_video_contaier := container.xpath('.//strong[contains(text(), "최신영상")]/../following-sibling::div[1]')):
-            return cls.parse_clips(recent_video_contaier[0])
+        if (recent_video_container := container.xpath('.//strong[contains(text(), "최신영상")]/../following-sibling::div[1]')):
+            return cls.parse_clips(recent_video_container[0])
         return []
 
     @classmethod
@@ -790,3 +814,12 @@ class SiteDaumTv(SiteDaum):
                     except Exception:
                         index = part
         return code, title, index
+
+    @classmethod
+    def parse_season_number(cls, title: str) -> int:
+        for pattern in cls.patterns['season']:
+            if match := pattern.search(title):
+                season_str = match.groupdict().get('season') or next((group for group in match.groups() if group), None)
+                if season_str and season_str.isdigit():
+                    return int(season_str)
+        return 1
