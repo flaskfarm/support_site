@@ -180,7 +180,9 @@ $("body").on('click', '#site_wavve_login_btn', function(e) {
   globalSendCommand('wavve_login', $('#site_wavve_profile').val(), null, null, function(ret){
     if (ret['ret'] == 'success') {
       $("#site_wavve_credential").val(ret['credential']);
-      $("#site_wavve_profile").val(ret['account']);
+      if (ret['account'] !== null && ret['account'] !== undefined) {
+        $("#site_wavve_profile").val(ret['account']);
+      }
     }
   });
 });
