@@ -89,8 +89,10 @@ class ModuleSite(PluginModuleBase):
                 P.ModelSetting.set('site_wavve_profile', arg1)
                 result = SupportWavve.do_login(account['id'], account['password'], account['profile'], account.get('device_id'))
                 if result[0]:
+                    ret['ret'] = 'success'
                     ret['msg'] = "로그인 성공<br>Credential을 갱신하였습니다."
                     ret['credential'] = result[1]['credential']
+                    ret['account'] = result[1]['account']
                 else:
                     ret['ret'] = 'warning'
                     ret['msg'] = "로그인에 실패하였습니다."
