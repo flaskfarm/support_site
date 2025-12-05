@@ -82,6 +82,7 @@ from .tool_discord import DiscordUtil
 
 from .site_av.site_1pondotv import Site1PondoTv
 from .site_av.site_10musume import Site10Musume
+from .site_av.site_paco import SitePaco
 from .site_av.site_carib import SiteCarib
 from .site_av.site_heyzo import SiteHeyzo
 from .site_av.site_fc2com import SiteFc2com

@@ -354,7 +354,7 @@ class SiteDmm(SiteAvBase):
             else: filtered_after_bluray.append(item_to_check_bluray)
 
         # --- 2.5단계: 접두사/접미사 변형판 필터링 (DOD 및 아울렛 포함) ---
-        logger.debug(f"DMM Search: Starting Variant filtering (DOD, Outlet). Items before: {len(filtered_after_bluray)}")
+        # logger.debug(f"DMM Search: Starting Variant filtering (DOD, Outlet). Items before: {len(filtered_after_bluray)}")
 
         title_variants_map = {}
         other_content_types = [] # DVD/Blu-ray가 아닌 타입은 그대로 유지
@@ -398,7 +398,7 @@ class SiteDmm(SiteAvBase):
                         # 우선순위가 같다면 (예: 일반판 vs 일반판 - 거의 발생 안 함, 또는 아울렛 vs 아울렛)
                         # 여기서는 추가적인 비교 없이 기존 것을 유지하거나, 다른 기준으로 선택 (예: 코드가 더 짧은 것 등)
                         # 일단은 기존 것 유지
-                        logger.debug(f"DMM Variant Filter: Item for base title '{base_title}' with same priority {priority_score}. Keeping existing: '{existing_item.get('title')}' over '{original_title}'")
+                        # logger.debug(f"DMM Variant Filter: Item for base title '{base_title}' with same priority {priority_score}. Keeping existing: '{existing_item.get('title')}' over '{original_title}'")
                         pass
 
             else: # DVD/Blu-ray가 아닌 타입은 그대로 리스트에 추가
