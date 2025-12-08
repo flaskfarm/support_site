@@ -216,7 +216,9 @@ class SiteDaum(object):
         if (c_tit_exact := container.find(".//div[@class='c-tit-exact']")) is None:
             logger.warning("No c-tit-exact found...")
             return data
-        if (a_tag := c_tit_exact.find("./div/div[@class='inner_header']//a")) is not None and a_tag.get('href'):
+        if a_tags := c_tit_exact.xpath("./div/div[@class='inner_header']//a"):
+            # '<a>일밤</a> - <a>미스터리 음악쇼 복면가왕</a>' -> 미스터리 음악쇼 복면가왕
+            a_tag = a_tags[-1]
             query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(a_tag.get('href')).query))
             if query.get("spId"):
                 data['code'] = query.get("spId")
