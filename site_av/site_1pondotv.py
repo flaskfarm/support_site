@@ -1,6 +1,10 @@
+# -*- coding: utf-8 -*-
 import re
 import os
 import traceback
+from io import BytesIO
+from PIL import Image
+
 from ..entity_av import EntityAVSearch
 from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
 from ..setup import P, logger
@@ -103,15 +107,12 @@ class Site1PondoTv(SiteAvBase):
         code_part = code[2:]
         json_data = None
 
-        # 1. 캐시에 데이터가 있는지 먼저 확인
+        # 1. 메인 정보(details) 캐시 확인 및 호출
         if code_part in cls._info_cache:
-            logger.debug(f"Using cached JSON data for 1pondo code: {code_part}")
             json_data = cls._info_cache[code_part]
-            del cls._info_cache[code_part] # 한 번 사용한 캐시는 메모리 관리를 위해 삭제
+            del cls._info_cache[code_part]
 
-        # 2. 캐시에 데이터가 없으면 API를 통해 직접 호출
         if json_data is None:
-            logger.debug(f"Cache miss for 1pondo code: {code_part}. Calling API.")
             url = f'{SITE_BASE_URL}/dyn/phpauto/movie_details/movie_id/{code_part}.json'
             try:
                 json_data = cls.get_response(url).json() or {}
@@ -122,7 +123,6 @@ class Site1PondoTv(SiteAvBase):
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = [u'일본']; entity.mpaa = u'청소년 관람불가'
-
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
         entity.original = {}
@@ -131,10 +131,9 @@ class Site1PondoTv(SiteAvBase):
         if not entity.ui_code: entity.ui_code = f'1pon-{code_part}'
 
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
-        entity.label = "1PON" # 이미지 서버 경로 포맷팅을 위해
+        entity.label = "1PON" 
 
         entity.premiered = json_data.get('Release')
-
         try:
             year_from_api = json_data.get('Year')
             if year_from_api:
@@ -147,23 +146,133 @@ class Site1PondoTv(SiteAvBase):
         except (ValueError, TypeError, IndexError):
             entity.year = 0
 
-        # 1. URL을 완전한 주소로 만들어주는 헬퍼 함수
+        # === 이미지 처리 섹션 ===
         def format_url(path):
             if path and isinstance(path, str):
                 return f"{SITE_BASE_URL}{path}" if path.startswith('/') else path
             return None
 
-        # 2. 모든 이미지 URL을 수집하고 완전한 주소로 변환
-        poster_url = format_url(json_data.get('MovieThumb'))
-        landscape_url = format_url(json_data.get('ThumbUltra'))
-        gallery_data = json_data.get('Gallery', [])
-        arts_urls = [format_url(p) for p in gallery_data if p] if isinstance(gallery_data, list) else []
+        # 1. 기본 URL 추출
+        movie_thumb_url = format_url(json_data.get('MovieThumb')) 
+        landscape_url = format_url(json_data.get('ThumbUltra'))   
+        
+        # 2. 갤러리 데이터 확보 (API -> Fallback API -> Main JSON)
+        gallery_rows = []
+        gallery_api_urls = [
+            f'{SITE_BASE_URL}/dyn/dla/json/movie_gallery/{code_part}.json',        # 신형
+            f'{SITE_BASE_URL}/dyn/phpauto/movie_galleries/movie_id/{code_part}.json' # 구형
+        ]
 
-        # 3. 포스터 폴백 로직 적용
-        if not poster_url and landscape_url:
-            logger.debug(f"[{cls.site_name}] Poster image is missing. Using landscape image as a fallback for poster.")
-            poster_url = landscape_url
+        for gal_api_url in gallery_api_urls:
+            try:
+                gal_res = cls.get_response(gal_api_url)
+                if gal_res and gal_res.status_code == 200:
+                    gal_json = gal_res.json()
+                    if gal_json and 'Rows' in gal_json:
+                        gallery_rows = gal_json['Rows']
+                        break
+            except Exception:
+                pass
 
+        # API 실패 시 기본 JSON 폴백
+        is_fallback_gallery = False
+        if not gallery_rows:
+            fallback_gallery = json_data.get('Gallery')
+            if isinstance(fallback_gallery, list):
+                gallery_rows = [{'Img': p} for p in fallback_gallery]
+                is_fallback_gallery = True
+
+        # 3. 갤러리 이미지 URL 리스트 생성 (Arts 후보)
+        arts_urls = []
+        for row in gallery_rows:
+            if row.get('Protected') is True:
+                continue
+
+            full_url = None
+            
+            # [Case A] 신형 API 또는 Main JSON (Key: Img)
+            if 'Img' in row:
+                img_path = row['Img']
+                if is_fallback_gallery:
+                    full_url = format_url(img_path)
+                else:
+                    full_url = f"{SITE_BASE_URL}/dyn/dla/images/{img_path}"
+            
+            # [Case B] 구형 API (Key: Filename)
+            # URL 형식: https://www.1pondo.tv/assets/sample/{code}/popu/{filename}
+            elif 'Filename' in row:
+                filename = row['Filename']
+                full_url = f"{SITE_BASE_URL}/assets/sample/{code_part}/popu/{filename}"
+
+            if full_url: arts_urls.append(full_url)
+
+        # 4. 포스터 탐색 로직 (세로 우선 -> 스마트크롭 후보 탐색)
+        poster_url = None
+        candidate_face_url = None
+        candidate_body_url = None
+        
+        use_smart = cls.config.get('use_smart_crop')
+        use_yolo = cls.config.get('use_yolo_crop')
+
+        # 갤러리 이미지 순회 (최대 12장)
+        for idx, curr_url in enumerate(arts_urls[:12]):
+            if poster_url: break
+
+            try:
+                res = cls.get_response(curr_url, stream=True, timeout=3)
+                if not res or res.status_code != 200: continue
+                
+                img_bytes = BytesIO(res.content)
+                with Image.open(img_bytes) as img:
+                    w, h = img.size
+                    
+                    # [1순위] 세로 이미지 발견 시 즉시 채택
+                    if h > w:
+                        poster_url = curr_url
+                        logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
+                        break
+                    
+                    # 스마트 크롭 후보군 탐색
+                    if use_smart:
+                        if candidate_face_url is None and cls.check_face_detection(img):
+                            candidate_face_url = curr_url
+                            logger.debug(f"[{cls.site_name}] Gallery Face candidate found (Index {idx}).")
+                            continue 
+                        
+                        if use_yolo and candidate_face_url is None and candidate_body_url is None and cls.check_body_detection(img):
+                            candidate_body_url = curr_url
+                            logger.debug(f"[{cls.site_name}] Gallery Body candidate found (Index {idx}).")
+            except Exception:
+                continue
+
+        # 5. 포스터 최종 결정
+        if not poster_url:
+            if candidate_face_url:
+                poster_url = candidate_face_url
+                logger.debug(f"[{cls.site_name}] Selected Face candidate from gallery.")
+            elif candidate_body_url:
+                poster_url = candidate_body_url
+                logger.debug(f"[{cls.site_name}] Selected Body candidate from gallery.")
+            elif use_smart and landscape_url:
+                # 갤러리 실패 시 PL 이미지 스마트 크롭 시도 (검증 추가)
+                try:
+                    res_pl = cls.get_response(landscape_url, stream=True, timeout=5)
+                    if res_pl and res_pl.status_code == 200:
+                        img_pl = Image.open(BytesIO(res_pl.content))
+                        if cls.check_face_detection(img_pl) or (use_yolo and cls.check_body_detection(img_pl)):
+                            poster_url = landscape_url
+                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) used for Smart Crop (Target detected).")
+                        else:
+                            poster_url = None # 인식 실패 시 PL 사용 안함
+                except Exception:
+                    pass
+
+            # 최후의 수단
+            if not poster_url:
+                poster_url = movie_thumb_url or landscape_url
+                logger.debug(f"[{cls.site_name}] Fallback to MovieThumb/PL.")
+
+        # 6. 이미지 서버 경로 설정
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
             try:
@@ -178,12 +287,14 @@ class Site1PondoTv(SiteAvBase):
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
 
+        # 7. 이미지 처리 위임
         try:
             raw_image_urls = {
                 'poster': poster_url,
                 'pl': landscape_url,
                 'arts': arts_urls,
             }
+            # process_image_data 내부에서 poster_url이 가로형이고 use_smart_crop이면 자동으로 크롭 수행
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
@@ -229,23 +340,14 @@ class Site1PondoTv(SiteAvBase):
         if cls.config.get('use_extras'):
             try:
                 sample_files = json_data.get('SampleFiles')
-                
-                # SampleFiles가 리스트이고, 비어있지 않은지 확인
                 if isinstance(sample_files, list) and sample_files:
-                    
-                    # 해상도를 기준으로 정렬하기 위한 헬퍼 함수
                     def get_resolution(file_info):
                         filename = file_info.get('FileName', '')
                         match = re.search(r'(\d+)p\.mp4', filename)
-                        if match:
-                            return int(match.group(1))
-                        # 해상도를 찾을 수 없으면 파일 크기를 기준으로 하되, 우선순위를 낮춤
-                        return file_info.get('FileSize', 0) / 1000000 # 단위를 맞추기 위해 조정
+                        if match: return int(match.group(1))
+                        return file_info.get('FileSize', 0) / 1000000 
 
-                    # get_resolution 함수의 결과를 기준으로 내림차순 정렬
                     sorted_samples = sorted(sample_files, key=get_resolution, reverse=True)
-                    
-                    # 가장 첫 번째 요소가 가장 고화질 영상
                     best_quality_video = sorted_samples[0]
                     
                     if best_quality_video and best_quality_video.get('URL'):

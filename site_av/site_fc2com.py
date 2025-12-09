@@ -4,6 +4,7 @@ import os
 import time
 from threading import Lock
 from lxml import html
+from urllib.parse import urljoin
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
@@ -172,12 +173,31 @@ class SiteFc2com(SiteAvBase):
         if entity.studio and entity.studio not in entity.tag:
             entity.tag.append(entity.studio)
 
-        raw_image_urls = {'poster': None, 'arts': []}
+        # === 이미지 처리 로직 변경 ===
+        raw_image_urls = {'poster': None, 'pl': None, 'arts': []}
+        
+        # 1. 메인 포스터(썸네일) 추출
         if poster_src := tree.xpath('//div[contains(@class, "items_article_MainitemThumb")]//img/@src | //div[contains(@class, "items_article_MainitemThumb")]//img/@data-src'):
             raw_image_urls['poster'] = cls._normalize_url(poster_src[0], cls.site_base_url, upgrade_size=True)
 
-        for art_src in tree.xpath('//section[contains(@class, "items_article_SampleImages")]//a/@href'):
-            raw_image_urls['arts'].append(cls._normalize_url(art_src, cls.site_base_url, upgrade_size=True))
+        # 2. 갤러리 이미지 추출
+        gallery_urls = []
+        for href in tree.xpath('//a[@data-fancybox="gallery"]/@href'):
+            gallery_urls.append(cls._normalize_url(href, cls.site_base_url, upgrade_size=True))
+
+        if not gallery_urls:
+            for href in tree.xpath('//section[contains(@class, "items_article_SampleImages")]//a/@href'):
+                gallery_urls.append(cls._normalize_url(href, cls.site_base_url, upgrade_size=True))
+
+        # 3. PL 및 Arts 할당 (갤러리 첫번째 = PL, 나머지 = Arts)
+        if gallery_urls:
+            raw_image_urls['pl'] = gallery_urls[0]
+            raw_image_urls['arts'] = gallery_urls[1:]
+
+        # 4. 포스터 Fallback (포스터가 없으면 PL을 포스터로 사용)
+        if not raw_image_urls['poster'] and raw_image_urls['pl']:
+            raw_image_urls['poster'] = raw_image_urls['pl']
+            logger.debug(f"[{cls.site_name}] Poster not found. Using first gallery image (PL) as Poster.")
 
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
@@ -197,6 +217,8 @@ class SiteFc2com(SiteAvBase):
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
 
+        # Base 클래스의 이미지 처리 로직 위임 (스마트 크롭 등 적용)
+        # raw_image_urls['poster']가 가로 이미지(PL)인 경우, use_smart_crop 설정에 따라 자동으로 크롭
         entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
 
         if cls.config['use_extras']:
@@ -220,8 +242,8 @@ class SiteFc2com(SiteAvBase):
         normalized_src = src
         if upgrade_size:
             if match := re.search(r'/w(\d+)/', src):
-                if int(match.group(1)) < 1000:
-                    normalized_src = src.replace(f'/w{match.group(1)}/', '/w1000/')
+                if int(match.group(1)) < 1280:
+                    normalized_src = src.replace(f'/w{match.group(1)}/', '/w1280/')
         if normalized_src.startswith('//'): return 'https:' + normalized_src
         if normalized_src.startswith('/'): return urljoin(base_url, src)
         return normalized_src

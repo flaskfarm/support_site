@@ -45,6 +45,13 @@ except ImportError:
     _IMAGEHASH_AVAILABLE = False
     hfun = phash = average_hash = None
 
+try:
+    import cv2
+    import numpy as np
+    _OPENCV_AVAILABLE = True
+except ImportError:
+    _OPENCV_AVAILABLE = False
+
 # Selenium Imports
 try:
     from selenium import webdriver
@@ -799,6 +806,16 @@ class SiteAvBase:
 
             # Selenium 타임아웃 설정
             "selenium_timeout": misc_settings.get('selenium_timeout', 10),
+
+            # 스마트 크롭 설정
+            "use_smart_crop": db.get_bool(f'{common_config_prefix}_use_smart_crop'),
+            "smart_crop_proto_path": db.get(f'{common_config_prefix}_smart_crop_proto_path'),
+            "smart_crop_model_path": db.get(f'{common_config_prefix}_smart_crop_model_path'),
+
+            "use_yolo_crop": db.get_bool(f'{common_config_prefix}_use_yolo_crop'),
+            "yolo_cfg_path": db.get(f'{common_config_prefix}_yolo_cfg_path'),
+            "yolo_weights_path": db.get(f'{common_config_prefix}_yolo_weights_path'),
+            "yolo_names_path": db.get(f'{common_config_prefix}_yolo_names_path'),
         })
         # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
         # uncensored_rules_count = len(cls.config.get('uncensored_parser_rules', {}).get('custom_rules', []))
@@ -902,6 +919,18 @@ class SiteAvBase:
             P.logger.error(traceback.format_exc())
             abort(500)
             return
+
+        if mode == 'smart_crop':
+            # 가로 이미지(Landscape)인 경우에만 세로 포스터로 크롭 시도
+            # 비율 기준: 가로가 세로보다 1.1배 이상 클 때
+            w, h = im.size
+            if w > h * 1.1:
+                cropped = cls._smart_crop_image(im)
+                if cropped:
+                    im = cropped
+            
+            # 처리가 끝났으므로 mode 초기화
+            mode = None
 
         if mode is not None and mode.startswith("crop_"):
 
@@ -1280,6 +1309,10 @@ class SiteAvBase:
                 # Case 1: Uncensored 등 이미 포스터가 확정된 경우
                 logger.debug(f"Using pre-determined poster URL for {ui_code}.")
                 final_image_sources['poster_source'] = direct_poster_url
+                
+                if cls.config.get('use_smart_crop'):
+                    # 실제 크롭은 jav_image(ff_proxy) 호출 시 수행하도록 모드만 설정
+                    final_image_sources['poster_mode'] = 'smart_crop'
 
             # PS가 있는 다른 모든 사이트를 위한 공통 로직
             elif ps_url:
@@ -2230,6 +2263,240 @@ class SiteAvBase:
             logger.error(f"Failed to intelligently save image to {save_path}: {e}")
             logger.error(traceback.format_exc())
             return False
+
+
+    # =========================================================================
+    # Region: AI Detection Helper Methods (Smart Crop Support)
+    # =========================================================================
+
+    @classmethod
+    def check_face_detection(cls, pil_image):
+        """
+        외부(자식 클래스)에서 PIL 이미지를 넘겨 얼굴 존재 여부를 확인할 수 있는 헬퍼
+        """
+        if not _OPENCV_AVAILABLE or not pil_image:
+            return False
+        
+        # PIL -> OpenCV 변환
+        open_cv_image = np.array(pil_image)
+        if pil_image.mode == 'RGB':
+            open_cv_image = open_cv_image[:, :, ::-1].copy()
+        elif pil_image.mode == 'RGBA':
+            open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
+            
+        found, _ = cls._detect_face(open_cv_image)
+        return found
+
+
+    @classmethod
+    def check_body_detection(cls, pil_image):
+        """
+        바디 존재 여부를 확인하되, 얼굴이 명확하지 않으면(임계값 0.3 미만) 가차없이 버립니다.
+        """
+        if not _OPENCV_AVAILABLE or not pil_image:
+            return False
+
+        open_cv_image = np.array(pil_image)
+        if pil_image.mode == 'RGB':
+            open_cv_image = open_cv_image[:, :, ::-1].copy()
+        elif pil_image.mode == 'RGBA':
+            open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
+
+        # 1. 바디 인식
+        body_found, _, _ = cls._detect_body(open_cv_image)
+        
+        if body_found:
+            # 2. 얼굴 재확인 (Threshold 상향: 0.3)
+            # 바디가 있어도 얼굴이 0.3 이상으로 감지되지 않으면 False
+            face_found, _ = cls._detect_face(open_cv_image, threshold=0.3)
+            return face_found
+            
+        return False
+
+
+    @classmethod
+    def _detect_face(cls, open_cv_image, threshold=0.5):
+        """
+        얼굴 인식 수행. 
+        신뢰도가 임계값을 넘는 얼굴들 중 '가장 면적이 큰 얼굴'을 선택합니다.
+        (작은 썸네일 속 얼굴 등이 선택되는 것을 방지)
+        """
+        if not _OPENCV_AVAILABLE: return False, None
+        
+        proto_path = cls.config.get('smart_crop_proto_path')
+        model_path = cls.config.get('smart_crop_model_path')
+        if not os.path.exists(proto_path) or not os.path.exists(model_path): return False, None
+
+        try:
+            (h, w) = open_cv_image.shape[:2]
+            if not hasattr(cls, '_face_net'):
+                cls._face_net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
+            net = cls._face_net
+            
+            blob = cv2.dnn.blobFromImage(cv2.resize(open_cv_image, (300, 300)), 1.0, (300, 300), (104.0, 177.0, 123.0))
+            net.setInput(blob)
+            detections = net.forward()
+
+            found = False
+            best_center_x = None
+            max_area = 0
+
+            for i in range(0, detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                
+                if confidence > threshold:
+                    box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                    (startX, startY, endX, endY) = box.astype("int")
+                    
+                    # 면적 계산
+                    width = endX - startX
+                    height = endY - startY
+                    area = width * height
+                    
+                    # 신뢰도 대신 면적을 기준으로 Best Face 선정
+                    if area > max_area:
+                        max_area = area
+                        best_center_x = (startX + endX) // 2
+                        found = True
+            
+            return found, best_center_x
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] Face Detection Error: {e}")
+            return False, None
+
+
+    @classmethod
+    def _detect_body(cls, open_cv_image):
+        """바디(YOLO) 인식 수행. 성공 시 (True, center_x, best_box) 반환"""
+        if not _OPENCV_AVAILABLE: return False, None, None
+
+        yolo_cfg = cls.config.get('yolo_cfg_path')
+        yolo_weights = cls.config.get('yolo_weights_path')
+        if not os.path.exists(yolo_cfg) or not os.path.exists(yolo_weights): return False, None, None
+
+        try:
+            (h, w) = open_cv_image.shape[:2]
+            if not hasattr(cls, '_yolo_net'):
+                cls._yolo_net = cv2.dnn.readNetFromDarknet(yolo_cfg, yolo_weights)
+                cls._yolo_net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                cls._yolo_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            
+            yolo_net = cls._yolo_net
+            ln = yolo_net.getLayerNames()
+            try: ln = [ln[i - 1] for i in yolo_net.getUnconnectedOutLayers()]
+            except: ln = [ln[i[0] - 1] for i in yolo_net.getUnconnectedOutLayers()]
+
+            blob = cv2.dnn.blobFromImage(open_cv_image, 1 / 255.0, (416, 416), swapRB=True, crop=False)
+            yolo_net.setInput(blob)
+            layer_outputs = yolo_net.forward(ln)
+
+            boxes = []
+            confidences = []
+            person_class_id = 0 # coco.names 기본값
+
+            for output in layer_outputs:
+                for detection in output:
+                    scores = detection[5:]
+                    class_id = np.argmax(scores)
+                    confidence = scores[class_id]
+                    if class_id == person_class_id and confidence > 0.3:
+                        box = detection[0:4] * np.array([w, h, w, h])
+                        (centerX, centerY, width, height) = box.astype("int")
+                        x = int(centerX - (width / 2))
+                        y = int(centerY - (height / 2))
+                        boxes.append([x, y, int(width), int(height)])
+                        confidences.append(float(confidence))
+
+            idxs = cv2.dnn.NMSBoxes(boxes, confidences, 0.3, 0.3)
+            
+            if len(idxs) > 0:
+                # 가장 큰 영역 선택
+                max_area = 0
+                best_box = None
+                best_center_x = None
+                
+                for i in idxs.flatten():
+                    (x, y) = (boxes[i][0], boxes[i][1])
+                    (bw, bh) = (boxes[i][2], boxes[i][3])
+                    area = bw * bh
+                    if area > max_area:
+                        max_area = area
+                        best_box = (x, y, bw, bh)
+                        best_center_x = x + (bw // 2)
+                
+                return True, best_center_x, best_box
+            
+            return False, None, None
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] YOLO Error: {e}")
+            return False, None, None
+
+
+    @classmethod
+    def _smart_crop_image(cls, pil_image, target_ratio=1.4225):
+        """
+        얼굴과 바디의 균형을 맞춘 크롭.
+        """
+        if not _OPENCV_AVAILABLE: return None
+
+        # PIL -> OpenCV 변환
+        open_cv_image = np.array(pil_image)
+        if pil_image.mode == 'RGB':
+            open_cv_image = open_cv_image[:, :, ::-1].copy()
+        elif pil_image.mode == 'RGBA':
+            open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
+        
+        (h, w) = open_cv_image.shape[:2]
+        
+        # 1. 얼굴 인식 시도
+        face_found, face_cx = cls._detect_face(open_cv_image, threshold=0.6)
+        
+        # 2. 바디 인식 시도 (YOLO가 켜져 있다면, 얼굴 성공 여부와 관계없이 수행)
+        #    얼굴이 있어도 바디 중심을 알면 구도가 더 좋아지기 때문
+        body_found, body_cx, body_box = False, None, None
+        if cls.config.get('use_yolo_crop'):
+            body_found, body_cx, body_box = cls._detect_body(open_cv_image)
+
+        final_center_x = None
+
+        # [Case A] 얼굴과 바디 모두 검출됨 -> 가중 평균 사용
+        if face_found and body_found:
+            # 얼굴 60%, 바디 40% 비중으로 중심점 계산
+            # 얼굴을 놓치지 않으면서도 몸통 쪽으로 중심을 이동시킴
+            final_center_x = int(face_cx * 0.6 + body_cx * 0.4)
+            # logger.debug(f"Smart Crop: Blending Face({face_cx}) + Body({body_cx}) -> {final_center_x}")
+
+        # [Case B] 얼굴만 검출됨 (상반신 샷 등 바디 인식이 안 될 때)
+        elif face_found:
+            final_center_x = face_cx
+
+        # [Case C] 바디만 검출됨 -> Face Rescue 시도
+        elif body_found:
+            # 바디 내부(또는 근처)에서 낮은 임계값으로 얼굴 재검색
+            rescue_found, rescue_face_cx = cls._detect_face(open_cv_image, threshold=0.3)
+            
+            if rescue_found:
+                # 여기서도 구출된 얼굴과 바디의 중심을 섞어줌
+                final_center_x = int(rescue_face_cx * 0.6 + body_cx * 0.4)
+                # logger.debug(f"Smart Crop: Rescued Face blended with Body.")
+            else:
+                # 얼굴 절대 불가 -> 포기
+                return None
+        
+        # [Case D] 아무것도 없음
+        else:
+            return None
+
+        # --- 크롭 영역 계산 ---
+        target_w = int(h / target_ratio)
+        crop_x = final_center_x - (target_w // 2)
+        
+        # 이미지 범위 보정
+        if crop_x < 0: crop_x = 0
+        elif crop_x + target_w > w: crop_x = w - target_w
+
+        crop_box = (crop_x, 0, crop_x + target_w, h)
+        return pil_image.crop(crop_box)
 
 
     # endregion 유틸

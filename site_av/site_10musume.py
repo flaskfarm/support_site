@@ -1,6 +1,9 @@
 import re
 import os
 import traceback
+from io import BytesIO
+from PIL import Image
+
 from ..entity_av import EntityAVSearch
 from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
 from ..setup import P, logger
@@ -104,15 +107,11 @@ class Site10Musume(SiteAvBase):
         code_part = code[2:]
         json_data = None
 
-        # 1. 캐시에 데이터가 있는지 먼저 확인
         if code_part in cls._info_cache:
-            logger.debug(f"Using cached JSON data for 10musume code: {code_part}")
             json_data = cls._info_cache[code_part]
             del cls._info_cache[code_part]
         
-        # 2. 캐시에 데이터가 없으면 API를 통해 직접 호출
         if json_data is None:
-            logger.debug(f"Cache miss for 10musume code: {code_part}. Calling API.")
             url = f'{SITE_BASE_URL}/dyn/phpauto/movie_details/movie_id/{code_part}.json'
             try:
                 json_data = cls.get_response(url).json() or {}
@@ -137,12 +136,10 @@ class Site10Musume(SiteAvBase):
         entity.premiered = json_data.get('Release')
 
         try:
-            # 1. API의 'Year' 필드를 정수로 변환 시도
             year_from_api = json_data.get('Year')
             if year_from_api:
                 entity.year = int(year_from_api)
             else:
-                # 2. 'Year' 필드가 없으면 품번에서 추출 시도
                 if len(code[2:]) >= 6:
                     entity.year = 2000 + int(code[2:][4:6])
                 else:
@@ -150,19 +147,100 @@ class Site10Musume(SiteAvBase):
         except (ValueError, TypeError, IndexError):
             entity.year = 0
 
+        # === 이미지 처리 섹션 ===
         def format_url(path):
             if path and isinstance(path, str):
-                return f"{SITE_BASE_URL}{path}" if path.startswith('/') else path
+                return f"{SITE_BASE_URL}{path}" if not path.startswith('http') and not path.startswith('/') else (f"{SITE_BASE_URL}{path}" if path.startswith('/') else path)
             return None
 
-        poster_url = format_url(json_data.get('MovieThumb'))
-        landscape_url = format_url(json_data.get('ThumbUltra'))
-        gallery_data = json_data.get('Gallery', [])
-        arts_urls = [format_url(p) for p in gallery_data if p] if isinstance(gallery_data, list) else []
+        # 1. 기본 URL 추출
+        movie_thumb_url = format_url(json_data.get('MovieThumb')) 
+        landscape_url = format_url(json_data.get('ThumbUltra'))   
+        
+        # 2. 갤러리 데이터 확보
+        gallery_rows = []
+        is_fallback_gallery = False  # 초기화: 기본은 API 사용 (False)
 
-        if not poster_url and landscape_url:
-            logger.debug(f"[{cls.site_name}] Poster image is missing. Using landscape image as a fallback for poster.")
-            poster_url = landscape_url
+        gallery_api_urls = [
+            f'{SITE_BASE_URL}/dyn/dla/json/movie_gallery/{code_part}.json',        
+            f'{SITE_BASE_URL}/dyn/phpauto/movie_galleries/movie_id/{code_part}.json' 
+        ]
+
+        for gal_api_url in gallery_api_urls:
+            try:
+                gal_res = cls.get_response(gal_api_url)
+                if gal_res and gal_res.status_code == 200:
+                    gal_json = gal_res.json()
+                    if gal_json and 'Rows' in gal_json:
+                        gallery_rows = gal_json['Rows']
+                        break # 성공하면 중단
+            except Exception:
+                pass
+
+        # API 실패 시 기본 JSON 폴백
+        if not gallery_rows:
+            fallback_gallery = json_data.get('Gallery')
+            if isinstance(fallback_gallery, list):
+                gallery_rows = [{'Img': p} for p in fallback_gallery]
+                is_fallback_gallery = True # 폴백 사용됨
+
+        # 3. 갤러리 이미지 URL 리스트 생성
+        arts_urls = []
+        for row in gallery_rows:
+            if row.get('Protected') is True: continue
+
+            full_url = None
+            if 'Img' in row:
+                img_path = row['Img']
+                
+                # 폴백이거나 이미 http로 시작하면 포맷팅만 수행
+                if is_fallback_gallery or img_path.startswith('http') or img_path.startswith('/'):
+                    full_url = format_url(img_path)
+                else:
+                    # API 경로는 프리픽스 필요
+                    # (안전장치: movie_gallery가 포함되어 있으면 API 경로로 간주)
+                    if 'movie_gallery' in img_path:
+                        full_url = f"{SITE_BASE_URL}/dyn/dla/images/{img_path}"
+                    else:
+                        full_url = format_url(img_path)
+
+            elif 'Filename' in row:
+                # 구형 API
+                filename = row['Filename']
+                full_url = f"{SITE_BASE_URL}/assets/sample/{code_part}/{filename}"
+
+            if full_url: arts_urls.append(full_url)
+
+        # 4. 포스터 탐색 로직 (단순화됨: 세로 이미지 우선 -> 없으면 기본 썸네일)
+        poster_url = None
+        
+        # 갤러리 이미지 순회 (세로 이미지 탐색)
+        for curr_url in arts_urls[:12]:
+            try:
+                res = cls.get_response(curr_url, stream=True, timeout=3)
+                if not res or res.status_code != 200: continue
+                
+                img_bytes = BytesIO(res.content)
+                with Image.open(img_bytes) as img:
+                    w, h = img.size
+                    if h > w:
+                        poster_url = curr_url
+                        logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
+                        break
+            except Exception:
+                continue
+
+        # 5. 포스터 최종 결정 (Fallback)
+        if not poster_url:
+            # 2순위: MovieThumb (기본 썸네일)
+            if movie_thumb_url:
+                poster_url = movie_thumb_url
+                logger.debug(f"[{cls.site_name}] Fallback to MovieThumb.")
+            # 3순위: PL (ThumbUltra) - 최후의 수단
+            else:
+                poster_url = landscape_url
+                logger.debug(f"[{cls.site_name}] Fallback to PL(ThumbUltra).")
+
 
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
@@ -188,68 +266,50 @@ class Site10Musume(SiteAvBase):
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
-        # tagline
         raw_tagline = json_data.get('Title', '')
         original_tagline = cls.A_P(raw_tagline)
         entity.original['tagline'] = original_tagline
         entity.tagline = cls.trans(original_tagline)
 
-        # actor
         actresses = json_data.get('ActressesJa', [])
         if isinstance(actresses, list):
             for actor in actresses:
                 entity.actor.append(EntityActor(actor))
-        # tag
         entity.tag.append('10Musume')
 
-        # genre
         genrelist = json_data.get('UCNAME', [])
         if isinstance(genrelist, list):
-            # --- START: 수정 제안 ---
-            if 'genre' not in entity.original: 
-                entity.original['genre'] = []
-
+            if 'genre' not in entity.original: entity.original['genre'] = []
             for item in genrelist:
-                # 원본 장르 저장
                 entity.original['genre'].append(item)
-                # 번역된 장르 저장
                 entity.genre.append(cls.get_translated_tag('uncen_tags', item))
 
-        # entity.ratings
         try:
             avg_rating = json_data.get('AvgRating')
             if avg_rating is not None:
                 entity.ratings.append(EntityRatings(float(avg_rating), name=cls.site_name))
         except (ValueError, TypeError): pass
 
-        # plot
         raw_plot = json_data.get('Desc', '')
         original_plot = cls.A_P(raw_plot)
         entity.original['plot'] = original_plot
         entity.plot = cls.trans(original_plot)
 
-        # 제작사
         entity.studio = '10Musume'
         entity.original['studio'] = '10Musume'
 
-        # 부가영상 or 예고편
         if cls.config.get('use_extras'):
             try:
                 sample_files = json_data.get('SampleFiles')
-                
                 if isinstance(sample_files, list) and sample_files:
-                    
                     def get_resolution(file_info):
                         filename = file_info.get('FileName', '')
                         match = re.search(r'(\d+)p\.mp4', filename)
-                        if match:
-                            return int(match.group(1))
+                        if match: return int(match.group(1))
                         return file_info.get('FileSize', 0)
 
                     sorted_samples = sorted(sample_files, key=get_resolution, reverse=True)
-                    
                     best_quality_video = sorted_samples[0]
-                    
                     if best_quality_video and best_quality_video.get('URL'):
                         video_url = cls.make_video_url(best_quality_video['URL'])
                         if video_url:
