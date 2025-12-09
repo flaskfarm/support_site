@@ -198,20 +198,22 @@ class SitePaco(SiteAvBase):
 
         # === 이미지 처리 ===
         def format_url(path):
-            if path and isinstance(path, str):
-                return f"{cls.site_base_url}/{path}" if not path.startswith('http') and not path.startswith('/') else (f"{cls.site_base_url}{path}" if path.startswith('/') else path)
-            return None
+            if not path or not isinstance(path, str): return None
+            if path.startswith('http'): return path
+            if path.startswith('/'): return f"{cls.site_base_url}{path}"
+            return f"{cls.site_base_url}/{path}"
 
         def format_gallery_url(path, is_fallback=False):
-            if path and isinstance(path, str):
-                if is_fallback:
-                    return f"{cls.site_base_url}/assets/sample/{code_part}/l/{path}"
+            if not path or not isinstance(path, str): return None
+            if path.startswith('http'): return path
+
+            if is_fallback:
+                return f"{cls.site_base_url}/assets/sample/{code_part}/l/{path}"
+            else:
+                if path.startswith('movie_gallery/'):
+                    return f"{cls.site_base_url}/dyn/dla/images/{path}"
                 else:
-                    if path.startswith('movie_gallery/'):
-                        return f"{cls.site_base_url}/dyn/dla/images/{path}"
-                    else:
-                        return format_url(path)
-            return None
+                    return format_url(path)
 
         # 1. 기본 이미지 URL 설정
         thumb_ultra = format_url(json_data.get('ThumbUltra')) # PL (가로, 고화질)

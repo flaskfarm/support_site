@@ -149,9 +149,10 @@ class Site10Musume(SiteAvBase):
 
         # === 이미지 처리 섹션 ===
         def format_url(path):
-            if path and isinstance(path, str):
-                return f"{SITE_BASE_URL}{path}" if not path.startswith('http') and not path.startswith('/') else (f"{SITE_BASE_URL}{path}" if path.startswith('/') else path)
-            return None
+            if not path or not isinstance(path, str): return None
+            if path.startswith('http'): return path
+            if path.startswith('/'): return f"{SITE_BASE_URL}{path}"
+            return f"{SITE_BASE_URL}/{path}"
 
         # 1. 기본 URL 추출
         movie_thumb_url = format_url(json_data.get('MovieThumb')) 

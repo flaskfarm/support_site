@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import re
 import os
 import traceback
@@ -148,16 +147,19 @@ class Site1PondoTv(SiteAvBase):
 
         # === 이미지 처리 섹션 ===
         def format_url(path):
-            if path and isinstance(path, str):
-                return f"{SITE_BASE_URL}{path}" if path.startswith('/') else path
-            return None
+            if not path or not isinstance(path, str): return None
+            if path.startswith('http'): return path
+            if path.startswith('/'): return f"{SITE_BASE_URL}{path}"
+            return f"{SITE_BASE_URL}/{path}"
 
         # 1. 기본 URL 추출
         movie_thumb_url = format_url(json_data.get('MovieThumb')) 
         landscape_url = format_url(json_data.get('ThumbUltra'))   
         
-        # 2. 갤러리 데이터 확보 (API -> Fallback API -> Main JSON)
+        # 2. 갤러리 데이터 확보
         gallery_rows = []
+        is_fallback_gallery = False
+
         gallery_api_urls = [
             f'{SITE_BASE_URL}/dyn/dla/json/movie_gallery/{code_part}.json',        # 신형
             f'{SITE_BASE_URL}/dyn/phpauto/movie_galleries/movie_id/{code_part}.json' # 구형
@@ -174,8 +176,6 @@ class Site1PondoTv(SiteAvBase):
             except Exception:
                 pass
 
-        # API 실패 시 기본 JSON 폴백
-        is_fallback_gallery = False
         if not gallery_rows:
             fallback_gallery = json_data.get('Gallery')
             if isinstance(fallback_gallery, list):
@@ -185,28 +185,23 @@ class Site1PondoTv(SiteAvBase):
         # 3. 갤러리 이미지 URL 리스트 생성 (Arts 후보)
         arts_urls = []
         for row in gallery_rows:
-            if row.get('Protected') is True:
-                continue
+            if row.get('Protected') is True: continue
 
             full_url = None
-            
-            # [Case A] 신형 API 또는 Main JSON (Key: Img)
             if 'Img' in row:
                 img_path = row['Img']
                 if is_fallback_gallery:
                     full_url = format_url(img_path)
                 else:
                     full_url = f"{SITE_BASE_URL}/dyn/dla/images/{img_path}"
-            
-            # [Case B] 구형 API (Key: Filename)
-            # URL 형식: https://www.1pondo.tv/assets/sample/{code}/popu/{filename}
             elif 'Filename' in row:
                 filename = row['Filename']
                 full_url = f"{SITE_BASE_URL}/assets/sample/{code_part}/popu/{filename}"
 
             if full_url: arts_urls.append(full_url)
 
-        # 4. 포스터 탐색 로직 (세로 우선 -> 스마트크롭 후보 탐색)
+
+        # 4. 포스터 탐색 로직
         poster_url = None
         candidate_face_url = None
         candidate_body_url = None
@@ -214,7 +209,7 @@ class Site1PondoTv(SiteAvBase):
         use_smart = cls.config.get('use_smart_crop')
         use_yolo = cls.config.get('use_yolo_crop')
 
-        # 갤러리 이미지 순회 (최대 12장)
+        # 갤러리 이미지 순회 (세로 탐색 & 후보군 확보)
         for idx, curr_url in enumerate(arts_urls[:12]):
             if poster_url: break
 
@@ -226,35 +221,27 @@ class Site1PondoTv(SiteAvBase):
                 with Image.open(img_bytes) as img:
                     w, h = img.size
                     
-                    # [1순위] 세로 이미지 발견 시 즉시 채택
+                    # [Priority 1] 세로 이미지 발견 (즉시 채택)
                     if h > w:
                         poster_url = curr_url
                         logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
                         break
                     
-                    # 스마트 크롭 후보군 탐색
+                    # 갤러리 스마트 크롭 후보군 확보
                     if use_smart:
                         if candidate_face_url is None and cls.check_face_detection(img):
                             candidate_face_url = curr_url
-                            logger.debug(f"[{cls.site_name}] Gallery Face candidate found (Index {idx}).")
                             continue 
                         
                         if use_yolo and candidate_face_url is None and candidate_body_url is None and cls.check_body_detection(img):
                             candidate_body_url = curr_url
-                            logger.debug(f"[{cls.site_name}] Gallery Body candidate found (Index {idx}).")
             except Exception:
                 continue
 
         # 5. 포스터 최종 결정
         if not poster_url:
-            if candidate_face_url:
-                poster_url = candidate_face_url
-                logger.debug(f"[{cls.site_name}] Selected Face candidate from gallery.")
-            elif candidate_body_url:
-                poster_url = candidate_body_url
-                logger.debug(f"[{cls.site_name}] Selected Body candidate from gallery.")
-            elif use_smart and landscape_url:
-                # 갤러리 실패 시 PL 이미지 스마트 크롭 시도 (검증 추가)
+            # [Priority 2] PL(ThumbUltra) 스마트 크롭
+            if use_smart and landscape_url:
                 try:
                     res_pl = cls.get_response(landscape_url, stream=True, timeout=5)
                     if res_pl and res_pl.status_code == 200:
@@ -262,17 +249,24 @@ class Site1PondoTv(SiteAvBase):
                         if cls.check_face_detection(img_pl) or (use_yolo and cls.check_body_detection(img_pl)):
                             poster_url = landscape_url
                             logger.debug(f"[{cls.site_name}] PL(ThumbUltra) used for Smart Crop (Target detected).")
-                        else:
-                            poster_url = None # 인식 실패 시 PL 사용 안함
                 except Exception:
                     pass
 
-            # 최후의 수단
+            # [Priority 3] 갤러리 스마트 크롭 후보
+            if not poster_url:
+                if candidate_face_url:
+                    poster_url = candidate_face_url
+                    logger.debug(f"[{cls.site_name}] Selected Face candidate from gallery.")
+                elif candidate_body_url:
+                    poster_url = candidate_body_url
+                    logger.debug(f"[{cls.site_name}] Selected Body candidate from gallery.")
+
+            # [Priority 4] 최후의 수단 (MovieThumb or PL)
             if not poster_url:
                 poster_url = movie_thumb_url or landscape_url
                 logger.debug(f"[{cls.site_name}] Fallback to MovieThumb/PL.")
 
-        # 6. 이미지 서버 경로 설정
+
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
             try:
@@ -287,14 +281,13 @@ class Site1PondoTv(SiteAvBase):
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
 
-        # 7. 이미지 처리 위임
+        # 6. 이미지 처리 위임
         try:
             raw_image_urls = {
                 'poster': poster_url,
                 'pl': landscape_url,
                 'arts': arts_urls,
             }
-            # process_image_data 내부에서 poster_url이 가로형이고 use_smart_crop이면 자동으로 크롭 수행
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
