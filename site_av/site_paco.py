@@ -12,6 +12,7 @@ from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, 
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
+
 class SitePaco(SiteAvBase):
     site_name = "paco"
     site_char = "P"
@@ -25,15 +26,15 @@ class SitePaco(SiteAvBase):
 
     api_detail_format = "https://www.pacopacomama.com/dyn/phpauto/movie_details/movie_id/{}.json"
     api_gallery_format = "https://www.pacopacomama.com/dyn/dla/json/movie_gallery/{}.json"
+    api_gallery_format_fallback = "https://www.pacopacomama.com/dyn/phpauto/movie_galleries/movie_id/{}.json"
 
     _info_cache = {}
+
 
     @classmethod
     def search(cls, keyword, manual=False):
         try:
-            logger.debug(f"[{cls.site_name}] search started. keyword: {keyword}")
             ret = {}
-            # 키워드 포맷팅 (111825-100 -> 111825_100)
             formatted_keyword = keyword.strip().replace('-', '_')
             if re.search(r'\d{6}_\d+', formatted_keyword):
                 match = re.search(r'(\d{6}_\d+)', formatted_keyword)
@@ -41,7 +42,6 @@ class SitePaco(SiteAvBase):
             
             code = formatted_keyword
             url = cls.api_detail_format.format(code)
-            logger.debug(f"[{cls.site_name}] API URL: {url}")
 
             try:
                 response = cls.get_response(url)
@@ -93,6 +93,7 @@ class SitePaco(SiteAvBase):
         
         return ret
 
+
     @classmethod
     def info(cls, code, fp_meta_mode=False):
         ret = {}
@@ -111,13 +112,13 @@ class SitePaco(SiteAvBase):
             logger.exception(f"[{cls.site_name}] info error: {e}")
         return ret
 
+
     @classmethod
     def __info(cls, code, fp_meta_mode=False):
         code_part = code[2:]
         json_data = None
 
         if code_part in cls._info_cache:
-            logger.debug(f"Using cached JSON data for {cls.site_name} code: {code_part}")
             json_data = cls._info_cache[code_part]
             del cls._info_cache[code_part]
 
@@ -140,7 +141,6 @@ class SitePaco(SiteAvBase):
 
         movie_id = json_data.get('MovieID', code_part)
         entity.ui_code = f"PACO-{movie_id}"
-        
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
         
         entity.year = int(json_data.get('Year')) if json_data.get('Year') else 1900
@@ -202,48 +202,146 @@ class SitePaco(SiteAvBase):
                 return f"{cls.site_base_url}/{path}" if not path.startswith('http') and not path.startswith('/') else (f"{cls.site_base_url}{path}" if path.startswith('/') else path)
             return None
 
-        def format_gallery_url(path):
+        def format_gallery_url(path, is_fallback=False):
             if path and isinstance(path, str):
-                if path.startswith('movie_gallery/'):
-                    return f"{cls.site_base_url}/dyn/dla/images/{path}"
+                if is_fallback:
+                    return f"{cls.site_base_url}/assets/sample/{code_part}/l/{path}"
                 else:
-                    return format_url(path)
+                    if path.startswith('movie_gallery/'):
+                        return f"{cls.site_base_url}/dyn/dla/images/{path}"
+                    else:
+                        return format_url(path)
             return None
 
-        main_img_url = format_url(json_data.get('ThumbUltra') or json_data.get('ThumbHigh') or json_data.get('MovieThumb'))
+        # 1. 기본 이미지 URL 설정
+        thumb_ultra = format_url(json_data.get('ThumbUltra')) # PL (가로, 고화질)
+        movie_thumb = format_url(json_data.get('MovieThumb')) # Fallback Poster (정사각형, 저화질)
+        
+        # PL은 무조건 ThumbUltra (없으면 MovieThumb)
+        pl_url = thumb_ultra or movie_thumb
         
         poster_url = None
+        
+        # 스마트 크롭 후보군
+        pl_face_url = None
+        pl_body_url = None
+        gal_face_url = None
+        gal_body_url = None
+
+        use_smart = cls.config.get('use_smart_crop')
+        use_yolo = cls.config.get('use_yolo_crop')
+
+        # [Step 1] PL(ThumbUltra) 스마트 크롭 분석
+        # 가로 이미지이지만 화질이 좋으므로 스마트 크롭 후보로 최우선 분석
+        if use_smart and thumb_ultra:
+            try:
+                res_pl = cls.get_response(thumb_ultra, stream=True, timeout=3)
+                if res_pl and res_pl.status_code == 200:
+                    img_bytes = BytesIO(res_pl.content)
+                    with Image.open(img_bytes) as img:
+                        if cls.check_face_detection(img):
+                            pl_face_url = thumb_ultra
+                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) Face Detected.")
+                        elif use_yolo and cls.check_body_detection(img):
+                            pl_body_url = thumb_ultra
+                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) Body Detected.")
+            except Exception: pass
+
         try:
             gallery_url = cls.api_gallery_format.format(code_part)
-            
             gal_res = cls.get_response(gallery_url)
+            is_fallback = False
+            gal_data = None
+
             if gal_res.status_code == 200:
-                gal_data = gal_res.json()
-                if gal_data.get('Rows'):
-                    for row in gal_data['Rows']:
-                        img_path = row.get('Img')
-                        if not img_path: continue
+                try:
+                    gal_data = gal_res.json()
+                    if not gal_data or not gal_data.get('Rows'): gal_data = None 
+                except: gal_data = None
+            
+            if not gal_data:
+                gallery_url = cls.api_gallery_format_fallback.format(code_part)
+                gal_res = cls.get_response(gallery_url)
+                if gal_res.status_code == 200:
+                    try:
+                        gal_data = gal_res.json()
+                        if gal_data and gal_data.get('Rows'): is_fallback = True
+                    except: pass
+
+            if gal_data and gal_data.get('Rows'):
+                for idx, row in enumerate(gal_data['Rows'][:12]):
+                    img_path = row.get('Filename') if is_fallback else row.get('Img')
+                    if not img_path: continue
+                    
+                    curr_url = format_gallery_url(img_path, is_fallback)
+                    if poster_url: break
+                    
+                    try:
+                        res_img = cls.get_response(curr_url, stream=True, timeout=3)
+                        if not res_img or res_img.status_code != 200: continue
                         
-                        poster_candidate_url = format_gallery_url(img_path)
-                        if cls._is_portrait_image(poster_candidate_url):
-                            poster_url = poster_candidate_url
-                            logger.debug(f"[{cls.site_name}] Found portrait poster: {poster_url}")
-                            break 
+                        img_bytes = BytesIO(res_img.content)
+                        with Image.open(img_bytes) as img:
+                            w, h = img.size
+                            
+                            # [Priority 1] 세로 이미지 발견 시 즉시 채택 (최고 우선순위)
+                            if h > w:
+                                poster_url = curr_url
+                                logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
+                                break 
+                            
+                            # 갤러리 스마트 크롭 후보군 확보
+                            if use_smart:
+                                # 얼굴: PL(Face)도 없고 갤러리(Face)도 없을 때만 찾음
+                                if not pl_face_url and not gal_face_url:
+                                    if cls.check_face_detection(img):
+                                        gal_face_url = curr_url
+                                        continue 
+                                
+                                # 바디: 상위 후보들(PL Face/Body, Gal Face)이 모두 없을 때만 찾음
+                                if use_yolo and not pl_face_url and not pl_body_url and not gal_face_url and not gal_body_url:
+                                    if cls.check_body_detection(img):
+                                        gal_body_url = curr_url
+
+                    except Exception: continue
         except Exception as e:
             logger.error(f"[{cls.site_name}] Error extracting poster: {e}")
 
-        if not poster_url and main_img_url:
-            poster_url = main_img_url
+        # [Step 3] 포스터 최종 결정 (우선순위 적용)
+        if not poster_url:
+            # 1. PL Face (화질/구도 최상)
+            if pl_face_url:
+                poster_url = pl_face_url
+                logger.debug(f"[{cls.site_name}] Selected PL Face candidate.")
+            # 2. Gallery Face
+            elif gal_face_url:
+                poster_url = gal_face_url
+                logger.debug(f"[{cls.site_name}] Selected Gallery Face candidate.")
+            # 3. PL Body
+            elif pl_body_url:
+                poster_url = pl_body_url
+                logger.debug(f"[{cls.site_name}] Selected PL Body candidate.")
+            # 4. Gallery Body
+            elif gal_body_url:
+                poster_url = gal_body_url
+                logger.debug(f"[{cls.site_name}] Selected Gallery Body candidate.")
+            # 5. 최후의 수단: MovieThumb (정사각형 썸네일)
+            else:
+                poster_url = movie_thumb
+                # MovieThumb마저 없으면 어쩔 수 없이 ThumbUltra 사용 (중앙 크롭이라도 하라고)
+                if not poster_url: poster_url = thumb_ultra 
+                logger.debug(f"[{cls.site_name}] Fallback to MovieThumb.")
 
         try:
             raw_image_urls = {
                 'poster': poster_url,
-                'pl': main_img_url,
-                'arts': [main_img_url] if main_img_url else [],
+                'pl': pl_url,
+                'arts': [pl_url] if pl_url else [],
             }
+            # process_image_data가 poster_url이 가로형이면 자동으로 크롭 수행
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
         except Exception as e:
-            logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
+            logger.exception(f"[{cls.site_name}] Error during image processing delegation: {e}")
 
         # === 트레일러 처리 ===
         if cls.config.get('use_extras') and json_data.get('SampleFiles'):
@@ -252,40 +350,21 @@ class SitePaco(SiteAvBase):
                 if isinstance(sample_files, list) and sample_files:
                     target_resolutions = ['1080p.mp4', '720p.mp4', '480p.mp4']
                     trailer_url = None
-                    
                     for res in target_resolutions:
                         for sample in sample_files:
                             if sample.get('URL', '').endswith(res):
-                                trailer_url = sample['URL']
-                                break
+                                trailer_url = sample['URL']; break
                         if trailer_url: break
-                    
-                    if not trailer_url:
-                        trailer_url = sample_files[-1].get('URL')
-
+                    if not trailer_url: trailer_url = sample_files[-1].get('URL')
                     if trailer_url:
                         video_url = cls.make_video_url(trailer_url)
-                        if video_url:
-                            entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video_url))
+                        if video_url: entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video_url))
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Trailer processing error: {e}")
 
         if json_data.get('AvgRating'):
-            try:
-                entity.ratings.append(EntityRatings(float(json_data['AvgRating']), max=5, name=cls.site_name))
+            try: entity.ratings.append(EntityRatings(float(json_data['AvgRating']), max=5, name=cls.site_name))
             except: pass
 
         return entity
 
-    @classmethod
-    def _is_portrait_image(cls, url):
-        try:
-            res = cls.get_response(url, stream=True, timeout=10)
-            if res.status_code == 200:
-                img = Image.open(BytesIO(res.content))
-                width, height = img.size
-                img.close()
-                return height > width
-        except Exception:
-            return False
-        return False

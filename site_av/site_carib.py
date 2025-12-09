@@ -1,6 +1,8 @@
 import re
 import os
 import traceback
+from io import BytesIO
+from PIL import Image
 from lxml import html
 from ..entity_av import EntityAVSearch
 from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
@@ -97,14 +99,14 @@ class SiteCarib(SiteAvBase):
         code_part = code[2:]
         tree = None
 
-        # 1. 캐시에 데이터가 있는지 먼저 확인
+        # 1. 캐시 확인
         if code_part in cls._info_cache:
             logger.debug(f"Using cached HTML data for carib code: {code_part}")
             html_text = cls._info_cache[code_part]
             tree = html.fromstring(html_text)
             del cls._info_cache[code_part]
         
-        # 2. 캐시에 데이터가 없으면 네트워크를 통해 직접 호출
+        # 2. 캐시 없으면 네트워크 호출
         if tree is None:
             logger.debug(f"Cache miss for carib code: {code_part}. Calling API.")
             url = f'{SITE_BASE_URL}/moviepages/{code_part}/index.html'
@@ -126,27 +128,65 @@ class SiteCarib(SiteAvBase):
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
         entity.label = "CARIB"
 
-        # 연도(year) 및 출시일(premiered) 파싱
         try:
-            # 품번(YYMMDD-XXX)에서 파싱
             entity.year = int("20" + code_part[4:6])
             entity.premiered = f"{entity.year}-{code_part[0:2]}-{code_part[2:4]}"
         except (ValueError, IndexError): 
             entity.year = 0
             entity.premiered = None
 
-        poster_url = f'https://www.caribbeancom.com/moviepages/{code_part}/images/l_l.jpg'
-        landscape_url = poster_url
+        # === 이미지 처리 섹션 ===
+        poster_url = None
+        landscape_url = f'https://www.caribbeancom.com/moviepages/{code_part}/images/l_l.jpg'
         jacket_url = f'https://www.caribbeancom.com/moviepages/{code_part}/images/jacket.jpg'
 
-        # jacket.jpg 존재 여부 확인 후 전체 이미지 처리 실행
-        try:
-            res = cls.get_response(jacket_url)
-            if res and res.status_code == 200:
-                poster_url = jacket_url
-        except Exception as e:
-            logger.warning(f"[{cls.site_name}] Failed to check jacket.jpg for {code_part}: {e}")
+        # 1. 갤러리 이미지 URL 추출 (Arts 후보)
+        # HTML 구조: div.gallery > div.grid > div.gallery-ratio > a.gallery-item[href="..."][data-is_sample="1"]
+        arts_urls = []
+        gallery_nodes = tree.xpath('//div[contains(@class, "gallery")]//a[contains(@class, "gallery-item")]')
+        for node in gallery_nodes:
+            is_sample = node.get('data-is_sample')
+            href = node.get('href')
+            
+            # 샘플(무료공개)이고 href가 유효한 경우만
+            if is_sample == '1' and href and not href.startswith('javascript'):
+                full_url = f"{SITE_BASE_URL}{href}" if href.startswith('/') else href
+                arts_urls.append(full_url)
 
+        # 2. 포스터 결정 로직
+        
+        # [1순위] Jacket 이미지 (가장 확실한 세로 포스터)
+        try:
+            res_jacket = cls.get_response(jacket_url)
+            if res_jacket and res_jacket.status_code == 200:
+                poster_url = jacket_url
+                logger.debug(f"[{cls.site_name}] Found Jacket image: {poster_url}")
+        except Exception as e:
+            logger.warning(f"[{cls.site_name}] Failed to check jacket.jpg: {e}")
+
+        # [2순위] 갤러리 세로 이미지 (Jacket 없을 시)
+        if not poster_url:
+            for curr_url in arts_urls[:12]:
+                try:
+                    res = cls.get_response(curr_url, stream=True, timeout=3)
+                    if not res or res.status_code != 200: continue
+                    
+                    img_bytes = BytesIO(res.content)
+                    with Image.open(img_bytes) as img:
+                        w, h = img.size
+                        if h > w:
+                            poster_url = curr_url
+                            logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
+                            break
+                except Exception:
+                    continue
+
+        # [3순위] PL (Jacket도 갤러리 세로도 없을 시)
+        if not poster_url:
+            poster_url = landscape_url
+            logger.debug(f"[{cls.site_name}] Fallback to PL(l_l.jpg).")
+
+        # 이미지 서버 경로 설정
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
             try:
@@ -165,7 +205,9 @@ class SiteCarib(SiteAvBase):
             raw_image_urls = {
                 'poster': poster_url,
                 'pl': landscape_url,
+                'arts': arts_urls
             }
+            # process_image_data 내부에서 poster_url이 가로형(PL)이면 자동으로 크롭 수행
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")

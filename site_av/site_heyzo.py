@@ -5,12 +5,16 @@ import traceback
 import unicodedata
 from dateutil.parser import parse
 from lxml import html
+from io import BytesIO
+from PIL import Image
+
 from ..entity_av import EntityAVSearch
 from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
-from ..setup import P, logger
+from ..setup import P, logger, path_data
 from .site_av_base import SiteAvBase
 
 SITE_BASE_URL = 'https://www.heyzo.com'
+MOBILE_BASE_URL = 'https://m.heyzo.com'
 
 class SiteHeyzo(SiteAvBase):
     site_name = 'heyzo'
@@ -18,7 +22,7 @@ class SiteHeyzo(SiteAvBase):
     module_char = 'E'
     default_headers = SiteAvBase.base_default_headers.copy()
 
-    _info_cache = {} # search에서 얻은 파싱 데이터를 info에서 재사용하기 위한 캐시
+    _info_cache = {}
 
     @classmethod
     def search(cls, keyword, manual=False):
@@ -42,26 +46,22 @@ class SiteHeyzo(SiteAvBase):
             item.ui_code = f'HEYZO-{code}'
             item.score = 100
 
-            # json이 있는 경우, 없는 경우
             tmp = {}
             try:
                 json_str = tree.xpath('//script[@type="application/ld+json"]/text()')[0]
                 json_str_cleaned = re.sub(r'""(.*?)"":"', r'"\1":"', json_str)
-                json_data = json.loads(json_str_cleaned)
-                cls._info_cache[code] = {'type': 'json', 'data': json_data, 'tree': tree}
+                json_data = json.loads(json_str_cleaned, strict=False)
+                cls._info_cache[code] = json_data 
 
                 tmp['title'] = unicodedata.normalize('NFKC', json_data['name'])
                 tmp['year'] = parse(json_data['dateCreated']).year
                 tmp['image_url'] = f"https:{json_data['image']}"
-            except Exception:
-                m_tree = cls.get_tree(url.replace('www.', 'm.'))
-                if m_tree is not None:
-                    cls._info_cache[code] = {'type': 'mobile', 'data': m_tree}
-                    tmp['title'] = m_tree.xpath('//div[@id="container"]/h1/text()')[0].strip()
-                    tmp['year'] = parse(m_tree.xpath('//*[@id="moviedetail"]/div[2]/span/text()')[1].strip()).year
-                    tmp['image_url'] = f'https://m.heyzo.com/contents/3000/{code}/images/player_thumbnail.jpg'
-                else:
-                    tmp['title'] = item.ui_code; tmp['year'] = 0; tmp['image_url'] = ""
+                logger.debug(f"[{cls.site_name}] Search: JSON-LD parsed successfully.")
+            except Exception as e:
+                logger.debug(f"[{cls.site_name}] Search: JSON-LD parse failed ({e}). Fallback to basic info.")
+                tmp['title'] = item.ui_code
+                tmp['year'] = 0
+                tmp['image_url'] = ""
 
             item.title = tmp.get('title') or item.ui_code 
             item.year = tmp.get('year', 0)
@@ -109,71 +109,106 @@ class SiteHeyzo(SiteAvBase):
     def __info(cls, code, fp_meta_mode=False):
         code_part = code[2:]
         tmp = {}
-        tree = None; m_tree = None; json_data = None
+        json_data = None
 
-        # 1. 캐시 확인
         if code_part in cls._info_cache:
-            logger.debug(f"Using cached data for HEYZO-{code_part}")
-            cached_data = cls._info_cache[code_part]
+            json_data = cls._info_cache[code_part]
             del cls._info_cache[code_part]
 
-            if cached_data['type'] == 'json':
-                json_data = cached_data['data']
-                tree = cached_data['tree']
-            elif cached_data['type'] == 'mobile':
-                m_tree = cached_data['data']
-
-        # 2. 캐시 없는 경우, 네트워크 호출
-        if json_data is None and m_tree is None:
-            logger.debug(f"Cache miss for HEYZO-{code_part}. Calling API.")
+        if json_data is None:
             url = f'{SITE_BASE_URL}/moviepages/{code_part}/index.html'
-            tree = cls.get_tree(url)
-            if tree is None: return None
+            try:
+                tree = cls.get_tree(url)
+                if tree is not None:
+                    json_str = tree.xpath('//script[@type="application/ld+json"]/text()')[0]
+                    json_str_cleaned = re.sub(r'""(.*?)"":"', r'"\1":"', json_str)
+                    json_data = json.loads(json_str_cleaned, strict=False)
+            except Exception:
+                pass
 
-        # json이 있는 경우, 없는 경우
+        m_url = f'{MOBILE_BASE_URL}/moviepages/{code_part}/index.html'
+        mobile_headers = cls.default_headers.copy()
+        mobile_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
+        
+        m_html = None
         try:
-            # json_data가 아직 None이면 (캐시 miss), 새로 파싱
-            if json_data is None and tree is not None:
-                json_str = tree.xpath('//script[@type="application/ld+json"]/text()')[0]
-                json_str_cleaned = re.sub(r'""(.*?)"":"', r'"\1":"', json_str)
-                json_data = json.loads(json_str_cleaned)
+            m_res = cls.get_response(m_url, headers=mobile_headers)
+            if m_res and m_res.status_code == 200:
+                m_html = m_res.text
+        except Exception:
+            pass
+        
+        if m_html is None and json_data is None:
+            logger.error(f"[{cls.site_name}] Failed to get both JSON-LD and Mobile Page for {code_part}")
+            return None
 
-            tmp['poster'] = f"https:{json_data['actor']['image']}" if 'actor' in json_data and 'image' in json_data['actor'] else None
-            tmp['landscape'] = f"https:{json_data['image']}"
-            raw_tagline = unicodedata.normalize('NFKC', json_data['name'])
-            tmp['tagline'] = cls.A_P(raw_tagline)
+        def fix_url(url):
+            if not url: return None
+            if url.startswith('//'): return 'https:' + url
+            return url
+
+        if json_data:
+            tmp['title'] = unicodedata.normalize('NFKC', json_data['name'])
             tmp['premiered'] = str(parse(json_data['dateCreated']).date())
             tmp['year'] = parse(json_data['dateCreated']).year
-            tmp['actor'] = [name.strip() for name in tree.xpath('//div[@id="movie"]//table[@class="movieInfo"]//tr[@class="table-actor"]//span/text()')]
-            tmp['genre'] = tree.xpath('//tr[@class="table-tag-keyword-small"]//ul[@class="tag-keyword-list"]//li/a/text()')
-            if json_data.get('description', '') != '':
-                raw_plot = unicodedata.normalize('NFKC', json_data['description']).strip()
-                tmp['plot'] = cls.A_P(raw_plot)
+            if json_data.get('description'):
+                tmp['plot'] = cls.A_P(unicodedata.normalize('NFKC', json_data['description']))
+            tmp['json_poster'] = fix_url(json_data.get('actor', {}).get('image'))
+            tmp['json_landscape'] = fix_url(json_data.get('image'))
+            
+            actor_data = json_data.get('actor')
+            if isinstance(actor_data, dict):
+                tmp['actor'] = [actor_data.get('name')]
+            elif isinstance(actor_data, list):
+                tmp['actor'] = [a.get('name') for a in actor_data if a.get('name')]
+            elif isinstance(actor_data, str):
+                tmp['actor'] = [actor_data]
             else:
-                tmp['plot'] = tmp['tagline']
+                tmp['actor'] = []
+        else:
+            tmp['actor'] = []
+            if m_html:
+                title_match = re.search(r'<div id="header">.*?<h1>(.*?) - </h1>', m_html, re.DOTALL)
+                if not title_match: title_match = re.search(r'<h1>(.*?)</h1>', m_html)
+                if title_match: tmp['title'] = title_match.group(1).strip()
+                
+                date_match = re.search(r'配信日：</span>\s*(\d{4}-\d{2}-\d{2})', m_html)
+                if date_match:
+                    tmp['premiered'] = date_match.group(1)
+                    tmp['year'] = int(tmp['premiered'][:4])
+                
+                plot_match = re.search(r'<p id="memo">(.*?)</p>', m_html, re.DOTALL)
+                if plot_match: tmp['plot'] = cls.A_P(plot_match.group(1))
 
-        except Exception:
-            # m_tree가 아직 None이면 (캐시 miss), 새로 파싱
-            if m_tree is None and tree is not None:
-                url = f'{SITE_BASE_URL}/moviepages/{code_part}/index.html'
-                m_tree = cls.get_tree(url.replace('www.', 'm.'))
+        if m_html:
+            actor_match = re.search(r'<strong class="name">\s*(.*?)\s*</strong>', m_html, re.DOTALL)
+            if actor_match:
+                actor_str = actor_match.group(1).strip()
+                if actor_str: tmp['actor'] = actor_str.split()
 
-            if m_tree is None: return None # 모바일 페이지도 실패 시 종료
+            keyword_section = re.search(r'<div id="keyword">.*?<ul>(.*?)</ul>', m_html, re.DOTALL)
+            if keyword_section:
+                genre_matches = re.findall(r'<a href="/search/.*?">(.*?)</a>', keyword_section.group(1))
+                if genre_matches: tmp['genre'] = [g.strip() for g in genre_matches]
+            
+            gallery_pattern = r'[\"\']((?://m\.heyzo\.com)?/contents/3000/' + code_part + r'/gallery/(?:thumbnail_)?\d+\.jpg)[\"\']'
+            found_urls = re.findall(gallery_pattern, m_html)
+            
+            gallery_srcs = []
+            for src in found_urls:
+                hq_src = src.replace('thumbnail_', '')
+                gallery_srcs.append(hq_src)
+            
+            gallery_srcs = sorted(list(set(gallery_srcs)))
+            tmp['gallery'] = [fix_url(src) for src in gallery_srcs[:5]]
+            
+            tmp['mobile_poster'] = f'https://m.heyzo.com/contents/3000/{code_part}/images/thumbnail.jpg'
+            tmp['mobile_landscape'] = f'https://m.heyzo.com/contents/3000/{code_part}/images/player_thumbnail.jpg'
+        else:
+            if not tmp.get('actor'): tmp['actor'] = []
+            tmp['genre'] = []
+            tmp['gallery'] = []
 
-            tmp['poster'] = f'https://m.heyzo.com/contents/3000/{code_part}/images/thumbnail.jpg'
-            tmp['landscape'] = f'https://m.heyzo.com/contents/3000/{code_part}/images/player_thumbnail.jpg'
-            raw_tagline_mobile = m_tree.xpath('//div[@id="container"]/h1/text()')[0].strip()
-            tmp['tagline'] = cls.A_P(raw_tagline_mobile)
-            date_str = m_tree.xpath('//*[@id="moviedetail"]/div[2]/span/text()')[1].strip()
-            tmp['premiered'] = str(parse(date_str).date())
-            tmp['year'] = parse(date_str).year
-            tmp['actor'] = m_tree.xpath('//*[@id="moviedetail"]/div[1]/strong/text()')[0].strip().split()
-            tmp['genre'] = m_tree.xpath('//*[@id="keyword"]/ul//li/a/text()')
-            try:
-                raw_plot_mobile = m_tree.xpath('//*[@id="memo"]/text()')[0]
-                tmp['plot'] = cls.A_P(raw_plot_mobile)
-            except:
-                tmp['plot'] = tmp['tagline']
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = [u'일본']; entity.mpaa = u'청소년 관람불가'
@@ -181,22 +216,87 @@ class SiteHeyzo(SiteAvBase):
         entity.tag = []; entity.genre = []; entity.actor = []
         entity.original = {}
 
-        # --- 파싱된 데이터를 entity 객체에 할당 ---
         entity.ui_code = cls._parse_ui_code_uncensored(f'heyzo-{code_part}')
         if not entity.ui_code: entity.ui_code = f'HEYZO-{code_part}'
 
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
         entity.label = "HEYZO"
 
-        raw_tagline = tmp.get('tagline', '')
-        entity.original['tagline'] = raw_tagline
-        entity.tagline = cls.trans(raw_tagline)
-
+        entity.original['tagline'] = tmp.get('title', '')
+        entity.tagline = cls.trans(tmp.get('title', ''))
         entity.premiered = tmp.get('premiered')
         entity.year = tmp.get('year')
+        
+        # === 이미지 처리 섹션 ===
+        poster_url = None
+        candidate_face_url = None
+        candidate_body_url = None
+        
+        landscape_url = tmp.get('json_landscape') or tmp.get('mobile_landscape')
+        gallery_urls = tmp.get('gallery', [])
 
-        poster_url = tmp.get('poster')
-        landscape_url = tmp.get('landscape')
+        use_smart = cls.config.get('use_smart_crop')
+        use_yolo = cls.config.get('use_yolo_crop')
+
+        # 1. 갤러리 순회 (세로 탐색 & 후보 확보)
+        for idx, curr_url in enumerate(gallery_urls):
+            if poster_url: break
+
+            try:
+                res = cls.get_response(curr_url, stream=True, timeout=3, headers=mobile_headers)
+                if not res or res.status_code != 200: continue
+                
+                img_bytes = BytesIO(res.content)
+                with Image.open(img_bytes) as img:
+                    w, h = img.size
+                    
+                    if h > w:
+                        poster_url = curr_url
+                        logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
+                        break
+                    
+                    if use_smart:
+                        if candidate_face_url is None and cls.check_face_detection(img):
+                            candidate_face_url = curr_url
+                            continue
+                        if use_yolo and candidate_face_url is None and candidate_body_url is None and cls.check_body_detection(img):
+                            candidate_body_url = curr_url
+            except Exception:
+                continue
+
+        # 포스터 최종 결정 (우선순위: 세로 > PL크롭 > 갤러리크롭 > 썸네일)
+        if not poster_url:
+            # 2순위: PL(Landscape) 스마트 크롭
+            if use_smart and landscape_url:
+                try:
+                    res_pl = cls.get_response(landscape_url, stream=True, timeout=5, headers=mobile_headers)
+                    if res_pl and res_pl.status_code == 200:
+                        img_pl = Image.open(BytesIO(res_pl.content))
+                        if cls.check_face_detection(img_pl):
+                            poster_url = landscape_url
+                            logger.debug(f"[{cls.site_name}] PL(Landscape) passed FACE detection. Using for Smart Crop.")
+                        elif use_yolo and cls.check_body_detection(img_pl):
+                            poster_url = landscape_url
+                            logger.debug(f"[{cls.site_name}] PL(Landscape) passed BODY detection. Using for Smart Crop.")
+                        else:
+                            logger.debug(f"[{cls.site_name}] PL(Landscape) detection FAILED. Skipping PL.")
+                except Exception as e_pl:
+                    logger.debug(f"[{cls.site_name}] Error checking PL image: {e_pl}")
+
+            # 3순위: 갤러리 스마트 크롭 후보
+            if not poster_url:
+                if candidate_face_url:
+                    poster_url = candidate_face_url
+                    logger.debug(f"[{cls.site_name}] Selected Face candidate from gallery.")
+                elif candidate_body_url:
+                    poster_url = candidate_body_url
+                    logger.debug(f"[{cls.site_name}] Selected Body candidate from gallery.")
+
+            # 4순위: 최후의 수단
+            if not poster_url:
+                poster_url = tmp.get('json_poster') or tmp.get('mobile_poster') or landscape_url
+                logger.debug(f"[{cls.site_name}] Fallback to original poster/PL.")
+
 
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
@@ -205,7 +305,7 @@ class SiteHeyzo(SiteAvBase):
                 server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
                 base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
                 base_path_part = base_save_format.format(label=entity.label)
-                code_prefix_part = code_part[:2] # 품번 앞 2자리 (예: 2681 -> 26)
+                code_prefix_part = code_part[:2] 
                 final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), code_prefix_part)
                 entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
                 entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
@@ -216,6 +316,7 @@ class SiteHeyzo(SiteAvBase):
             raw_image_urls = {
                 'poster': poster_url,
                 'pl': landscape_url,
+                'arts': gallery_urls,
             }
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
         except Exception as e:
