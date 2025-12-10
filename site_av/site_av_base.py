@@ -816,6 +816,13 @@ class SiteAvBase:
             "yolo_cfg_path": db.get(f'{common_config_prefix}_yolo_cfg_path'),
             "yolo_weights_path": db.get(f'{common_config_prefix}_yolo_weights_path'),
             "yolo_names_path": db.get(f'{common_config_prefix}_yolo_names_path'),
+
+            "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.6)),
+            "smart_crop_body_threshold": float(image_settings.get('smart_crop_body_threshold', 0.3)),
+            "smart_crop_face_rescue_threshold": float(image_settings.get('smart_crop_face_rescue_threshold', 0.3)),
+
+            "smart_crop_face_weight_min": float(image_settings.get('smart_crop_face_weight_min', 0.6)),
+            "smart_crop_face_weight_max": float(image_settings.get('smart_crop_face_weight_max', 0.9)),
         })
         # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
         # uncensored_rules_count = len(cls.config.get('uncensored_parser_rules', {}).get('custom_rules', []))
@@ -2291,7 +2298,7 @@ class SiteAvBase:
     @classmethod
     def check_body_detection(cls, pil_image):
         """
-        바디 존재 여부를 확인하되, 얼굴이 명확하지 않으면(임계값 0.3 미만) 가차없이 버립니다.
+        바디 존재 여부를 확인하되, 얼굴이 설정된 Rescue 임계값 이상으로 없으면 제외합니다.
         """
         if not _OPENCV_AVAILABLE or not pil_image:
             return False
@@ -2306,10 +2313,15 @@ class SiteAvBase:
         body_found, _, _ = cls._detect_body(open_cv_image)
         
         if body_found:
-            # 2. 얼굴 재확인 (Threshold 상향: 0.3)
-            # 바디가 있어도 얼굴이 0.3 이상으로 감지되지 않으면 False
-            face_found, _ = cls._detect_face(open_cv_image, threshold=0.3)
-            return face_found
+            # 2. 얼굴 재확인
+            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.2)
+            face_found, _ = cls._detect_face(open_cv_image, threshold=rescue_thresh)
+            
+            if not face_found:
+                # logger.debug(f"[{cls.site_name}] Body Check: Failed (Body found, but Face Rescue failed at thresh {rescue_thresh}).")
+                return False
+            
+            return True
             
         return False
 
@@ -2318,11 +2330,13 @@ class SiteAvBase:
     def _detect_face(cls, open_cv_image, threshold=0.5):
         """
         얼굴 인식 수행. 
-        신뢰도가 임계값을 넘는 얼굴들 중 '가장 면적이 큰 얼굴'을 선택합니다.
-        (작은 썸네일 속 얼굴 등이 선택되는 것을 방지)
         """
         if not _OPENCV_AVAILABLE: return False, None
         
+        # 설정값 로드
+        if threshold is None:
+            threshold = cls.config.get('smart_crop_face_threshold', 0.6)
+
         proto_path = cls.config.get('smart_crop_proto_path')
         model_path = cls.config.get('smart_crop_model_path')
         if not os.path.exists(proto_path) or not os.path.exists(model_path): return False, None
@@ -2370,6 +2384,9 @@ class SiteAvBase:
         """바디(YOLO) 인식 수행. 성공 시 (True, center_x, best_box) 반환"""
         if not _OPENCV_AVAILABLE: return False, None, None
 
+        # 설정값 로드
+        body_threshold = cls.config.get('smart_crop_body_threshold', 0.3)
+
         yolo_cfg = cls.config.get('yolo_cfg_path')
         yolo_weights = cls.config.get('yolo_weights_path')
         if not os.path.exists(yolo_cfg) or not os.path.exists(yolo_weights): return False, None, None
@@ -2399,7 +2416,7 @@ class SiteAvBase:
                     scores = detection[5:]
                     class_id = np.argmax(scores)
                     confidence = scores[class_id]
-                    if class_id == person_class_id and confidence > 0.3:
+                    if class_id == person_class_id and confidence > body_threshold:
                         box = detection[0:4] * np.array([w, h, w, h])
                         (centerX, centerY, width, height) = box.astype("int")
                         x = int(centerX - (width / 2))
@@ -2435,55 +2452,65 @@ class SiteAvBase:
     @classmethod
     def _smart_crop_image(cls, pil_image, target_ratio=1.4225):
         """
-        얼굴과 바디의 균형을 맞춘 크롭.
+        설정된 임계값들을 사용하여 스마트 크롭 수행.
         """
         if not _OPENCV_AVAILABLE: return None
 
-        # PIL -> OpenCV 변환
         open_cv_image = np.array(pil_image)
-        if pil_image.mode == 'RGB':
-            open_cv_image = open_cv_image[:, :, ::-1].copy()
-        elif pil_image.mode == 'RGBA':
-            open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
+        if pil_image.mode == 'RGB': open_cv_image = open_cv_image[:, :, ::-1].copy()
+        elif pil_image.mode == 'RGBA': open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
         
         (h, w) = open_cv_image.shape[:2]
         
-        # 1. 얼굴 인식 시도
-        face_found, face_cx = cls._detect_face(open_cv_image, threshold=0.6)
+        # 1. 얼굴 인식 (기본 Face Threshold 사용 - _detect_face 내부 기본값 또는 명시적 호출)
+        face_thresh = cls.config.get('smart_crop_face_threshold', 0.6)
+        face_found, face_cx = cls._detect_face(open_cv_image, threshold=face_thresh)
         
-        # 2. 바디 인식 시도 (YOLO가 켜져 있다면, 얼굴 성공 여부와 관계없이 수행)
-        #    얼굴이 있어도 바디 중심을 알면 구도가 더 좋아지기 때문
+        # 2. 바디 인식
         body_found, body_cx, body_box = False, None, None
         if cls.config.get('use_yolo_crop'):
             body_found, body_cx, body_box = cls._detect_body(open_cv_image)
 
         final_center_x = None
 
-        # [Case A] 얼굴과 바디 모두 검출됨 -> 가중 평균 사용
-        if face_found and body_found:
-            # 얼굴 60%, 바디 40% 비중으로 중심점 계산
-            # 얼굴을 놓치지 않으면서도 몸통 쪽으로 중심을 이동시킴
-            final_center_x = int(face_cx * 0.6 + body_cx * 0.4)
-            # logger.debug(f"Smart Crop: Blending Face({face_cx}) + Body({body_cx}) -> {final_center_x}")
+        # 가변 가중치 계산 헬퍼
+        def get_face_weight(box):
+            # 설정값 로드
+            min_w = cls.config.get('smart_crop_face_weight_min', 0.6)
+            max_w = cls.config.get('smart_crop_face_weight_max', 0.9)
 
-        # [Case B] 얼굴만 검출됨 (상반신 샷 등 바디 인식이 안 될 때)
+            if not box: return min_w
+            
+            _, _, bw, bh = box
+            ratio = bw / bh if bh > 0 else 0
+            
+            # 공식: 가중치 = 바디비율 / 2
+            calculated_weight = ratio * 0.5
+            
+            # Min/Max 클램핑 (범위 제한)
+            return max(min_w, min(calculated_weight, max_w))
+
+        # [Case A] 얼굴 O + 바디 O
+        if face_found and body_found:
+            fw = get_face_weight(body_box)
+            final_center_x = int(face_cx * fw + body_cx * (1.0 - fw))
+
+        # [Case B] 얼굴 O + 바디 X
         elif face_found:
             final_center_x = face_cx
 
-        # [Case C] 바디만 검출됨 -> Face Rescue 시도
+        # [Case C] 얼굴 X + 바디 O -> Face Rescue
         elif body_found:
-            # 바디 내부(또는 근처)에서 낮은 임계값으로 얼굴 재검색
-            rescue_found, rescue_face_cx = cls._detect_face(open_cv_image, threshold=0.3)
+            # 설정된 Rescue 임계값 사용
+            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.3)
+            rescue_found, rescue_face_cx = cls._detect_face(open_cv_image, threshold=rescue_thresh)
             
             if rescue_found:
-                # 여기서도 구출된 얼굴과 바디의 중심을 섞어줌
-                final_center_x = int(rescue_face_cx * 0.6 + body_cx * 0.4)
-                # logger.debug(f"Smart Crop: Rescued Face blended with Body.")
+                fw = get_face_weight(body_box)
+                final_center_x = int(rescue_face_cx * fw + body_cx * (1.0 - fw))
             else:
-                # 얼굴 절대 불가 -> 포기
-                return None
+                return None 
         
-        # [Case D] 아무것도 없음
         else:
             return None
 
@@ -2491,7 +2518,6 @@ class SiteAvBase:
         target_w = int(h / target_ratio)
         crop_x = final_center_x - (target_w // 2)
         
-        # 이미지 범위 보정
         if crop_x < 0: crop_x = 0
         elif crop_x + target_w > w: crop_x = w - target_w
 

@@ -240,17 +240,35 @@ class Site1PondoTv(SiteAvBase):
 
         # 5. 포스터 최종 결정
         if not poster_url:
-            # [Priority 2] PL(ThumbUltra) 스마트 크롭
+            logger.debug(f"[{cls.site_name}] No portrait poster found in gallery. Checking PL for Smart Crop...")
+            
+            # [2순위] PL(ThumbUltra) 스마트 크롭 시도
             if use_smart and landscape_url:
+                logger.debug(f"[{cls.site_name}] Smart Crop ON. Checking PL: {landscape_url}")
                 try:
                     res_pl = cls.get_response(landscape_url, stream=True, timeout=5)
                     if res_pl and res_pl.status_code == 200:
                         img_pl = Image.open(BytesIO(res_pl.content))
-                        if cls.check_face_detection(img_pl) or (use_yolo and cls.check_body_detection(img_pl)):
+                        
+                        # 인식 결과 로깅
+                        is_face = cls.check_face_detection(img_pl)
+                        is_body = use_yolo and cls.check_body_detection(img_pl)
+                        logger.debug(f"[{cls.site_name}] PL Detection Result - Face: {is_face}, Body: {is_body}")
+
+                        if is_face or is_body:
                             poster_url = landscape_url
-                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) used for Smart Crop (Target detected).")
-                except Exception:
-                    pass
+                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) selected for Smart Crop.")
+                        else:
+                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) rejected (No target detected).")
+                    else:
+                        logger.warning(f"[{cls.site_name}] Failed to download PL image: {landscape_url} (Status: {res_pl.status_code if res_pl else 'None'})")
+                except Exception as e_pl:
+                    logger.error(f"[{cls.site_name}] Error checking PL image: {e_pl}")
+            else:
+                if not use_smart:
+                    logger.debug(f"[{cls.site_name}] Smart Crop is OFF. Skipping PL check.")
+                elif not landscape_url:
+                    logger.debug(f"[{cls.site_name}] No PL(ThumbUltra) URL available.")
 
             # [Priority 3] 갤러리 스마트 크롭 후보
             if not poster_url:
@@ -264,7 +282,7 @@ class Site1PondoTv(SiteAvBase):
             # [Priority 4] 최후의 수단 (MovieThumb or PL)
             if not poster_url:
                 poster_url = movie_thumb_url or landscape_url
-                logger.debug(f"[{cls.site_name}] Fallback to MovieThumb/PL.")
+                logger.debug(f"[{cls.site_name}] Fallback to MovieThumb/PL: {poster_url}")
 
 
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
