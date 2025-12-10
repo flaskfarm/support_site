@@ -2310,20 +2310,20 @@ class SiteAvBase:
             open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
 
         # 1. 바디 인식
-        body_found, _, _ = cls._detect_body(open_cv_image)
+        body_found, _, body_box = cls._detect_body(open_cv_image)
         
-        if body_found:
-            # 2. 얼굴 재확인
-            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.2)
-            face_found, _ = cls._detect_face(open_cv_image, threshold=rescue_thresh)
+        if not body_found:
+            return False
+        
+        # 2. 얼굴 재확인 (Face Rescue)
+        rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.2)
+        face_found, _ = cls._detect_face(open_cv_image, threshold=rescue_thresh, limit_box=body_box)
+        
+        if not face_found:
+            # logger.debug(f"[{cls.site_name}] Body Check: Failed. Body found but Face not in body area.")
+            return False
             
-            if not face_found:
-                # logger.debug(f"[{cls.site_name}] Body Check: Failed (Body found, but Face Rescue failed at thresh {rescue_thresh}).")
-                return False
-            
-            return True
-            
-        return False
+        return True
 
 
     @classmethod
