@@ -2327,13 +2327,14 @@ class SiteAvBase:
 
 
     @classmethod
-    def _detect_face(cls, open_cv_image, threshold=0.5):
+    def _detect_face(cls, open_cv_image, threshold=None, limit_box=None):
         """
-        얼굴 인식 수행. 
+        얼굴 인식 수행.
+        limit_box=(x, y, w, h)가 주어지면, 그 영역 안에 중심이 있는 얼굴만 찾습니다.
+        (몸통 없는 둥둥 떠다니는 얼굴 썸네일 제외)
         """
         if not _OPENCV_AVAILABLE: return False, None
         
-        # 설정값 로드
         if threshold is None:
             threshold = cls.config.get('smart_crop_face_threshold', 0.6)
 
@@ -2353,7 +2354,20 @@ class SiteAvBase:
 
             found = False
             best_center_x = None
-            max_area = 0
+            max_area = 0 
+
+            # 제한 영역 좌표 추출
+            lb_x1, lb_y1, lb_x2, lb_y2 = 0, 0, w, h
+            if limit_box:
+                lx, ly, lw, lh = limit_box
+                # 바디 박스보다 약간의 여유(Margin)를 둠 (머리가 몸통 박스 살짝 위로 나갈 수 있으므로)
+                margin_x = int(lw * 0.2) 
+                margin_y = int(lh * 0.3) # 위쪽으로 머리가 있을 수 있음
+                
+                lb_x1 = max(0, lx - margin_x)
+                lb_y1 = max(0, ly - margin_y)
+                lb_x2 = min(w, lx + lw + margin_x)
+                lb_y2 = min(h, ly + lh + margin_x)
 
             for i in range(0, detections.shape[2]):
                 confidence = detections[0, 0, i, 2]
@@ -2362,15 +2376,23 @@ class SiteAvBase:
                     box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
                     (startX, startY, endX, endY) = box.astype("int")
                     
-                    # 면적 계산
+                    # 얼굴 중심점 계산
+                    face_cx = (startX + endX) // 2
+                    face_cy = (startY + endY) // 2
+                    
+                    # [핵심] 제한 영역(바디) 안에 얼굴 중심이 있는지 검사
+                    if limit_box:
+                        if not (lb_x1 <= face_cx <= lb_x2 and lb_y1 <= face_cy <= lb_y2):
+                            # 바디 영역 밖의 얼굴(인셋 등)은 무시
+                            continue
+
                     width = endX - startX
                     height = endY - startY
                     area = width * height
                     
-                    # 신뢰도 대신 면적을 기준으로 Best Face 선정
                     if area > max_area:
                         max_area = area
-                        best_center_x = (startX + endX) // 2
+                        best_center_x = face_cx
                         found = True
             
             return found, best_center_x
@@ -2462,48 +2484,43 @@ class SiteAvBase:
         
         (h, w) = open_cv_image.shape[:2]
         
-        # 1. 얼굴 인식 (기본 Face Threshold 사용 - _detect_face 내부 기본값 또는 명시적 호출)
-        face_thresh = cls.config.get('smart_crop_face_threshold', 0.6)
-        face_found, face_cx = cls._detect_face(open_cv_image, threshold=face_thresh)
-        
-        # 2. 바디 인식
+        # 1. 바디 인식
         body_found, body_cx, body_box = False, None, None
         if cls.config.get('use_yolo_crop'):
             body_found, body_cx, body_box = cls._detect_body(open_cv_image)
 
+        # 2. 얼굴 인식
+        # 바디가 있다면 그 안에서만 얼굴을 찾도록 제한(limit_box)
+        face_thresh = cls.config.get('smart_crop_face_threshold', 0.6)
+        face_found, face_cx = cls._detect_face(open_cv_image, threshold=face_thresh, limit_box=body_box)
+        
         final_center_x = None
 
-        # 가변 가중치 계산 헬퍼
+        # 가중치 계산 헬퍼
         def get_face_weight(box):
-            # 설정값 로드
             min_w = cls.config.get('smart_crop_face_weight_min', 0.6)
             max_w = cls.config.get('smart_crop_face_weight_max', 0.9)
-
             if not box: return min_w
-            
             _, _, bw, bh = box
             ratio = bw / bh if bh > 0 else 0
-            
-            # 공식: 가중치 = 바디비율 / 2
-            calculated_weight = ratio * 0.5
-            
-            # Min/Max 클램핑 (범위 제한)
-            return max(min_w, min(calculated_weight, max_w))
+            return max(min_w, min(ratio * 0.5, max_w))
 
         # [Case A] 얼굴 O + 바디 O
+        # (이제 얼굴은 무조건 바디 근처에 있는 얼굴임이 보장됨)
         if face_found and body_found:
             fw = get_face_weight(body_box)
             final_center_x = int(face_cx * fw + body_cx * (1.0 - fw))
 
         # [Case B] 얼굴 O + 바디 X
+        # (바디를 못 찾았으면 그냥 가장 큰 얼굴 사용)
         elif face_found:
             final_center_x = face_cx
 
         # [Case C] 얼굴 X + 바디 O -> Face Rescue
         elif body_found:
-            # 설정된 Rescue 임계값 사용
-            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.3)
-            rescue_found, rescue_face_cx = cls._detect_face(open_cv_image, threshold=rescue_thresh)
+            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.2)
+            # Rescue 할 때도 바디 박스 제한을 걸어줌 (안전장치)
+            rescue_found, rescue_face_cx = cls._detect_face(open_cv_image, threshold=rescue_thresh, limit_box=body_box)
             
             if rescue_found:
                 fw = get_face_weight(body_box)
