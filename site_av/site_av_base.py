@@ -809,18 +809,16 @@ class SiteAvBase:
 
             # 스마트 크롭 설정
             "use_smart_crop": db.get_bool(f'{common_config_prefix}_use_smart_crop'),
-            "smart_crop_proto_path": db.get(f'{common_config_prefix}_smart_crop_proto_path'),
-            "smart_crop_model_path": db.get(f'{common_config_prefix}_smart_crop_model_path'),
+            "smart_crop_yunet_model_path": db.get(f'{common_config_prefix}_smart_crop_yunet_model_path'),
 
             "use_yolo_crop": db.get_bool(f'{common_config_prefix}_use_yolo_crop'),
             "yolo_cfg_path": db.get(f'{common_config_prefix}_yolo_cfg_path'),
             "yolo_weights_path": db.get(f'{common_config_prefix}_yolo_weights_path'),
             "yolo_names_path": db.get(f'{common_config_prefix}_yolo_names_path'),
 
-            "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.6)),
             "smart_crop_body_threshold": float(image_settings.get('smart_crop_body_threshold', 0.3)),
+            "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.6)),
             "smart_crop_face_rescue_threshold": float(image_settings.get('smart_crop_face_rescue_threshold', 0.3)),
-
             "smart_crop_face_weight_min": float(image_settings.get('smart_crop_face_weight_min', 0.6)),
             "smart_crop_face_weight_max": float(image_settings.get('smart_crop_face_weight_max', 0.9)),
         })
@@ -2316,7 +2314,7 @@ class SiteAvBase:
             return False
         
         # 2. 얼굴 재확인 (Face Rescue)
-        rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.2)
+        rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.3)
         face_found, _ = cls._detect_face(open_cv_image, threshold=rescue_thresh, limit_box=body_box)
         
         if not face_found:
@@ -2329,75 +2327,82 @@ class SiteAvBase:
     @classmethod
     def _detect_face(cls, open_cv_image, threshold=None, limit_box=None):
         """
-        얼굴 인식 수행.
-        limit_box=(x, y, w, h)가 주어지면, 그 영역 안에 중심이 있는 얼굴만 찾습니다.
-        (몸통 없는 둥둥 떠다니는 얼굴 썸네일 제외)
+        YuNet(ONNX) 모델을 사용하여 얼굴을 인식합니다.
         """
         if not _OPENCV_AVAILABLE: return False, None
+        
+        model_path = cls.config.get('smart_crop_yunet_model_path')
+        if not model_path or not os.path.exists(model_path):
+            logger.error(f"[{cls.site_name}] YuNet model not found at {model_path}")
+            return False, None
         
         if threshold is None:
             threshold = cls.config.get('smart_crop_face_threshold', 0.6)
 
-        proto_path = cls.config.get('smart_crop_proto_path')
-        model_path = cls.config.get('smart_crop_model_path')
-        if not os.path.exists(proto_path) or not os.path.exists(model_path): return False, None
-
         try:
             (h, w) = open_cv_image.shape[:2]
-            if not hasattr(cls, '_face_net'):
-                cls._face_net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
-            net = cls._face_net
             
-            blob = cv2.dnn.blobFromImage(cv2.resize(open_cv_image, (300, 300)), 1.0, (300, 300), (104.0, 177.0, 123.0))
-            net.setInput(blob)
-            detections = net.forward()
+            # YuNet 모델 로드 (최초 1회 캐싱)
+            if not hasattr(cls, '_face_net_yunet'):
+                try:
+                    # OpenCV 4.5.4 이상 필요
+                    cls._face_net_yunet = cv2.FaceDetectorYN.create(
+                        model=model_path,
+                        config="",
+                        input_size=(w, h), 
+                        score_threshold=threshold,
+                        nms_threshold=0.3,
+                        top_k=5000
+                    )
+                except AttributeError:
+                    logger.error(f"[{cls.site_name}] OpenCV version too old for YuNet. Use 4.5.4+.")
+                    return False, None
+
+            net = cls._face_net_yunet
+            # YuNet은 입력 이미지 크기가 바뀔 때마다 setInputSize를 해줘야 함
+            net.setInputSize((w, h)) 
+            net.setScoreThreshold(threshold)
+
+            # 추론
+            _, faces = net.detect(open_cv_image)
+
+            if faces is None:
+                return False, None
 
             found = False
             best_center_x = None
-            max_area = 0 
+            max_area = 0
 
-            # 제한 영역 좌표 추출
+            # 제한 영역 좌표 계산
             lb_x1, lb_y1, lb_x2, lb_y2 = 0, 0, w, h
             if limit_box:
                 lx, ly, lw, lh = limit_box
-                # 바디 박스보다 약간의 여유(Margin)를 둠 (머리가 몸통 박스 살짝 위로 나갈 수 있으므로)
-                margin_x = int(lw * 0.2) 
-                margin_y = int(lh * 0.3) # 위쪽으로 머리가 있을 수 있음
-                
-                lb_x1 = max(0, lx - margin_x)
-                lb_y1 = max(0, ly - margin_y)
-                lb_x2 = min(w, lx + lw + margin_x)
-                lb_y2 = min(h, ly + lh + margin_x)
+                margin_x, margin_y = int(lw * 0.2), int(lh * 0.3)
+                lb_x1, lb_y1 = max(0, lx - margin_x), max(0, ly - margin_y)
+                lb_x2, lb_y2 = min(w, lx + lw + margin_x), min(h, ly + lh + margin_x)
 
-            for i in range(0, detections.shape[2]):
-                confidence = detections[0, 0, i, 2]
+            for face in faces:
+                # YuNet 반환값: x, y, w, h (float)
+                box_x, box_y, box_w, box_h = face[0:4].astype(int)
                 
-                if confidence > threshold:
-                    box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-                    (startX, startY, endX, endY) = box.astype("int")
-                    
-                    # 얼굴 중심점 계산
-                    face_cx = (startX + endX) // 2
-                    face_cy = (startY + endY) // 2
-                    
-                    # [핵심] 제한 영역(바디) 안에 얼굴 중심이 있는지 검사
-                    if limit_box:
-                        if not (lb_x1 <= face_cx <= lb_x2 and lb_y1 <= face_cy <= lb_y2):
-                            # 바디 영역 밖의 얼굴(인셋 등)은 무시
-                            continue
+                face_cx = box_x + (box_w // 2)
+                face_cy = box_y + (box_h // 2)
 
-                    width = endX - startX
-                    height = endY - startY
-                    area = width * height
-                    
-                    if area > max_area:
-                        max_area = area
-                        best_center_x = face_cx
-                        found = True
-            
+                # 제한 영역 검사 (바디 박스 등)
+                if limit_box:
+                    if not (lb_x1 <= face_cx <= lb_x2 and lb_y1 <= face_cy <= lb_y2): continue
+
+                area = box_w * box_h
+                # 가장 큰 얼굴 선택
+                if area > max_area:
+                    max_area = area
+                    best_center_x = face_cx
+                    found = True
+
             return found, best_center_x
+
         except Exception as e:
-            logger.error(f"[{cls.site_name}] Face Detection Error: {e}")
+            logger.error(f"[{cls.site_name}] YuNet Face Error: {e}")
             return False, None
 
 
@@ -2518,7 +2523,7 @@ class SiteAvBase:
 
         # [Case C] 얼굴 X + 바디 O -> Face Rescue
         elif body_found:
-            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.2)
+            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.3)
             # Rescue 할 때도 바디 박스 제한을 걸어줌 (안전장치)
             rescue_found, rescue_face_cx = cls._detect_face(open_cv_image, threshold=rescue_thresh, limit_box=body_box)
             
