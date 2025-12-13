@@ -34,5 +34,3 @@ except Exception as e:
 logger = P.logger
 
 P.cache = F.get_cache('support_site')
-
-REDIS_KEY_PLUGIN = 'flaskfarm:support_site'

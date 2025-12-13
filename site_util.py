@@ -634,7 +634,6 @@ def push_cache(key: str, data: dict, expiry: int = 60) -> None:
     if not key:
         logger.error(f"캐시 키가 없습니다: {key=}")
         return
-    key = f'{REDIS_KEY_PLUGIN}:{key}'
     if not data:
         logger.error(f"캐시 데이터가 없습니다: {key=}")
         return
@@ -653,7 +652,6 @@ def pull_cache(key: str) -> dict | list | str | None:
     if not key:
         logger.error(f"캐시 키가 없습니다: {key=}")
         return
-    key = f'{REDIS_KEY_PLUGIN}:{key}'
     try:
         if cached := P.cache.get(key):
             data = json.loads(cached)

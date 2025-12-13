@@ -38,12 +38,7 @@
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('wavve', false) }}
-  {{ macros.setting_input_textarea('site_wavve_credential', 'Credential', value=arg['site_wavve_credential'], row='6') }}
-  {{ macros.setting_input_text_and_buttons('site_wavve_profile', '프로필', [['site_wavve_login_btn', 'Credential 갱신']],value=arg['site_wavve_profile'], desc=['Credential 갱신 후 입력된 Credential, 프로필 값을 확인 후 **설정 저장**', '형식: {"id": "아이디", "password": "비밀번호", "profile": "0부터 시작하는 프로필 번호", "device_id": "자동 입력(초기화시 빈값 입력)"}']) }}
-  {{ macros.setting_checkbox('site_wavve_use_proxy', 'Proxy 사용', value=arg['site_wavve_use_proxy'], desc=None) }}
-  <div id="site_wavve_use_proxy_div" class="collapse">
-    {{ macros.setting_input_text('site_wavve_proxy_url', 'Proxy URL', value=arg['site_wavve_proxy_url'], desc=None) }}
-  </div>
+  {{ macros.setting_input_textarea_and_buttons('site_wavve_credentials', 'Credentials', [['site_wavve_login_btn', 'Credential 갱신']], value=arg['site_wavve_credentials'], desc=["Credential을 포함하는 Wavve 계정 정보들", "형식: JSON", "{", '"첫째":{"id":"아이디","password":"패스워드","profile":"0"},', '"둘째":{"id":"아이디","password":"패스워드","profile":"1","proxy":"프록시를 사용할 경우 입력"},', '"셋째":{"id":"아이디","password":"패스워드","profile":"2","credential":"갱신시 자동 입력 혹은 직접 입력"},', '"넷째":{"id":"아이디","password":"패스워드","profile":"1","device_id":"갱신시 자동 입력, 초기화시 제거"}', "}", "HTTP 요청 에러가 적은 계정 정보를 우선 사용"], col='9', row='15', disabled=False) }}
   {{ macros.setting_checkbox('site_wavve_use_cache', 'Cache 사용', value=arg['site_wavve_use_cache'], desc=None) }}
   <div id="site_wavve_use_cache_div" class="collapse">
   {{ macros.setting_input_int('site_wavve_cache_expiry', 'Cache 수명', desc=['단위: 초'], value=arg['site_wavve_cache_expiry']) }}
@@ -177,12 +172,9 @@ $("body").on('click', '#site_tving_deviceid_btn', function(e) {
 
 $("body").on('click', '#site_wavve_login_btn', function(e) {
   e.preventDefault();
-  globalSendCommand('wavve_login', $('#site_wavve_profile').val(), null, null, function(ret){
+  globalSendCommand('wavve_login', $('#site_wavve_credentials').val(), null, null, function(ret){
     if (ret['ret'] == 'success') {
-      $("#site_wavve_credential").val(ret['credential']);
-      if (ret['account'] !== null && ret['account'] !== undefined) {
-        $("#site_wavve_profile").val(ret['account']);
-      }
+      $("#site_wavve_credentials").val(ret['credentials']);
     }
   });
 });
