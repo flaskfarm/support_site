@@ -1,3 +1,6 @@
+import json
+import sqlite3
+
 from .setup import *
 
 
@@ -5,6 +8,7 @@ class ModuleSite(PluginModuleBase):
     db_default = {
         f'db_version' : '1.2',
         f"site_wavve_credential": "",
+        "site_wavve_credentials": "",
         f"site_wavve_use_proxy": "False",
         f"site_wavve_proxy_url": "",
         f"site_wavve_profile":'{"id": "", "password": "", "profile": "0", "device_id": ""}',
@@ -82,20 +86,19 @@ class ModuleSite(PluginModuleBase):
             return jsonify(ret)
         elif command == 'wavve_login':
             try:
-                ret['ret'] = 'warning'
-                ret['msg'] = "로그인에 실패하였습니다."
                 from . import SupportWavve
-                account = json.loads(arg1)
-                P.ModelSetting.set('site_wavve_profile', arg1)
-                result = SupportWavve.do_login(account['id'], account['password'], account['profile'], account.get('device_id'))
-                if result[0]:
-                    ret['ret'] = 'success'
-                    ret['msg'] = "로그인 성공<br>Credential을 갱신하였습니다."
-                    ret['credential'] = result[1]['credential']
-                    ret['account'] = result[1]['account']
-                else:
-                    ret['ret'] = 'warning'
-                    ret['msg'] = "로그인에 실패하였습니다."
+                P.ModelSetting.set('site_wavve_credentials', arg1)
+                success = []
+                failed = []
+                for name in SupportWavve.api.accounts:
+                    if SupportWavve.do_login(name):
+                        success.append(name)
+                    else:
+                        failed.append(name)
+                ret['credentials'] = P.ModelSetting.get('site_wavve_credentials')
+                msg = f"성공: {','.join(success)}<br>실패: {','.join(failed)}"
+                ret['ret'] = 'success'
+                ret['msg'] = msg
             except Exception as e:
                 logger.error(f'Exception:{str(e)}')
                 logger.error(traceback.format_exc())
@@ -174,10 +177,7 @@ class ModuleSite(PluginModuleBase):
     def __wavve_init(self):
         from . import SupportWavve
         SupportWavve.initialize(
-            P.ModelSetting.get('site_wavve_credential'),
-            P.ModelSetting.get_bool('site_wavve_use_proxy'),
-            P.ModelSetting.get('site_wavve_proxy_url'),
-            P.ModelSetting.get('site_wavve_profile'),
+            P.ModelSetting.get('site_wavve_credentials'),
             P.ModelSetting.get_list('site_wavve_patterns_episode'),
             P.ModelSetting.get_list('site_wavve_patterns_title'),
             P.ModelSetting.get('site_wavve_headers'),
@@ -246,11 +246,60 @@ class ModuleSite(PluginModuleBase):
         '''override'''
         version = P.ModelSetting.get('db_version')
         P.logger.debug(f'현재 DB 버전: {version}')
+        db_file = F.app.config['SQLALCHEMY_BINDS'][P.package_name].replace('sqlite:///', '').split('?')[0]
         if version == '1':
             P.ModelSetting.set('site_wavve_patterns_episode', '^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$')
             P.ModelSetting.set('site_wavve_patterns_title', '^(?P<title>.*)$')
             version = '1.1'
-        elif version == '1.1':
+        if version == '1.1':
             version = '1.2'
+        if version == '1.2':
+            try:
+                accounts = json.loads(P.ModelSetting.get('site_wavve_credentials'))
+            except Exception:
+                P.logger.exception('Wavve 계정 정보를 가져오지 못했습니다.')
+                accounts = None
+            if not accounts:
+                P.logger.info("Wavve 계정 정보 초기화")
+                credential = P.ModelSetting.get('site_wavve_credential')
+                use_proxy = P.ModelSetting.get_bool('site_wavve_use_proxy')
+                proxy_url = P.ModelSetting.get('site_wavve_proxy_url')
+                try:
+                    profile = json.loads(P.ModelSetting.get('site_wavve_profile'))
+                except Exception:
+                    P.logger.exception(f"계정 정보를 가져오지 못했습니다.")
+                    profile = {}
+                accounts = {
+                    'default': {
+                        'id': profile.get('id'),
+                        'password': profile.get('password'),
+                        'profile': profile.get('profile'),
+                        'device_id': profile.get('device_id'),
+                        'credential': credential,
+                        'proxy': proxy_url if use_proxy else None,
+                        'headers': None,
+                    }
+                }
+                try:
+                    P.ModelSetting.set('site_wavve_credentials', json.dumps(accounts, ensure_ascii=False, separators=(',', ':'), indent=2))
+                except Exception:
+                    P.logger.exception('Wavve 계정 정보를 초기화하지 못 했습니다.')
+
+            """마이그레이션 보류
+            P.logger.debug('DB 버전 1.3 으로 마이그레이션')
+            with F.app.app_context():
+                with sqlite3.connect(db_file) as conn:
+                    try:
+                        conn.execute('VACUUM;')
+                        conn.row_factory = sqlite3.Row
+                        table = 'support_site_setting'
+                        for key in ('site_wavve_use_proxy', 'site_wavve_proxy_url', 'site_wavve_profile'):
+                            if row := conn.execute(f"SELECT id FROM {table} WHERE key = ?", (key,)).fetchone():
+                                conn.execute(f"DELETE FROM {table} WHERE id = ?", (row['id'],))
+                        version = '1.2'
+                    except Exception:
+                        P.logger.exception('DB 마이크레이션 실패')
+                F.db.session.flush()
+            """
         P.logger.debug(f'최종 DB 버전: {version}')
         P.ModelSetting.set('db_version', version)
