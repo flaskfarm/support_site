@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import traceback
 from typing import Sequence
 
 
@@ -29,8 +30,8 @@ try:
         from .wavve import SupportWavve
     else:
         SupportWavve = SupportSC.load_module_f(__file__, 'wavve').SupportWavve
-except:
-    pass
+except Exception:
+    print(traceback.format_exc())
 
 
 try:
@@ -38,8 +39,8 @@ try:
         from .tving import SupportTving
     else:
         SupportTving = SupportSC.load_module_f(__file__, 'tving').SupportTving
-except:
-    pass
+except Exception:
+    print(traceback.format_exc())
 
 
 try:
@@ -47,8 +48,8 @@ try:
         from .cppl import SupportCppl
     else:
         SupportCppl = SupportSC.load_module_f(__file__, 'cppl').SupportCppl
-except:
-    pass
+except Exception:
+    print(traceback.format_exc())
 
 
 from .server_util import MetadataServerUtil
