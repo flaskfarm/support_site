@@ -8,6 +8,7 @@ from datetime import timedelta
 from urllib.parse import urlencode, unquote_plus, urlparse
 import random
 import json
+import math
 # python 확장
 import requests
 import ssl
@@ -51,6 +52,12 @@ try:
     _OPENCV_AVAILABLE = True
 except ImportError:
     _OPENCV_AVAILABLE = False
+
+try:
+    import mediapipe as mp
+    _MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    _MEDIAPIPE_AVAILABLE = False
 
 # Selenium Imports
 try:
@@ -811,15 +818,14 @@ class SiteAvBase:
             "use_smart_crop": db.get_bool(f'{common_config_prefix}_use_smart_crop'),
             "smart_crop_yunet_model_path": db.get(f'{common_config_prefix}_smart_crop_yunet_model_path'),
 
-            "use_yolo_crop": db.get_bool(f'{common_config_prefix}_use_yolo_crop'),
-            "yolo_cfg_path": db.get(f'{common_config_prefix}_yolo_cfg_path'),
-            "yolo_weights_path": db.get(f'{common_config_prefix}_yolo_weights_path'),
-            "yolo_names_path": db.get(f'{common_config_prefix}_yolo_names_path'),
+            "use_body_crop": db.get_bool(f'{common_config_prefix}_use_body_crop'), 
+            "mediapipe_complexity": int(db.get(f'{common_config_prefix}_mediapipe_complexity')),
 
-            "smart_crop_body_threshold": float(image_settings.get('smart_crop_body_threshold', 0.3)),
-            "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.6)),
-            "smart_crop_face_rescue_threshold": float(image_settings.get('smart_crop_face_rescue_threshold', 0.3)),
-            "smart_crop_face_weight_min": float(image_settings.get('smart_crop_face_weight_min', 0.6)),
+            "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.7)),
+            "smart_crop_face_rescue_threshold": float(image_settings.get('smart_crop_face_rescue_threshold', 0.5)),
+            "smart_crop_body_threshold": float(image_settings.get('smart_crop_body_threshold', 0.5)),
+
+            "smart_crop_face_weight_min": float(image_settings.get('smart_crop_face_weight_min', 0.3)),
             "smart_crop_face_weight_max": float(image_settings.get('smart_crop_face_weight_max', 0.9)),
         })
         # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
@@ -1306,18 +1312,24 @@ class SiteAvBase:
                 final_image_sources['skip_landscape_download'] = True
                 should_process_landscape = False
 
-        # --- 3. 포스터 소스 결정 (필요한 경우에만) ---
+        # --- 3. 포스터 소스 결정 ---
         if should_process_poster:
             # logger.debug(f"Determining poster source for {ui_code} as no user/system file exists or rewrite is on.")
             
             if direct_poster_url:
-                # Case 1: Uncensored 등 이미 포스터가 확정된 경우
                 logger.debug(f"Using pre-determined poster URL for {ui_code}.")
                 final_image_sources['poster_source'] = direct_poster_url
                 
-                if cls.config.get('use_smart_crop'):
-                    # 실제 크롭은 jav_image(ff_proxy) 호출 시 수행하도록 모드만 설정
-                    final_image_sources['poster_mode'] = 'smart_crop'
+                # URL이 http로 시작할 때만 스마트 크롭 예약.
+                # 로컬 파일 경로라면 이미 처리된 것이므로 모드를 'local_file'로 설정.
+                if direct_poster_url.startswith('http'):
+                    if cls.config.get('use_smart_crop'):
+                        final_image_sources['poster_mode'] = 'smart_crop'
+                else:
+                    final_image_sources['poster_mode'] = 'local_file'
+                    temp_dir = os.path.join(path_data, "tmp")
+                    if os.path.commonpath([temp_dir, os.path.abspath(direct_poster_url)]) == temp_dir:
+                        final_image_sources['temp_poster_filepath'] = direct_poster_url
 
             # PS가 있는 다른 모든 사이트를 위한 공통 로직
             elif ps_url:
@@ -1516,8 +1528,8 @@ class SiteAvBase:
                         final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
                         logger.debug(f"Applying forced crop mode: {pl_url}, (crop_mode: crop_{forced_crop_mode})")
 
-                # 3. (자동 분석) 위 방법들이 모두 실패했을 경우, 비율 기반 분석
-                if not final_image_sources['poster_source']:
+                # 3. 비율에 따른 크롭 규칙
+                if not final_image_sources.get('poster_source'):
                     if pl_url:
                         try:
                             im_lg_obj = cls.imopen(pl_url)
@@ -1845,7 +1857,7 @@ class SiteAvBase:
             if hdis_d <= 5: return True
 
             hdis_p = phash(im_sm_obj) - phash(im_lg_obj)
-            threshold = cls.config.get('hq_poster_threshold_strict', 10)
+            threshold = cls.config.get('hq_poster_threshold_strict')
             return (hdis_d + hdis_p) < threshold
         except Exception: return False
 
@@ -1860,7 +1872,7 @@ class SiteAvBase:
             if ws > wl or hs > hl: return None
 
             positions = ["c", "r", "l"]
-            threshold = cls.config.get('hq_poster_threshold_normal', 30)
+            threshold = cls.config.get('hq_poster_threshold_normal')
 
             for pos in positions:
                 cropped_im = None
@@ -2271,280 +2283,481 @@ class SiteAvBase:
 
 
     # =========================================================================
-    # Region: AI Detection Helper Methods (Smart Crop Support)
-    # =========================================================================
+    # AI Detection Methods (MediaPipe + YuNet Integrated)
+    # -------------------------------------------------------------------------
 
     @classmethod
-    def check_face_detection(cls, pil_image):
+    def _detect_face(cls, open_cv_image, threshold=None, nose_point=None, limit_box=None):
         """
-        외부(자식 클래스)에서 PIL 이미지를 넘겨 얼굴 존재 여부를 확인할 수 있는 헬퍼
+        YuNet을 사용하여 얼굴을 인식합니다.
+        MediaPipe의 코 좌표(nose_point)가 있으면 교차 검증하여 정확도를 높입니다.
+        다중 인물일 경우, 주인공(Main)과의 유사도(신뢰도/크기/거리)를 분석하여 최적의 중심점을 계산합니다.
+        반환값: (found, center_x, is_shifted, face_box)
         """
-        if not _OPENCV_AVAILABLE or not pil_image:
-            return False
-        
-        # PIL -> OpenCV 변환
-        open_cv_image = np.array(pil_image)
-        if pil_image.mode == 'RGB':
-            open_cv_image = open_cv_image[:, :, ::-1].copy()
-        elif pil_image.mode == 'RGBA':
-            open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
-            
-        found, _ = cls._detect_face(open_cv_image)
-        return found
-
-
-    @classmethod
-    def check_body_detection(cls, pil_image):
-        """
-        바디 존재 여부를 확인하되, 얼굴이 설정된 Rescue 임계값 이상으로 없으면 제외합니다.
-        """
-        if not _OPENCV_AVAILABLE or not pil_image:
-            return False
-
-        open_cv_image = np.array(pil_image)
-        if pil_image.mode == 'RGB':
-            open_cv_image = open_cv_image[:, :, ::-1].copy()
-        elif pil_image.mode == 'RGBA':
-            open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
-
-        # 1. 바디 인식
-        body_found, _, body_box = cls._detect_body(open_cv_image)
-        
-        if not body_found:
-            return False
-        
-        # 2. 얼굴 재확인 (Face Rescue)
-        rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.3)
-        face_found, _ = cls._detect_face(open_cv_image, threshold=rescue_thresh, limit_box=body_box)
-        
-        if not face_found:
-            # logger.debug(f"[{cls.site_name}] Body Check: Failed. Body found but Face not in body area.")
-            return False
-            
-        return True
-
-
-    @classmethod
-    def _detect_face(cls, open_cv_image, threshold=None, limit_box=None):
-        """
-        YuNet(ONNX) 모델을 사용하여 얼굴을 인식합니다.
-        """
-        if not _OPENCV_AVAILABLE: return False, None
+        if not _OPENCV_AVAILABLE: return False, None, False, None
         
         model_path = cls.config.get('smart_crop_yunet_model_path')
         if not model_path or not os.path.exists(model_path):
-            logger.error(f"[{cls.site_name}] YuNet model not found at {model_path}")
-            return False, None
+            return False, None, False, None
         
         if threshold is None:
-            threshold = cls.config.get('smart_crop_face_threshold', 0.6)
+            threshold = cls.config.get('smart_crop_face_threshold')
 
         try:
             (h, w) = open_cv_image.shape[:2]
             
-            # YuNet 모델 로드 (최초 1회 캐싱)
             if not hasattr(cls, '_face_net_yunet'):
                 try:
-                    # OpenCV 4.5.4 이상 필요
                     cls._face_net_yunet = cv2.FaceDetectorYN.create(
-                        model=model_path,
-                        config="",
-                        input_size=(w, h), 
-                        score_threshold=threshold,
-                        nms_threshold=0.3,
-                        top_k=5000
+                        model=model_path, config="", input_size=(w, h), 
+                        score_threshold=threshold, nms_threshold=0.3, top_k=5000
                     )
-                except AttributeError:
-                    logger.error(f"[{cls.site_name}] OpenCV version too old for YuNet. Use 4.5.4+.")
-                    return False, None
+                except AttributeError: return False, None, False, None
 
             net = cls._face_net_yunet
-            # YuNet은 입력 이미지 크기가 바뀔 때마다 setInputSize를 해줘야 함
             net.setInputSize((w, h)) 
             net.setScoreThreshold(threshold)
 
-            # 추론
             _, faces = net.detect(open_cv_image)
 
-            if faces is None:
-                return False, None
+            if faces is None or len(faces) == 0:
+                return False, None, False, None
 
-            found = False
-            best_center_x = None
-            max_area = 0
+            valid_faces = []
 
-            # 제한 영역 좌표 계산
+            # limit_box 좌표 계산 (Rescue 모드용)
             lb_x1, lb_y1, lb_x2, lb_y2 = 0, 0, w, h
             if limit_box:
                 lx, ly, lw, lh = limit_box
-                margin_x, margin_y = int(lw * 0.2), int(lh * 0.3)
-                lb_x1, lb_y1 = max(0, lx - margin_x), max(0, ly - margin_y)
-                lb_x2, lb_y2 = min(w, lx + lw + margin_x), min(h, ly + lh + margin_x)
+                # Rescue 마진: 좌우 50%, 상단 60%
+                margin_x = int(lw * 0.5)
+                top_margin = int(lh * 0.6)
+                
+                lb_x1 = max(0, lx - margin_x)
+                lb_y1 = max(0, ly - top_margin)
+                lb_x2 = min(w, lx + lw + margin_x)
+                lb_y2 = min(h, ly + lh) # 하단은 바디 끝까지
 
             for face in faces:
-                # YuNet 반환값: x, y, w, h (float)
                 box_x, box_y, box_w, box_h = face[0:4].astype(int)
+                confidence = face[-1]
                 
                 face_cx = box_x + (box_w // 2)
                 face_cy = box_y + (box_h // 2)
 
-                # 제한 영역 검사 (바디 박스 등)
+                # 1. Limit Box 검사 (Rescue 시)
                 if limit_box:
-                    if not (lb_x1 <= face_cx <= lb_x2 and lb_y1 <= face_cy <= lb_y2): continue
+                    if not (lb_x1 <= face_cx <= lb_x2 and lb_y1 <= face_cy <= lb_y2): 
+                        continue
+                    # 바디 하단 80% 지점보다 아래에 있으면 제외 (무릎/발 등 오인식 방지)
+                    if face_cy > ly + (lh * 0.8):
+                        continue
 
                 area = box_w * box_h
-                # 가장 큰 얼굴 선택
-                if area > max_area:
-                    max_area = area
-                    best_center_x = face_cx
-                    found = True
+                score = area * confidence
 
-            return found, best_center_x
+                # 2. MediaPipe 코 좌표 교차 검증
+                dist_from_nose = float('inf')
+                face_diag = (box_w**2 + box_h**2)**0.5
+
+                if nose_point:
+                    nx, ny = nose_point
+                    dist_from_nose = ((face_cx - nx)**2 + (face_cy - ny)**2)**0.5
+                    
+                    # 1) 거리 검증: 얼굴 크기의 1.5배보다 멀면 제외 (가짜 얼굴)
+                    if dist_from_nose > face_diag * 1.5:
+                        continue 
+                    
+                    # 2) 점수 보정: 코와 가까울수록 점수 상향
+                    if dist_from_nose < face_diag * 0.8:
+                        score *= 3.0 # 강력한 가산점
+                    elif dist_from_nose < face_diag * 1.2:
+                        score *= 1.5
+                
+                valid_faces.append({
+                    'x1': box_x, 'x2': box_x + box_w,
+                    'cx': face_cx, 'cy': face_cy, 
+                    'area': area, 'w': box_w,
+                    'score': score, 'confidence': confidence,
+                    'dist_from_nose': dist_from_nose
+                })
+
+            if not valid_faces:
+                return False, None, False, None
+
+            # 3. 주인공 선정 (코 좌표 우선, 없으면 점수 우선)
+            if nose_point:
+                main_face = min(valid_faces, key=lambda x: x['dist_from_nose'])
+            else:
+                main_face = max(valid_faces, key=lambda x: x['score'])
+            
+            # 4. 다중 인물 최적화 (Shift)
+            target_ratio = 1.4225
+            crop_width = int(h / target_ratio)
+            half_crop = crop_width // 2
+            
+            shift_candidates = []
+            
+            for sub in valid_faces:
+                if sub == main_face: continue
+                
+                # [유사도 점수 계산] (기본 100점)
+                similarity_score = 100.0
+                
+                # 1) 신뢰도 차이 감점 (가장 중요)
+                conf_diff = abs(sub['confidence'] - main_face['confidence'])
+                similarity_score -= (conf_diff * 150) 
+                
+                # 2) 면적 차이 감점
+                size_diff = abs(sub['area'] - main_face['area'])
+                max_area = max(sub['area'], main_face['area'])
+                size_ratio = size_diff / max_area
+                similarity_score -= (size_ratio * 80) 
+                
+                # 3) 거리 감점 (보조)
+                dist = ((sub['cx'] - main_face['cx'])**2 + (sub['cy'] - main_face['cy'])**2)**0.5
+                main_diag = (main_face['w']**2 + (main_face['x2']-main_face['x1'])**2)**0.5
+                dist_ratio = dist / main_diag
+                similarity_score -= (dist_ratio * 10)
+
+                # [로그] 점수 내역 확인
+                logger.debug(f"  Face Comparison: ConfDiff({conf_diff:.2f}), SizeRatio({size_ratio:.2f}), Dist({dist_ratio:.1f}) -> SimScore: {similarity_score:.1f}")
+
+                if similarity_score < 40:
+                    continue
+
+                # Shift 가능 여부 확인 (주인공 안전 범위 내)
+                mid_point = (main_face['cx'] + sub['cx']) // 2
+                crop_x1, crop_x2 = mid_point - half_crop, mid_point + half_crop
+                
+                tolerance = main_face['w'] * 0.15 
+                main_safe_x1 = main_face['x1'] + tolerance
+                main_safe_x2 = main_face['x2'] - tolerance
+                
+                if crop_x1 <= main_safe_x1 and crop_x2 >= main_safe_x2:
+                    shift_candidates.append({'cx': mid_point, 'score': sub['score']})
+
+            main_box = (main_face['x1'], main_face['x2'], main_face['w'])
+
+            if shift_candidates:
+                best_candidate = max(shift_candidates, key=lambda x: x['score'])
+                logger.debug(f"[{cls.site_name}] YuNet: Multi-face Shift applied.")
+                return True, best_candidate['cx'], True, main_box
+            
+            return True, main_face['cx'], False, main_box
 
         except Exception as e:
             logger.error(f"[{cls.site_name}] YuNet Face Error: {e}")
-            return False, None
+            return False, None, False, None
 
 
     @classmethod
     def _detect_body(cls, open_cv_image):
-        """바디(YOLO) 인식 수행. 성공 시 (True, center_x, best_box) 반환"""
-        if not _OPENCV_AVAILABLE: return False, None, None
-
-        # 설정값 로드
-        body_threshold = cls.config.get('smart_crop_body_threshold', 0.3)
-
-        yolo_cfg = cls.config.get('yolo_cfg_path')
-        yolo_weights = cls.config.get('yolo_weights_path')
-        if not os.path.exists(yolo_cfg) or not os.path.exists(yolo_weights): return False, None, None
+        """
+        MediaPipe Pose를 이용한 바디, 코 좌표, 기울기(Angle) 검출.
+        반환값: (found, body_cx, body_box, nose_point, angle)
+        """
+        if not _MEDIAPIPE_AVAILABLE: return False, None, None, None, 0
+        if not cls.config.get('use_body_crop'): return False, None, None, None, 0
 
         try:
-            (h, w) = open_cv_image.shape[:2]
-            if not hasattr(cls, '_yolo_net'):
-                cls._yolo_net = cv2.dnn.readNetFromDarknet(yolo_cfg, yolo_weights)
-                cls._yolo_net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                cls._yolo_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            h, w = open_cv_image.shape[:2]
+            img_rgb = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2RGB)
             
-            yolo_net = cls._yolo_net
-            ln = yolo_net.getLayerNames()
-            try: ln = [ln[i - 1] for i in yolo_net.getUnconnectedOutLayers()]
-            except: ln = [ln[i[0] - 1] for i in yolo_net.getUnconnectedOutLayers()]
+            complexity = cls.config.get('mediapipe_complexity', 1)
+            # 설정값 로드 (기본 0.5)
+            body_thresh = cls.config.get('smart_crop_body_threshold', 0.5)
 
-            blob = cv2.dnn.blobFromImage(open_cv_image, 1 / 255.0, (416, 416), swapRB=True, crop=False)
-            yolo_net.setInput(blob)
-            layer_outputs = yolo_net.forward(ln)
+            with mp.solutions.pose.Pose(
+                static_image_mode=True,
+                model_complexity=complexity,
+                enable_segmentation=False,
+                min_detection_confidence=body_thresh
+            ) as pose:
+                results = pose.process(img_rgb)
+                if not results.pose_landmarks: return False, None, None, None, 0
 
-            boxes = []
-            confidences = []
-            person_class_id = 0 # coco.names 기본값
-
-            for output in layer_outputs:
-                for detection in output:
-                    scores = detection[5:]
-                    class_id = np.argmax(scores)
-                    confidence = scores[class_id]
-                    if class_id == person_class_id and confidence > body_threshold:
-                        box = detection[0:4] * np.array([w, h, w, h])
-                        (centerX, centerY, width, height) = box.astype("int")
-                        x = int(centerX - (width / 2))
-                        y = int(centerY - (height / 2))
-                        boxes.append([x, y, int(width), int(height)])
-                        confidences.append(float(confidence))
-
-            idxs = cv2.dnn.NMSBoxes(boxes, confidences, 0.3, 0.3)
-            
-            if len(idxs) > 0:
-                # 가장 큰 영역 선택
-                max_area = 0
-                best_box = None
-                best_center_x = None
+                landmarks = results.pose_landmarks.landmark
                 
-                for i in idxs.flatten():
-                    (x, y) = (boxes[i][0], boxes[i][1])
-                    (bw, bh) = (boxes[i][2], boxes[i][3])
-                    area = bw * bh
-                    if area > max_area:
-                        max_area = area
-                        best_box = (x, y, bw, bh)
-                        best_center_x = x + (bw // 2)
+                l_sh = landmarks[11]; r_sh = landmarks[12]
+                l_hip = landmarks[23]; r_hip = landmarks[24]
+                l_eye = landmarks[2]; r_eye = landmarks[5]
+                nose = landmarks[0]
                 
-                return True, best_center_x, best_box
-            
-            return False, None, None
+                # 1. 바디 중심 및 박스 계산
+                pts = [l_sh, r_sh, l_hip, r_hip]
+                cx_float = sum([p.x for p in pts]) / 4.0
+                body_cx = int(cx_float * w)
+                
+                x_coords = [p.x for p in pts]; y_coords = [p.y for p in pts]
+                min_x, max_x = min(x_coords), max(x_coords)
+                min_y, max_y = min(y_coords), max(y_coords)
+                
+                box_x = int(min_x * w)
+                box_y = int(min_y * h)
+                box_w = int((max_x - min_x) * w)
+                box_h = int((max(y_coords) - min(y_coords)) * h) # 높이 보정
+                
+                nose_point = (int(nose.x * w), int(nose.y * h))
+
+                if body_cx < 0 or body_cx > w: return False, None, None, None, 0
+
+                # 2. 기울기(Angle) 계산 (Torso 기준 우선, Eye 기준 폴백)
+                body_angle = 0
+                
+                mid_sh_x = (l_sh.x + r_sh.x) / 2
+                mid_sh_y = (l_sh.y + r_sh.y) / 2
+                mid_hip_x = (l_hip.x + r_hip.x) / 2
+                mid_hip_y = (l_hip.y + r_hip.y) / 2
+                
+                # 랜드마크 신뢰도 확인
+                is_torso_visible = (l_sh.visibility > 0.5 and r_sh.visibility > 0.5 and 
+                                    l_hip.visibility > 0.5 and r_hip.visibility > 0.5)
+                
+                if is_torso_visible:
+                    # 벡터: Hip -> Shoulder (몸통이 향하는 방향)
+                    vec_x = mid_sh_x - mid_hip_x
+                    vec_y = mid_sh_y - mid_hip_y
+                    # atan2(x, -y) : 이미지 좌표계 y 반전
+                    radians = math.atan2(vec_x, -vec_y)
+                    body_angle = math.degrees(radians)
+                else:
+                    # 폴백: 눈 기울기 (Nose -> MidEye)
+                    if l_eye.visibility > 0.5 and r_eye.visibility > 0.5:
+                        mid_eye_x = (l_eye.x + r_eye.x) / 2
+                        mid_eye_y = (l_eye.y + r_eye.y) / 2
+                        vec_x = mid_eye_x - nose.x
+                        vec_y = mid_eye_y - nose.y
+                        radians = math.atan2(vec_x, -vec_y)
+                        body_angle = math.degrees(radians)
+
+                # 반환값 5개: (found, cx, box, nose, angle)
+                return True, body_cx, (box_x, box_y, box_w, box_h), nose_point, body_angle
+
         except Exception as e:
-            logger.error(f"[{cls.site_name}] YOLO Error: {e}")
-            return False, None, None
+            logger.error(f"[{cls.site_name}] MediaPipe Error: {e}")
+            return False, None, None, None, 0
 
 
     @classmethod
     def _smart_crop_image(cls, pil_image, target_ratio=1.4225):
-        """
-        설정된 임계값들을 사용하여 스마트 크롭 수행.
-        """
         if not _OPENCV_AVAILABLE: return None
 
         open_cv_image = np.array(pil_image)
         if pil_image.mode == 'RGB': open_cv_image = open_cv_image[:, :, ::-1].copy()
         elif pil_image.mode == 'RGBA': open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
         
-        (h, w) = open_cv_image.shape[:2]
+        h, w = open_cv_image.shape[:2]
         
         # 1. 바디 인식
-        body_found, body_cx, body_box = False, None, None
-        if cls.config.get('use_yolo_crop'):
-            body_found, body_cx, body_box = cls._detect_body(open_cv_image)
+        body_found, body_cx, body_box, nose_point, body_angle = cls._detect_body(open_cv_image)
 
-        # 2. 얼굴 인식
-        # 바디가 있다면 그 안에서만 얼굴을 찾도록 제한(limit_box)
-        face_thresh = cls.config.get('smart_crop_face_threshold', 0.6)
-        face_found, face_cx = cls._detect_face(open_cv_image, threshold=face_thresh, limit_box=body_box)
+        # 2. 얼굴 인식 1차 (전체 스캔, High Threshold 0.7)
+        face_thresh_high = cls.config.get('smart_crop_face_threshold')
+        face_res = cls._detect_face(open_cv_image, threshold=face_thresh_high, nose_point=nose_point, limit_box=None)
         
+        face_found, face_cx, is_shifted, face_box = False, None, False, None
+        if face_res[0]:
+            face_found, face_cx, is_shifted, face_box = face_res
+
+        # 3. [Face Rescue] 얼굴 실패 + 바디 성공 시
+        if not face_found and body_found:
+            # Low Threshold 0.5 + 바디 박스 제한
+            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold')
+            
+            logger.debug(f"[{cls.site_name}] Smart Crop: Face not found (thresh {face_thresh_high}). Trying Rescue (thresh {rescue_thresh}) in Body Box.")
+            
+            rescue_res = cls._detect_face(open_cv_image, threshold=rescue_thresh, nose_point=nose_point, limit_box=body_box)
+            
+            if rescue_res[0]:
+                face_found, face_cx, is_shifted, face_box = rescue_res
+                logger.debug(f"[{cls.site_name}] Smart Crop: Face Rescued! Center: {face_cx}")
+
+        # 4. [MediaPipe 백업] Rescue도 실패했지만 코 좌표는 있는 경우
+        if not face_found and nose_point:
+            logger.debug(f"[{cls.site_name}] Smart Crop: Face Rescue failed. Using MediaPipe Nose point.")
+            face_found = True
+            face_cx = nose_point[0]
+            is_shifted = False
+            face_box = None 
+
+        if not face_found:
+            # logger.debug(f"[{cls.site_name}] Smart Crop: Failed. No valid target found.")
+            return None
+
         final_center_x = None
 
-        # 가중치 계산 헬퍼
-        def get_face_weight(box):
-            min_w = cls.config.get('smart_crop_face_weight_min', 0.6)
-            max_w = cls.config.get('smart_crop_face_weight_max', 0.9)
-            if not box: return min_w
-            _, _, bw, bh = box
-            ratio = bw / bh if bh > 0 else 0
-            return max(min_w, min(ratio * 0.5, max_w))
+        # 가중치 헬퍼
+        def get_face_weight(angle):
+            min_w = cls.config.get('smart_crop_face_weight_min')
+            max_w = cls.config.get('smart_crop_face_weight_max')
+            
+            # 각도 절대값 (0~90도 범위로 정규화)
+            abs_angle = abs(angle)
+            if abs_angle > 90:
+                abs_angle = 180 - abs_angle
+            
+            # 0도(서있음) -> min_w
+            # 90도(누움) -> max_w
+            # 선형 보간 (Linear Interpolation)
+            ratio = abs_angle / 90.0
+            weight = min_w + (max_w - min_w) * ratio
+            
+            return weight
 
         # [Case A] 얼굴 O + 바디 O
-        # (이제 얼굴은 무조건 바디 근처에 있는 얼굴임이 보장됨)
-        if face_found and body_found:
-            fw = get_face_weight(body_box)
-            final_center_x = int(face_cx * fw + body_cx * (1.0 - fw))
-
-        # [Case B] 얼굴 O + 바디 X
-        # (바디를 못 찾았으면 그냥 가장 큰 얼굴 사용)
-        elif face_found:
-            final_center_x = face_cx
-
-        # [Case C] 얼굴 X + 바디 O -> Face Rescue
-        elif body_found:
-            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold', 0.3)
-            # Rescue 할 때도 바디 박스 제한을 걸어줌 (안전장치)
-            rescue_found, rescue_face_cx = cls._detect_face(open_cv_image, threshold=rescue_thresh, limit_box=body_box)
-            
-            if rescue_found:
-                fw = get_face_weight(body_box)
-                final_center_x = int(rescue_face_cx * fw + body_cx * (1.0 - fw))
+        if body_found:
+            if is_shifted:
+                final_center_x = face_cx
+                logger.debug(f"[{cls.site_name}] Smart Crop: [Face+Body] Multi-face shift active. Center: {final_center_x}")
             else:
-                return None 
+                # 얼굴 박스 없이 코 좌표만으로 복구된 경우(MP 백업)는 가중치를 높임
+                if not face_box:
+                    fw = max(get_face_weight(body_angle), 0.8)
+                    logger.debug(f"[{cls.site_name}] Smart Crop: [MP Backup] Boosted Weight {fw:.2f}.")
+                else:
+                    fw = get_face_weight(body_angle)
+                
+                final_center_x = int(face_cx * fw + body_cx * (1.0 - fw))
+                logger.debug(f"[{cls.site_name}] Smart Crop: [Face+Body] Blending. Face({face_cx})*{fw:.2f} + Body({body_cx}) -> Center: {final_center_x}")
         
+        # [Case B] 얼굴 O + 바디 X
         else:
-            return None
+            final_center_x = face_cx
+            logger.debug(f"[{cls.site_name}] Smart Crop: [Face Only] Body not found. Center: {final_center_x}")
 
         # --- 크롭 영역 계산 ---
         target_w = int(h / target_ratio)
-        crop_x = final_center_x - (target_w // 2)
         
-        if crop_x < 0: crop_x = 0
-        elif crop_x + target_w > w: crop_x = w - target_w
+        # 기울기 보정 (Tilt Shift) - MediaPipe 백업(얼굴박스 없음) 시
+        if not face_box and abs(body_angle) > 10:
+            eff_angle = abs(body_angle)
+            if eff_angle > 90:
+                eff_angle = 180 - eff_angle
+            
+            # 기준 너비: 바디 너비가 있으면 바디 너비 사용, 없으면 타겟 너비
+            ref_width = body_box[2] if body_box else target_w
+            
+            # 기울기 1도당 위치 보정값 0.1%
+            shift_ratio = eff_angle * 0.001 
+            shift_px = int(ref_width * shift_ratio)
+            
+            if body_angle > 0:
+                final_center_x += shift_px
+                logger.debug(f"[{cls.site_name}] Tilt Correction: Right {body_angle:.1f}deg -> Shift +{shift_px}")
+            else:
+                final_center_x -= shift_px
+                logger.debug(f"[{cls.site_name}] Tilt Correction: Left {body_angle:.1f}deg -> Shift -{shift_px}")
 
-        crop_box = (crop_x, 0, crop_x + target_w, h)
-        return pil_image.crop(crop_box)
+        half_crop = target_w // 2
+        crop_x1 = final_center_x - half_crop
+        crop_x2 = final_center_x + half_crop
+        
+        # Fit Face 로직 (face_box 있을 때)
+        if face_box:
+            fx1, fx2, fw = face_box
+            # 패딩 5%
+            padding = int(fw * 0.05)
+            safe_fx1 = fx1 - padding
+            safe_fx2 = fx2 + padding
+            
+            if (safe_fx2 - safe_fx1) > target_w:
+                safe_center = (safe_fx1 + safe_fx2) // 2
+                safe_fx1 = safe_center - half_crop
+                safe_fx2 = safe_center + half_crop
+
+            if fw < target_w:
+                if crop_x1 > safe_fx1:
+                    diff = crop_x1 - safe_fx1
+                    crop_x1 -= diff
+                    crop_x2 -= diff
+                    logger.debug(f"[{cls.site_name}] Fit Face: Shift LEFT by {diff}")
+                elif crop_x2 < safe_fx2:
+                    diff = safe_fx2 - crop_x2
+                    crop_x1 += diff
+                    crop_x2 += diff
+                    logger.debug(f"[{cls.site_name}] Fit Face: Shift RIGHT by {diff}")
+
+        # 이미지 범위 보정
+        if crop_x1 < 0: 
+            crop_x1 = 0
+            crop_x2 = target_w
+        elif crop_x2 > w:
+            crop_x2 = w
+            crop_x1 = w - target_w
+
+        return pil_image.crop((crop_x1, 0, crop_x2, h))
+
+    @classmethod
+    def _get_smart_center_x(cls, open_cv_image):
+        """
+        중심점 계산 전용 (JavDB 등에서 구역 판단용으로 사용 가능)
+        """
+        if not _OPENCV_AVAILABLE: return None, False, None
+
+        h, w = open_cv_image.shape[:2]
+        
+        body_found, body_cx, body_box, nose_point, body_angle = cls._detect_body(open_cv_image)
+
+        face_thresh = cls.config.get('smart_crop_face_threshold')
+        face_res = cls._detect_face(open_cv_image, threshold=face_thresh, nose_point=nose_point)
+        face_found, face_cx, is_shifted, face_box = False, None, False, None
+        if face_res[0]:
+            face_found, face_cx, is_shifted, face_box = face_res
+
+        if not face_found and body_found:
+            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold')
+            rescue_res = cls._detect_face(open_cv_image, threshold=rescue_thresh, nose_point=nose_point, limit_box=body_box)
+            if rescue_res[0]:
+                face_found, face_cx, is_shifted, face_box = rescue_res
+
+        if not face_found and nose_point:
+            face_found = True
+            face_cx = nose_point[0]
+            is_shifted = False
+            face_box = None
+
+        if not face_found:
+            return None, False, None
+
+        final_center_x = None
+
+        def get_face_weight(angle):
+            min_w = cls.config.get('smart_crop_face_weight_min')
+            max_w = cls.config.get('smart_crop_face_weight_max')
+            
+            abs_angle = abs(angle)
+            if abs_angle > 90:
+                abs_angle = 180 - abs_angle
+            
+            ratio = abs_angle / 90.0
+            weight = min_w + (max_w - min_w) * ratio
+            
+            return weight
+
+        if body_found:
+            if is_shifted:
+                final_center_x = face_cx
+            else:
+                if not face_box:
+                    fw = max(get_face_weight(body_angle), 0.8)
+                else:
+                    fw = get_face_weight(body_angle)
+                
+                final_center_x = int(face_cx * fw + body_cx * (1.0 - fw))
+        else:
+            final_center_x = face_cx
+            
+        # 기울기 보정 (간소화)
+        if not face_box and abs(body_angle) > 10:
+            eff_angle = abs(body_angle)
+            if eff_angle > 90: eff_angle = 180 - eff_angle
+            ref_width = body_box[2] if body_box else int(h / 1.4225)
+            shift_px = int(ref_width * eff_angle * 0.001)
+            if body_angle > 0: final_center_x += shift_px
+            else: final_center_x -= shift_px
+
+        return final_center_x, True, face_box
 
 
     # endregion 유틸

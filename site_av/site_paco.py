@@ -196,59 +196,32 @@ class SitePaco(SiteAvBase):
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
 
-        # === 이미지 처리 ===
+        # === 이미지 처리 섹션 ===
         def format_url(path):
-            if not path or not isinstance(path, str): return None
-            if path.startswith('http'): return path
-            if path.startswith('/'): return f"{cls.site_base_url}{path}"
-            return f"{cls.site_base_url}/{path}"
+            if path and isinstance(path, str):
+                return f"{cls.site_base_url}/{path}" if not path.startswith('http') and not path.startswith('/') else (f"{cls.site_base_url}{path}" if path.startswith('/') else path)
+            return None
 
         def format_gallery_url(path, is_fallback=False):
-            if not path or not isinstance(path, str): return None
-            if path.startswith('http'): return path
-
-            if is_fallback:
-                return f"{cls.site_base_url}/assets/sample/{code_part}/l/{path}"
-            else:
-                if path.startswith('movie_gallery/'):
-                    return f"{cls.site_base_url}/dyn/dla/images/{path}"
+            if path and isinstance(path, str):
+                if is_fallback:
+                    return f"{cls.site_base_url}/assets/sample/{code_part}/l/{path}"
                 else:
-                    return format_url(path)
+                    if path.startswith('movie_gallery/'):
+                        return f"{cls.site_base_url}/dyn/dla/images/{path}"
+                    else:
+                        return format_url(path)
+            return None
 
         # 1. 기본 이미지 URL 설정
         thumb_ultra = format_url(json_data.get('ThumbUltra')) # PL (가로, 고화질)
         movie_thumb = format_url(json_data.get('MovieThumb')) # Fallback Poster (정사각형, 저화질)
         
         # PL은 무조건 ThumbUltra (없으면 MovieThumb)
-        pl_url = thumb_ultra or movie_thumb
+        landscape_url = thumb_ultra or movie_thumb
         
-        poster_url = None
-        
-        # 스마트 크롭 후보군
-        pl_face_url = None
-        pl_body_url = None
-        gal_face_url = None
-        gal_body_url = None
-
-        use_smart = cls.config.get('use_smart_crop')
-        use_yolo = cls.config.get('use_yolo_crop')
-
-        # [Step 1] PL(ThumbUltra) 스마트 크롭 분석
-        # 가로 이미지이지만 화질이 좋으므로 스마트 크롭 후보로 최우선 분석
-        if use_smart and thumb_ultra:
-            try:
-                res_pl = cls.get_response(thumb_ultra, stream=True, timeout=3)
-                if res_pl and res_pl.status_code == 200:
-                    img_bytes = BytesIO(res_pl.content)
-                    with Image.open(img_bytes) as img:
-                        if cls.check_face_detection(img):
-                            pl_face_url = thumb_ultra
-                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) Face Detected.")
-                        elif use_yolo and cls.check_body_detection(img):
-                            pl_body_url = thumb_ultra
-                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) Body Detected.")
-            except Exception: pass
-
+        # 2. 갤러리 데이터 확보 & URL 리스트 생성
+        arts_urls = []
         try:
             gallery_url = cls.api_gallery_format.format(code_part)
             gal_res = cls.get_response(gallery_url)
@@ -256,12 +229,10 @@ class SitePaco(SiteAvBase):
             gal_data = None
 
             if gal_res.status_code == 200:
-                try:
-                    gal_data = gal_res.json()
-                    if not gal_data or not gal_data.get('Rows'): gal_data = None 
+                try: gal_data = gal_res.json()
                 except: gal_data = None
             
-            if not gal_data:
+            if not gal_data or not gal_data.get('Rows'):
                 gallery_url = cls.api_gallery_format_fallback.format(code_part)
                 gal_res = cls.get_response(gallery_url)
                 if gal_res.status_code == 200:
@@ -271,76 +242,94 @@ class SitePaco(SiteAvBase):
                     except: pass
 
             if gal_data and gal_data.get('Rows'):
-                for idx, row in enumerate(gal_data['Rows'][:12]):
+                for row in gal_data['Rows'][:12]: # 최대 12장만 후보로
                     img_path = row.get('Filename') if is_fallback else row.get('Img')
                     if not img_path: continue
                     
-                    curr_url = format_gallery_url(img_path, is_fallback)
-                    if poster_url: break
-                    
-                    try:
-                        res_img = cls.get_response(curr_url, stream=True, timeout=3)
-                        if not res_img or res_img.status_code != 200: continue
-                        
-                        img_bytes = BytesIO(res_img.content)
-                        with Image.open(img_bytes) as img:
-                            w, h = img.size
-                            
-                            # [Priority 1] 세로 이미지 발견 시 즉시 채택 (최고 우선순위)
-                            if h > w:
-                                poster_url = curr_url
-                                logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
-                                break 
-                            
-                            # 갤러리 스마트 크롭 후보군 확보
-                            if use_smart:
-                                # 얼굴: PL(Face)도 없고 갤러리(Face)도 없을 때만 찾음
-                                if not pl_face_url and not gal_face_url:
-                                    if cls.check_face_detection(img):
-                                        gal_face_url = curr_url
-                                        continue 
-                                
-                                # 바디: 상위 후보들(PL Face/Body, Gal Face)이 모두 없을 때만 찾음
-                                if use_yolo and not pl_face_url and not pl_body_url and not gal_face_url and not gal_body_url:
-                                    if cls.check_body_detection(img):
-                                        gal_body_url = curr_url
+                    full_url = format_gallery_url(img_path, is_fallback)
+                    if full_url: arts_urls.append(full_url)
 
-                    except Exception: continue
         except Exception as e:
-            logger.error(f"[{cls.site_name}] Error extracting poster: {e}")
+            logger.error(f"[{cls.site_name}] Error parsing gallery: {e}")
 
-        # [Step 3] 포스터 최종 결정 (우선순위 적용)
+
+        # 3. 포스터 탐색 로직
+        poster_url = None
+        use_smart = cls.config.get('use_smart_crop')
+
+        # [1단계] 갤러리 순회 (세로 이미지 탐색)
+        for curr_url in arts_urls:
+            try:
+                res = cls.get_response(curr_url, stream=True, timeout=3)
+                if not res or res.status_code != 200: continue
+                
+                img_bytes = BytesIO(res.content)
+                with Image.open(img_bytes) as img:
+                    w, h = img.size
+                    if h > w: # 세로 이미지 발견
+                        poster_url = curr_url
+                        logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
+                        break
+            except Exception:
+                continue
+
+        # 4. 포스터 최종 결정 (스마트 크롭 시도)
+        if not poster_url and use_smart:
+            logger.debug(f"[{cls.site_name}] No portrait poster found. Trying Smart Crop...")
+
+            # [2단계] PL(ThumbUltra) 스마트 크롭
+            if thumb_ultra:
+                try:
+                    res_pl = cls.get_response(thumb_ultra, stream=True, timeout=5)
+                    if res_pl and res_pl.status_code == 200:
+                        img_pl = Image.open(BytesIO(res_pl.content))
+                        logger.debug(f"[{cls.site_name}] Smart Crop ON. Checking PL: {thumb_ultra}")
+
+                        # 검증+크롭 동시 수행
+                        cropped = cls._smart_crop_image(img_pl)
+                        if cropped:
+                            temp_path = cls.save_pil_to_temp(cropped)
+                            if temp_path:
+                                poster_url = temp_path
+                                logger.debug(f"[{cls.site_name}] PL(ThumbUltra) Smart Cropped.")
+                        else:
+                            logger.debug(f"[{cls.site_name}] PL(ThumbUltra) ignored (Smart Crop failed).")
+                    else:
+                        logger.warning(f"[{cls.site_name}] Failed to download PL image: {thumb_ultra}")
+                except Exception as e:
+                    logger.error(f"[{cls.site_name}] PL Smart Crop Error: {e}")
+
+            # [3단계] 갤러리 스마트 크롭 (PL 실패 시)
+            if not poster_url:
+                for curr_url in arts_urls:
+                    try:
+                        res = cls.get_response(curr_url, stream=True, timeout=5)
+                        if not res or res.status_code != 200: continue
+                        
+                        img = Image.open(BytesIO(res.content))
+                        cropped = cls._smart_crop_image(img)
+                        if cropped:
+                            temp_path = cls.save_pil_to_temp(cropped)
+                            if temp_path:
+                                poster_url = temp_path
+                                logger.debug(f"[{cls.site_name}] Gallery Smart Cropped: {curr_url}")
+                                break
+                    except Exception:
+                        continue
+
+        # [4단계] Fallback (최후의 수단)
         if not poster_url:
-            # 1. PL Face (화질/구도 최상)
-            if pl_face_url:
-                poster_url = pl_face_url
-                logger.debug(f"[{cls.site_name}] Selected PL Face candidate.")
-            # 2. Gallery Face
-            elif gal_face_url:
-                poster_url = gal_face_url
-                logger.debug(f"[{cls.site_name}] Selected Gallery Face candidate.")
-            # 3. PL Body
-            elif pl_body_url:
-                poster_url = pl_body_url
-                logger.debug(f"[{cls.site_name}] Selected PL Body candidate.")
-            # 4. Gallery Body
-            elif gal_body_url:
-                poster_url = gal_body_url
-                logger.debug(f"[{cls.site_name}] Selected Gallery Body candidate.")
-            # 5. 최후의 수단: MovieThumb (정사각형 썸네일)
-            else:
-                poster_url = movie_thumb
-                # MovieThumb마저 없으면 어쩔 수 없이 ThumbUltra 사용 (중앙 크롭이라도 하라고)
-                if not poster_url: poster_url = thumb_ultra 
-                logger.debug(f"[{cls.site_name}] Fallback to MovieThumb.")
+            # MovieThumb(정사각형) > ThumbUltra(가로)
+            poster_url = movie_thumb or thumb_ultra
+            logger.debug(f"[{cls.site_name}] Fallback to MovieThumb/PL.")
 
         try:
             raw_image_urls = {
                 'poster': poster_url,
-                'pl': pl_url,
-                'arts': [pl_url] if pl_url else [],
+                'pl': landscape_url,
+                'arts': arts_urls,
             }
-            # process_image_data가 poster_url이 가로형이면 자동으로 크롭 수행
+
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation: {e}")
