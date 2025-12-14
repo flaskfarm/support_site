@@ -229,19 +229,14 @@ class SiteHeyzo(SiteAvBase):
         
         # === 이미지 처리 섹션 ===
         poster_url = None
-        candidate_face_url = None
-        candidate_body_url = None
         
         landscape_url = tmp.get('json_landscape') or tmp.get('mobile_landscape')
         gallery_urls = tmp.get('gallery', [])
 
         use_smart = cls.config.get('use_smart_crop')
-        use_yolo = cls.config.get('use_yolo_crop')
 
-        # 1. 갤러리 순회 (세로 탐색 & 후보 확보)
-        for idx, curr_url in enumerate(gallery_urls):
-            if poster_url: break
-
+        # [1단계] 갤러리 순회 (세로 이미지 탐색)
+        for curr_url in gallery_urls[:12]:
             try:
                 res = cls.get_response(curr_url, stream=True, timeout=3, headers=mobile_headers)
                 if not res or res.status_code != 200: continue
@@ -249,54 +244,57 @@ class SiteHeyzo(SiteAvBase):
                 img_bytes = BytesIO(res.content)
                 with Image.open(img_bytes) as img:
                     w, h = img.size
-                    
                     if h > w:
                         poster_url = curr_url
                         logger.debug(f"[{cls.site_name}] Found portrait poster in gallery: {poster_url}")
                         break
-                    
-                    if use_smart:
-                        if candidate_face_url is None and cls.check_face_detection(img):
-                            candidate_face_url = curr_url
-                            continue
-                        if use_yolo and candidate_face_url is None and candidate_body_url is None and cls.check_body_detection(img):
-                            candidate_body_url = curr_url
             except Exception:
                 continue
 
-        # 포스터 최종 결정 (우선순위: 세로 > PL크롭 > 갤러리크롭 > 썸네일)
-        if not poster_url:
-            # 2순위: PL(Landscape) 스마트 크롭
-            if use_smart and landscape_url:
+        # 포스터 최종 결정 (스마트 크롭 시도)
+        if not poster_url and use_smart:
+            logger.debug(f"[{cls.site_name}] No portrait poster found. Trying Smart Crop...")
+
+            # [2단계] PL(Landscape) 스마트 크롭
+            if landscape_url:
                 try:
                     res_pl = cls.get_response(landscape_url, stream=True, timeout=5, headers=mobile_headers)
                     if res_pl and res_pl.status_code == 200:
                         img_pl = Image.open(BytesIO(res_pl.content))
-                        if cls.check_face_detection(img_pl):
-                            poster_url = landscape_url
-                            logger.debug(f"[{cls.site_name}] PL(Landscape) passed FACE detection. Using for Smart Crop.")
-                        elif use_yolo and cls.check_body_detection(img_pl):
-                            poster_url = landscape_url
-                            logger.debug(f"[{cls.site_name}] PL(Landscape) passed BODY detection. Using for Smart Crop.")
+                        
+                        cropped = cls._smart_crop_image(img_pl)
+                        if cropped:
+                            temp_path = cls.save_pil_to_temp(cropped)
+                            if temp_path:
+                                poster_url = temp_path
+                                logger.debug(f"[{cls.site_name}] PL(Landscape) Smart Cropped.")
                         else:
-                            logger.debug(f"[{cls.site_name}] PL(Landscape) detection FAILED. Skipping PL.")
+                            logger.debug(f"[{cls.site_name}] PL(Landscape) ignored (Smart Crop failed).")
                 except Exception as e_pl:
                     logger.debug(f"[{cls.site_name}] Error checking PL image: {e_pl}")
 
-            # 3순위: 갤러리 스마트 크롭 후보
+            # [3단계] 갤러리 스마트 크롭 (PL 실패 시)
             if not poster_url:
-                if candidate_face_url:
-                    poster_url = candidate_face_url
-                    logger.debug(f"[{cls.site_name}] Selected Face candidate from gallery.")
-                elif candidate_body_url:
-                    poster_url = candidate_body_url
-                    logger.debug(f"[{cls.site_name}] Selected Body candidate from gallery.")
+                for curr_url in gallery_urls[:12]:
+                    try:
+                        res = cls.get_response(curr_url, stream=True, timeout=5, headers=mobile_headers)
+                        if not res or res.status_code != 200: continue
+                        
+                        img = Image.open(BytesIO(res.content))
+                        cropped = cls._smart_crop_image(img)
+                        if cropped:
+                            temp_path = cls.save_pil_to_temp(cropped)
+                            if temp_path:
+                                poster_url = temp_path
+                                logger.debug(f"[{cls.site_name}] Gallery Smart Cropped: {curr_url}")
+                                break
+                    except Exception:
+                        continue
 
-            # 4순위: 최후의 수단
-            if not poster_url:
-                poster_url = tmp.get('json_poster') or tmp.get('mobile_poster') or landscape_url
-                logger.debug(f"[{cls.site_name}] Fallback to original poster/PL.")
-
+        # [4단계] 최후의 수단
+        if not poster_url:
+            poster_url = tmp.get('json_poster') or tmp.get('mobile_poster') or landscape_url
+            logger.debug(f"[{cls.site_name}] Fallback to original poster/PL.")
 
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
