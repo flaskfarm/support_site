@@ -26,6 +26,19 @@ class SiteFc2com(SiteAvBase):
     _page_source_cache = {}
     _cache_lock = Lock()
 
+
+    @classmethod
+    def _add_fc2_cookies(cls, driver):
+        """FC2 성인 인증 쿠키 추가"""
+        try:
+            # 쿠키를 설정하려면 먼저 해당 도메인에 접속해야 함 (가벼운 페이지나 404 페이지 활용)
+            driver.get(cls.site_base_url + '/404') 
+            driver.add_cookie({'name': 'wei6H', 'value': '1', 'domain': '.fc2.com', 'path': '/'})
+            # logger.debug(f"[{cls.site_name}] Added adult cookie: wei6H=1")
+        except Exception as e:
+            logger.warning(f"[{cls.site_name}] Failed to add cookies: {e}")
+
+
     @classmethod
     def search(cls, keyword, manual=False):
         # Selenium 필수 체크
@@ -37,6 +50,8 @@ class SiteFc2com(SiteAvBase):
         try:
             from selenium.webdriver.common.by import By
             driver = cls._get_selenium_driver()
+
+            cls._add_fc2_cookies(driver)
 
             match = re.search(r'(\d{6,7})', keyword)
             if not match:
@@ -125,6 +140,9 @@ class SiteFc2com(SiteAvBase):
             try:
                 from selenium.webdriver.common.by import By
                 driver = cls._get_selenium_driver()
+
+                cls._add_fc2_cookies(driver)
+
                 info_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
                 detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
                 tree, _ = cls._get_page_content_selenium(driver, info_url, wait_for_locator=detail_page_wait_locator)
