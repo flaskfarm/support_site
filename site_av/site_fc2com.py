@@ -51,7 +51,7 @@ class SiteFc2com(SiteAvBase):
             from selenium.webdriver.common.by import By
             driver = cls._get_selenium_driver()
 
-            cls._add_fc2_cookies(driver)
+            # cls._add_fc2_cookies(driver)
 
             match = re.search(r'(\d{6,7})', keyword)
             if not match:
@@ -74,8 +74,17 @@ class SiteFc2com(SiteAvBase):
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code_part
+
             item.ui_code = cls._parse_ui_code_uncensored(keyword)
-            item.score = 100
+            if not item.ui_code or 'FC2' not in item.ui_code.upper():
+                item.ui_code = f'FC2-{code_part}'
+
+            if 'fc2' in keyword.lower():
+                item.score = 100
+            elif manual:
+                item.score = 100
+            else:
+                item.score = 90
 
             if h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
                 item.title = cls._extract_fc2com_title(h3_title[0])

@@ -44,7 +44,7 @@ class SiteCarib(SiteAvBase):
             item.code = cls.module_char + cls.site_char + code
 
             item.ui_code = cls._parse_ui_code_uncensored(keyword)
-            if not item.ui_code: # 파싱 실패 시 폴백
+            if not item.ui_code or 'CARIB' not in item.ui_code.upper():
                 item.ui_code = f'CARIB-{code}'
 
             title_node = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')
@@ -62,7 +62,12 @@ class SiteCarib(SiteAvBase):
             except (ValueError, IndexError): 
                 item.year = 0
 
-            item.score = 100
+            if 'carib' in keyword.lower():
+                item.score = 100
+            elif manual:
+                item.score = 100
+            else:
+                item.score = 90
 
             ret['data'] = [item.as_dict()]
             ret['ret'] = 'success'

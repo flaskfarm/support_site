@@ -53,7 +53,6 @@ class Site1PondoTv(SiteAvBase):
                 item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 try:
                     if cls.config.get('use_proxy') and item.image_url:
-                        # 포맷팅된 URL을 사용하므로 안전함
                         item.image_url = cls.make_image_url(item.image_url)
                 except Exception as e_img:
                     logger.error(f"Image processing error in manual search: {e_img}")
@@ -61,10 +60,12 @@ class Site1PondoTv(SiteAvBase):
                 item.title_ko = item.title
 
             item.ui_code = cls._parse_ui_code_uncensored(keyword)
-            if not item.ui_code:
+            if not item.ui_code or '1PON' not in item.ui_code.upper():
                 item.ui_code = f'1PON-{code}'
 
             if '1pon' in keyword.lower():
+                item.score = 100
+            elif manual:
                 item.score = 100
             elif code.replace('_', '-') in keyword.replace('_', '-'):
                 item.score = 95
