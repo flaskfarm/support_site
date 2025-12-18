@@ -2893,46 +2893,39 @@ class SiteAvBase:
                     body = people_list[body_idx]
                     
                     # (1) 크기 검증: 몸통 너비(tw)의 1.5배 OR 높이(th)의 0.6배 중 하나만 만족하면 OK
-                    body_w = body['box'][2]
-                    body_h = body['box'][3]
-                    
-                    is_width_ok = face['w'] < (body_w * 1.5)
-                    is_height_ok = face['w'] < (body_h * 0.6)
-                    
-                    is_size_safe = is_width_ok or is_height_ok
-                    
+                    body_w = body['box'][2]; body_h = body['box'][3]
+                    is_size_safe = (face['w'] < body_w * 1.5) or (face['w'] < body_h * 0.6)
+
                     # (2) 거리 검증: 몸통 너비의 2.0배 이내 OR 높이의 0.5배 이내
                     tx, ty, tw, th = body['box']
                     tcx, tcy = tx + tw//2, ty + th//2 
-                    
                     dist_y = abs(face['cy'] - tcy)
-                    max_dist_y = th * 1.5 
-                    is_dist_y_safe = dist_y < max_dist_y
-                    
                     dist_x = abs(face['cx'] - tcx)
-                    max_dist_x = max(tw * 2.0, th * 0.5) 
-                    is_dist_x_safe = dist_x < max_dist_x
+                    is_dist_safe = (dist_y < th * 1.5) and (dist_x < max(tw * 2.0, th * 0.5))
 
-                    if not (is_size_safe and is_dist_y_safe and is_dist_x_safe):
-                        logger.debug(f"[{cls.site_name}] Virtual Face Unsafe! Size:{is_size_safe} DistY:{is_dist_y_safe} DistX:{is_dist_x_safe}. Dropping.")
-                        continue
+                    is_safe = is_size_safe and is_dist_safe
+                    if not is_safe:
+                        logger.debug(f"[{cls.site_name}] Virtual Face Unsafe (Body:{body_idx}). Will drop if rescue fails.")
 
-
-                    # (2) Rescue 시도
+                    # Rescue 시도 (Unsafe라도 시도함)
                     rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold')
-                    
                     rescued_face = cls._attempt_face_rescue(detect_image, face, body, rescue_thresh)
                     
                     if rescued_face:
+                        # 성공: 진짜 얼굴 사용 (Safety 무관)
                         rescued_face['body_idx'] = body_idx
                         rescued_list.append(rescued_face)
-                        logger.debug(f"[{cls.site_name}] Rescue Success! Score:{rescued_face['score']:.0f}")
+                        logger.debug(f"[{cls.site_name}] Rescue Success! (Score:{rescued_face['score']:.0f})")
                     else:
-                        logger.debug(f"[{cls.site_name}] Rescue Failed. Using Virtual Face as Fallback.")
-                        rescued_list.append(face)
+                        # 실패: Safe한 경우만 Fallback 사용
+                        if is_safe:
+                            logger.debug(f"[{cls.site_name}] Rescue Failed. Using Safe Virtual Face.")
+                            rescued_list.append(face)
+                        else:
+                            logger.debug(f"[{cls.site_name}] Rescue Failed & Unsafe. Dropping.")
                 else:
                     rescued_list.append(face)
-            
+
             valid_faces = rescued_list
 
         # [Multi-face Filtering]
