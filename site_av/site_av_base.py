@@ -55,6 +55,8 @@ except ImportError:
 
 try:
     import mediapipe as mp
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
     _MEDIAPIPE_AVAILABLE = True
 except ImportError:
     _MEDIAPIPE_AVAILABLE = False
@@ -814,19 +816,21 @@ class SiteAvBase:
             # Selenium 타임아웃 설정
             "selenium_timeout": misc_settings.get('selenium_timeout', 10),
 
-            # 스마트 크롭 설정
+            # 스마트 크롭 설정 (Face)
             "use_smart_crop": db.get_bool(f'{common_config_prefix}_use_smart_crop'),
-            "smart_crop_yunet_model_path": db.get(f'{common_config_prefix}_smart_crop_yunet_model_path'),
+            "face_landmarker_model_path": db.get(f'{common_config_prefix}_face_landmarker_model_path'),
+            "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.5)),
+            "smart_crop_face_rescue_threshold": float(image_settings.get('smart_crop_face_rescue_threshold', 0.3)),
 
-            "use_body_crop": db.get_bool(f'{common_config_prefix}_use_body_crop'), 
-            "mediapipe_complexity": int(db.get(f'{common_config_prefix}_mediapipe_complexity')),
+            "smart_crop_yunet_model_path": db.get(f'{common_config_prefix}_yunet_model_path'),
 
-            "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.7)),
-            "smart_crop_face_rescue_threshold": float(image_settings.get('smart_crop_face_rescue_threshold', 0.5)),
+            # 스마트 크롭 설정 (Pose)
+            "use_pose_landmarker": db.get_bool(f'{common_config_prefix}_use_pose_landmarker'), 
+            "pose_landmarker_model_path": db.get(f'{common_config_prefix}_pose_landmarker_model_path'),
             "smart_crop_body_threshold": float(image_settings.get('smart_crop_body_threshold', 0.5)),
 
             "smart_crop_face_weight_min": float(image_settings.get('smart_crop_face_weight_min', 0.3)),
-            "smart_crop_face_weight_max": float(image_settings.get('smart_crop_face_weight_max', 0.9)),
+            "smart_crop_face_weight_max": float(image_settings.get('smart_crop_face_weight_max', 0.8)),
         })
         # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
         # uncensored_rules_count = len(cls.config.get('uncensored_parser_rules', {}).get('custom_rules', []))
@@ -1136,7 +1140,7 @@ class SiteAvBase:
 
                 if pre_calculated_target_folder and pre_calculated_url_prefix:
                     # Case 1: 사이트 모듈에서 이미 경로를 계산해 준 경우 (FC2, 1pondo 등)
-                    logger.debug(f"Using pre-calculated image server path from entity: {pre_calculated_target_folder}")
+                    # logger.debug(f"Using pre-calculated image server path from entity: {pre_calculated_target_folder}")
                     target_folder = pre_calculated_target_folder
                     url_prefix = pre_calculated_url_prefix
                 else:
@@ -1317,7 +1321,7 @@ class SiteAvBase:
             # logger.debug(f"Determining poster source for {ui_code} as no user/system file exists or rewrite is on.")
             
             if direct_poster_url:
-                logger.debug(f"Using pre-determined poster URL for {ui_code}.")
+                # logger.debug(f"Using pre-determined poster URL for {ui_code}.")
                 final_image_sources['poster_source'] = direct_poster_url
                 
                 # URL이 http로 시작할 때만 스마트 크롭 예약.
@@ -2009,7 +2013,7 @@ class SiteAvBase:
         generic_rules = cls.config.get('generic_parser_rules', [])
         all_rules = special_rules + generic_rules
 
-        logger.debug(f"[{cls.site_name}] _parse_ui_code_uncensored started for '{cid_part_raw}'. Using {len(special_rules)} special + {len(generic_rules)} generic rules.")
+        # logger.debug(f"[{cls.site_name}] _parse_ui_code_uncensored started for '{cid_part_raw}'. Using {len(special_rules)} special + {len(generic_rules)} generic rules.")
 
         for line in all_rules:
             line = line.strip()
@@ -2032,7 +2036,7 @@ class SiteAvBase:
                     final_label_part = label_template.format(*groups).strip()
                     final_num_part = num_template.format(*groups).strip()
                     rule_applied = True
-                    logger.debug(f"Uncensored Parser: Matched Rule '{pattern}' -> Label:'{final_label_part}', Num:'{final_num_part}'")
+                    # logger.debug(f"Uncensored Parser: Matched Rule '{pattern}' -> Label:'{final_label_part}', Num:'{final_num_part}'")
                     break
             except Exception as e:
                 logger.error(f"Error applying uncensored rule: '{line}' - {e}")
@@ -2283,265 +2287,583 @@ class SiteAvBase:
 
 
     # =========================================================================
-    # AI Detection Methods (MediaPipe + YuNet Integrated)
+    # AI Detection Methods (MediaPipe + YuNet)
     # -------------------------------------------------------------------------
 
     @classmethod
-    def _detect_face(cls, open_cv_image, threshold=None, nose_point=None, limit_box=None):
-        """
-        YuNet을 사용하여 얼굴을 인식합니다.
-        MediaPipe의 코 좌표(nose_point)가 있으면 교차 검증하여 정확도를 높입니다.
-        다중 인물일 경우, 주인공(Main)과의 유사도(신뢰도/크기/거리)를 분석하여 최적의 중심점을 계산합니다.
-        반환값: (found, center_x, is_shifted, face_box)
-        """
-        if not _OPENCV_AVAILABLE: return False, None, False, None
-        
-        model_path = cls.config.get('smart_crop_yunet_model_path')
-        if not model_path or not os.path.exists(model_path):
-            return False, None, False, None
-        
-        if threshold is None:
-            threshold = cls.config.get('smart_crop_face_threshold')
-
-        try:
-            (h, w) = open_cv_image.shape[:2]
-            
-            if not hasattr(cls, '_face_net_yunet'):
-                try:
-                    cls._face_net_yunet = cv2.FaceDetectorYN.create(
-                        model=model_path, config="", input_size=(w, h), 
-                        score_threshold=threshold, nms_threshold=0.3, top_k=5000
-                    )
-                except AttributeError: return False, None, False, None
-
-            net = cls._face_net_yunet
-            net.setInputSize((w, h)) 
-            net.setScoreThreshold(threshold)
-
-            _, faces = net.detect(open_cv_image)
-
-            if faces is None or len(faces) == 0:
-                return False, None, False, None
-
-            valid_faces = []
-
-            # limit_box 좌표 계산 (Rescue 모드용)
-            lb_x1, lb_y1, lb_x2, lb_y2 = 0, 0, w, h
-            if limit_box:
-                lx, ly, lw, lh = limit_box
-                # Rescue 마진: 좌우 50%, 상단 60%
-                margin_x = int(lw * 0.5)
-                top_margin = int(lh * 0.6)
-                
-                lb_x1 = max(0, lx - margin_x)
-                lb_y1 = max(0, ly - top_margin)
-                lb_x2 = min(w, lx + lw + margin_x)
-                lb_y2 = min(h, ly + lh) # 하단은 바디 끝까지
-
-            for face in faces:
-                box_x, box_y, box_w, box_h = face[0:4].astype(int)
-                confidence = face[-1]
-                
-                face_cx = box_x + (box_w // 2)
-                face_cy = box_y + (box_h // 2)
-
-                # 1. Limit Box 검사 (Rescue 시)
-                if limit_box:
-                    if not (lb_x1 <= face_cx <= lb_x2 and lb_y1 <= face_cy <= lb_y2): 
-                        continue
-                    # 바디 하단 80% 지점보다 아래에 있으면 제외 (무릎/발 등 오인식 방지)
-                    if face_cy > ly + (lh * 0.8):
-                        continue
-
-                area = box_w * box_h
-                score = area * confidence
-
-                # 2. MediaPipe 코 좌표 교차 검증
-                dist_from_nose = float('inf')
-                face_diag = (box_w**2 + box_h**2)**0.5
-
-                if nose_point:
-                    nx, ny = nose_point
-                    dist_from_nose = ((face_cx - nx)**2 + (face_cy - ny)**2)**0.5
-                    
-                    # 1) 거리 검증: 얼굴 크기의 1.5배보다 멀면 제외 (가짜 얼굴)
-                    if dist_from_nose > face_diag * 1.5:
-                        continue 
-                    
-                    # 2) 점수 보정: 코와 가까울수록 점수 상향
-                    if dist_from_nose < face_diag * 0.8:
-                        score *= 3.0 # 강력한 가산점
-                    elif dist_from_nose < face_diag * 1.2:
-                        score *= 1.5
-                
-                valid_faces.append({
-                    'x1': box_x, 'x2': box_x + box_w,
-                    'cx': face_cx, 'cy': face_cy, 
-                    'area': area, 'w': box_w,
-                    'score': score, 'confidence': confidence,
-                    'dist_from_nose': dist_from_nose
-                })
-
-            if not valid_faces:
-                return False, None, False, None
-
-            # 3. 주인공 선정 (코 좌표 우선, 없으면 점수 우선)
-            if nose_point:
-                main_face = min(valid_faces, key=lambda x: x['dist_from_nose'])
-            else:
-                main_face = max(valid_faces, key=lambda x: x['score'])
-            
-            # 4. 다중 인물 최적화 (Shift)
-            target_ratio = 1.4225
-            crop_width = int(h / target_ratio)
-            half_crop = crop_width // 2
-            
-            shift_candidates = []
-            
-            for sub in valid_faces:
-                if sub == main_face: continue
-                
-                # [유사도 점수 계산] (기본 100점)
-                similarity_score = 100.0
-                
-                # 1) 신뢰도 차이 감점 (가장 중요)
-                conf_diff = abs(sub['confidence'] - main_face['confidence'])
-                similarity_score -= (conf_diff * 150) 
-                
-                # 2) 면적 차이 감점
-                size_diff = abs(sub['area'] - main_face['area'])
-                max_area = max(sub['area'], main_face['area'])
-                size_ratio = size_diff / max_area
-                similarity_score -= (size_ratio * 80) 
-                
-                # 3) 거리 감점 (보조)
-                dist = ((sub['cx'] - main_face['cx'])**2 + (sub['cy'] - main_face['cy'])**2)**0.5
-                main_diag = (main_face['w']**2 + (main_face['x2']-main_face['x1'])**2)**0.5
-                dist_ratio = dist / main_diag
-                similarity_score -= (dist_ratio * 10)
-
-                # [로그] 점수 내역 확인
-                logger.debug(f"  Face Comparison: ConfDiff({conf_diff:.2f}), SizeRatio({size_ratio:.2f}), Dist({dist_ratio:.1f}) -> SimScore: {similarity_score:.1f}")
-
-                if similarity_score < 40:
-                    continue
-
-                # Shift 가능 여부 확인 (주인공 안전 범위 내)
-                mid_point = (main_face['cx'] + sub['cx']) // 2
-                crop_x1, crop_x2 = mid_point - half_crop, mid_point + half_crop
-                
-                tolerance = main_face['w'] * 0.15 
-                main_safe_x1 = main_face['x1'] + tolerance
-                main_safe_x2 = main_face['x2'] - tolerance
-                
-                if crop_x1 <= main_safe_x1 and crop_x2 >= main_safe_x2:
-                    shift_candidates.append({'cx': mid_point, 'score': sub['score']})
-
-            main_box = (main_face['x1'], main_face['x2'], main_face['w'])
-
-            if shift_candidates:
-                best_candidate = max(shift_candidates, key=lambda x: x['score'])
-                logger.debug(f"[{cls.site_name}] YuNet: Multi-face Shift applied.")
-                return True, best_candidate['cx'], True, main_box
-            
-            return True, main_face['cx'], False, main_box
-
-        except Exception as e:
-            logger.error(f"[{cls.site_name}] YuNet Face Error: {e}")
-            return False, None, False, None
-
-
-    @classmethod
     def _detect_body(cls, open_cv_image):
-        """
-        MediaPipe Pose를 이용한 바디, 코 좌표, 기울기(Angle) 검출.
-        반환값: (found, body_cx, body_box, nose_point, angle)
-        """
-        if not _MEDIAPIPE_AVAILABLE: return False, None, None, None, 0
-        if not cls.config.get('use_body_crop'): return False, None, None, None, 0
+        if not cls.config.get('use_pose_landmarker'): return False, []
+
+        model_path = cls.config.get('pose_landmarker_model_path')
+        if not model_path or not os.path.exists(model_path):
+            logger.error(f"[{cls.site_name}] Pose Model file missing: {model_path}")
+            return False, []
 
         try:
+            body_thresh = cls.config.get('smart_crop_body_threshold')
+            
             h, w = open_cv_image.shape[:2]
             img_rgb = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+
+            base_options = python.BaseOptions(model_asset_path=model_path)
+            options = vision.PoseLandmarkerOptions(
+                base_options=base_options,
+                num_poses=5, 
+                min_pose_detection_confidence=body_thresh,
+                min_pose_presence_confidence=body_thresh,
+                min_tracking_confidence=0.5
+            )
             
-            complexity = cls.config.get('mediapipe_complexity', 1)
-            # 설정값 로드 (기본 0.5)
-            body_thresh = cls.config.get('smart_crop_body_threshold', 0.5)
+            with vision.PoseLandmarker.create_from_options(options) as landmarker:
+                detection_result = landmarker.detect(mp_image)
 
-            with mp.solutions.pose.Pose(
-                static_image_mode=True,
-                model_complexity=complexity,
-                enable_segmentation=False,
-                min_detection_confidence=body_thresh
-            ) as pose:
-                results = pose.process(img_rgb)
-                if not results.pose_landmarks: return False, None, None, None, 0
+            if not detection_result.pose_landmarks:
+                return False, []
 
-                landmarks = results.pose_landmarks.landmark
-                
-                l_sh = landmarks[11]; r_sh = landmarks[12]
-                l_hip = landmarks[23]; r_hip = landmarks[24]
-                l_eye = landmarks[2]; r_eye = landmarks[5]
+            people_list = []
+            
+            for idx, landmarks in enumerate(detection_result.pose_landmarks):
+                # 1. 랜드마크 추출
                 nose = landmarks[0]
+                l_eye, r_eye = landmarks[2], landmarks[5]
+                l_ear, r_ear = landmarks[7], landmarks[8]
+                l_sh, r_sh = landmarks[11], landmarks[12]
+                l_hip, r_hip = landmarks[23], landmarks[24]
                 
-                # 1. 바디 중심 및 박스 계산
-                pts = [l_sh, r_sh, l_hip, r_hip]
-                cx_float = sum([p.x for p in pts]) / 4.0
+                limb_indices = [13, 14, 25, 26]
+                visible_limbs_subset_x = []
+                for li in limb_indices:
+                    if landmarks[li].visibility > 0.5:
+                        visible_limbs_subset_x.append(landmarks[li].x)
+
+                visible_ears_x = []
+                if l_ear.visibility > 0.5: visible_ears_x.append(l_ear.x)
+                if r_ear.visibility > 0.5: visible_ears_x.append(r_ear.x)
+
+                # 2. 좌표 그룹핑 (Torso Only for Base Box)
+                pts_torso = [l_sh, r_sh, l_hip, r_hip]
+                x_torso = [p.x for p in pts_torso]
+                y_torso = [p.y for p in pts_torso]
+
+                if min(x_torso) < -0.2 or max(x_torso) > 1.2: continue
+
+                # [Hip Bias Logic] 무게중심 계산
+                width_sh = abs(l_sh.x - r_sh.x)
+                width_hip = abs(l_hip.x - r_hip.x)
+                
+                sh_cx = (l_sh.x + r_sh.x) / 2
+                hip_cx = (l_hip.x + r_hip.x) / 2
+                
+                # 엉덩이 강조 가중치 (1.2배 이상 크면 2배 가중)
+                w_hip = 2.0 if width_hip > width_sh * 1.2 else 1.0
+                torso_core_cx = (sh_cx * 1.0 + hip_cx * w_hip) / (1.0 + w_hip)
+                
+                # Limbs Integration (오탐 방지: 2개 이상일 때만)
+                limb_pts = [landmarks[i] for i in limb_indices]
+                valid_limbs = [p for p in limb_pts if p.visibility > 0.5]
+                
+                if len(valid_limbs) >= 2:
+                    limbs_cx = sum([p.x for p in valid_limbs]) / len(valid_limbs)
+                    cx_float = (torso_core_cx + limbs_cx) / 2.0
+                else:
+                    cx_float = torso_core_cx
+                
                 body_cx = int(cx_float * w)
                 
-                x_coords = [p.x for p in pts]; y_coords = [p.y for p in pts]
-                min_x, max_x = min(x_coords), max(x_coords)
-                min_y, max_y = min(y_coords), max(y_coords)
+                # [Torso Box]
+                min_x = int(min(x_torso) * w)
+                max_x = int(max(x_torso) * w)
+                min_y = int(min(y_torso) * h)
+                max_y = int(max(y_torso) * h)
+                box_w = max_x - min_x
+                box_h = max_y - min_y
+                torso_box = (min_x, min_y, box_w, box_h)
                 
-                box_x = int(min_x * w)
-                box_y = int(min_y * h)
-                box_w = int((max_x - min_x) * w)
-                box_h = int((max(y_coords) - min(y_coords)) * h) # 높이 보정
+                # [Full Box] (Log Only)
+                all_pts = pts_torso + valid_limbs
+                fx1 = int(min([p.x for p in all_pts]) * w)
+                fx2 = int(max([p.x for p in all_pts]) * w)
+                fy1 = int(min([p.y for p in all_pts]) * h)
+                fy2 = int(max([p.y for p in all_pts]) * h)
+                full_box = (fx1, fy1, fx2 - fx1, fy2 - fy1)
                 
                 nose_point = (int(nose.x * w), int(nose.y * h))
-
-                if body_cx < 0 or body_cx > w: return False, None, None, None, 0
-
-                # 2. 기울기(Angle) 계산 (Torso 기준 우선, Eye 기준 폴백)
-                body_angle = 0
                 
-                mid_sh_x = (l_sh.x + r_sh.x) / 2
-                mid_sh_y = (l_sh.y + r_sh.y) / 2
-                mid_hip_x = (l_hip.x + r_hip.x) / 2
-                mid_hip_y = (l_hip.y + r_hip.y) / 2
-                
-                # 랜드마크 신뢰도 확인
+                # 4. 각도 및 Yaw 계산
+                body_angle = 0.0
                 is_torso_visible = (l_sh.visibility > 0.5 and r_sh.visibility > 0.5 and 
                                     l_hip.visibility > 0.5 and r_hip.visibility > 0.5)
                 
                 if is_torso_visible:
-                    # 벡터: Hip -> Shoulder (몸통이 향하는 방향)
-                    vec_x = mid_sh_x - mid_hip_x
-                    vec_y = mid_sh_y - mid_hip_y
-                    # atan2(x, -y) : 이미지 좌표계 y 반전
-                    radians = math.atan2(vec_x, -vec_y)
-                    body_angle = math.degrees(radians)
-                else:
-                    # 폴백: 눈 기울기 (Nose -> MidEye)
-                    if l_eye.visibility > 0.5 and r_eye.visibility > 0.5:
-                        mid_eye_x = (l_eye.x + r_eye.x) / 2
-                        mid_eye_y = (l_eye.y + r_eye.y) / 2
-                        vec_x = mid_eye_x - nose.x
-                        vec_y = mid_eye_y - nose.y
-                        radians = math.atan2(vec_x, -vec_y)
-                        body_angle = math.degrees(radians)
+                    mid_sh_x = (l_sh.x + r_sh.x) / 2; mid_sh_y = (l_sh.y + r_sh.y) / 2
+                    mid_hip_x = (l_hip.x + r_hip.x) / 2; mid_hip_y = (l_hip.y + r_hip.y) / 2
+                    body_angle = math.degrees(math.atan2(mid_sh_x - mid_hip_x, -(mid_sh_y - mid_hip_y)))
+                elif l_eye.visibility > 0.5 and r_eye.visibility > 0.5:
+                    mid_eye_x = (l_eye.x + r_eye.x) / 2; mid_eye_y = (l_eye.y + r_eye.y) / 2
+                    body_angle = math.degrees(math.atan2(mid_eye_x - nose.x, -(mid_eye_y - nose.y)))
 
-                # 반환값 5개: (found, cx, box, nose, angle)
-                return True, body_cx, (box_x, box_y, box_w, box_h), nose_point, body_angle
+                # 5. 가상 얼굴 박스 생성 (Robust Logic)
+                face_w_float = 0.0
+                source_name = "Init"
+
+                def get_dist(p1, p2):
+                    return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
+
+                # A. Torso Scale Calculation
+                torso_scale = 0.0
+                if is_torso_visible:
+                    diag_1 = get_dist(l_sh, r_hip)
+                    diag_2 = get_dist(r_sh, l_hip)
+                    side_1 = get_dist(l_sh, l_hip)
+                    side_2 = get_dist(r_sh, r_hip)
+                    width_sh = get_dist(l_sh, r_sh)
+                    width_hip = get_dist(l_hip, r_hip)
+                    torso_scale = max(diag_1, diag_2, side_1, side_2, width_sh, width_hip)
+
+                body_width_ratio = box_w / w if w > 0 else 0
+
+                def is_valid_part(part_size, min_ratio=0.2):
+                    if torso_scale > 0:
+                        return part_size > (torso_scale * min_ratio)
+                    if body_width_ratio == 0: return False
+                    return part_size > (body_width_ratio * min_ratio)
+
+                # B. Size Estimation
+                dist_ear = get_dist(l_ear, r_ear) if (l_ear.visibility > 0.5 and r_ear.visibility > 0.5) else 0.0
+                dist_eye = get_dist(l_eye, r_eye) if (l_eye.visibility > 0.5 and r_eye.visibility > 0.5) else 0.0
+                dist_sh  = get_dist(l_sh, r_sh)   if (l_sh.visibility > 0.5 and r_sh.visibility > 0.5) else 0.0
+                
+                min_valid_face = (torso_scale * 0.1) if torso_scale > 0 else 0.02
+
+                if dist_ear > min_valid_face:
+                    face_w_float = dist_ear * 1.8
+                    source_name = "Ears"
+                elif dist_eye > min_valid_face:
+                    face_w_float = dist_eye * 3.0
+                    source_name = "Eyes"
+                elif torso_scale > 0:
+                    # [Logic 2] Torso Scale Based
+                    std_face_w = torso_scale * 0.22
+                    min_valid_sh = torso_scale * 0.3
+                    
+                    if dist_sh > min_valid_sh:
+                        face_w_float = dist_sh * 0.6
+                        source_name = "Shoulders(Wide)"
+                    else:
+                        face_w_float = std_face_w
+                        source_name = "TorsoStd"
+                else:
+                    # [Logic 3] Fallback
+                    l_arm = get_dist(l_sh, landmarks[13]) if (l_sh.visibility > 0.5 and landmarks[13].visibility > 0.5) else 0
+                    r_arm = get_dist(r_sh, landmarks[14]) if (r_sh.visibility > 0.5 and landmarks[14].visibility > 0.5) else 0
+                    dist_arm = max(l_arm, r_arm)
+                    
+                    if dist_arm > 0 and is_valid_part(dist_arm, 0.2): 
+                        face_w_float = dist_arm * 0.7
+                        source_name = "Arms"
+                    elif dist_sh > 0 and is_valid_part(dist_sh, 0.2): 
+                        face_w_float = dist_sh * 0.6
+                        source_name = "Shoulders(Only)"
+                    else:
+                        face_w_float = max(0.15, body_width_ratio * 0.5)
+                        source_name = "BodyFallback"
+
+                # C. Final Validations
+                if face_w_float > 0.6: face_w_float = 0.6
+                
+                face_w = int(face_w_float * w)
+                face_h = int(face_w * 1.2)
+                
+                # 중심점 보정
+                if dist_ear > 0:
+                    mid_ear_x = (l_ear.x + r_ear.x) / 2
+                    mid_ear_y = (l_ear.y + r_ear.y) / 2
+                    face_cx = int(((nose.x + mid_ear_x) / 2) * w)
+                    face_cy = int(((nose.y + mid_ear_y) / 2) * h)
+                else:
+                    face_cx = nose_point[0]
+                    face_cy = nose_point[1]
+                
+                face_cy -= int(face_h * 0.15)
+                v_box = (face_cx - face_w//2, face_cy - face_h//2, face_w, face_h)
+                v_x1 = face_cx - face_w//2
+                v_x2 = v_x1 + face_w
+
+                # 6. 점수 계산
+                area = (max_x - min_x) * (max_y - min_y)
+                avg_presence = sum([p.presence for p in pts_torso]) / 4.0
+                score = (area * 0.8) + (avg_presence * 0.2)
+
+                people_list.append({
+                    'cx': body_cx,
+                    'cx_float': cx_float,
+                    'box': torso_box,
+                    'full_box': full_box,
+                    'nose': nose_point,
+                    'nose_x_float': nose.x,
+                    'angle': body_angle,
+                    'score': score,
+                    'limbs_subset_x': visible_limbs_subset_x,
+                    'ears_x': visible_ears_x,
+                    'virtual_face': {
+                        'box': v_box, 'w': face_w, 'h': face_h,
+                        'cx': face_cx, 'cy': face_cy,
+                        'x1': v_x1, 'x2': v_x2,
+                        'source': source_name
+                    }
+                })
+
+            people_list.sort(key=lambda x: x['score'], reverse=True)
+            
+            try:
+                log_msg = f"[{cls.site_name}] MP-Pose: {len(people_list)} bodies found."
+                for i, p in enumerate(people_list):
+                    n_limbs = len(p.get('limbs_subset_x', []))
+                    
+                    vf = p['virtual_face']
+                    v_info = f"V.Face:[Src:{vf['source']} W:{vf['w']} Box:{vf['box']}]"
+                    f_box = p.get('full_box', p['box'])
+                    
+                    log_msg += f"\n    #{i+1} [Body] Score:{p['score']:.0f} Ang:{p['angle']:.1f} {v_info} Torso:{p['box']} Limbs:{n_limbs}{f_box}"
+                logger.debug(log_msg)
+            except Exception: pass
+            
+            return True, people_list
 
         except Exception as e:
-            logger.error(f"[{cls.site_name}] MediaPipe Error: {e}")
-            return False, None, None, None, 0
+            logger.error(f"[{cls.site_name}] MediaPipe Pose Error: {e}")
+            return False, []
+
+
+    @classmethod
+    def _detect_face(cls, open_cv_image, threshold=None, people_list=None, roi=None):
+        model_path = cls.config.get('face_landmarker_model_path') 
+        if not model_path or not os.path.exists(model_path):
+            if not roi: logger.error(f"[{cls.site_name}] Face Model file missing: {model_path}")
+            return False, []
+
+        if threshold is None:
+            threshold = cls.config.get('smart_crop_face_threshold')
+
+        try:
+            # 1. ROI 처리
+            if roi:
+                rx, ry, rw, rh = roi
+                h_img, w_img = open_cv_image.shape[:2]
+                rx = max(0, rx); ry = max(0, ry)
+                rw = min(rw, w_img - rx); rh = min(rh, h_img - ry)
+                if rw <= 10 or rh <= 10: return False, []
+                detect_image_np = open_cv_image[ry:ry+rh, rx:rx+rw]
+                offset_x, offset_y = rx, ry
+                img_h, img_w = rh, rw
+            else:
+                offset_x, offset_y = 0, 0
+                img_h, img_w = open_cv_image.shape[:2]
+                detect_image_np = open_cv_image
+
+            detect_image_np = cv2.cvtColor(detect_image_np, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=detect_image_np)
+
+            # 2. Landmarker 인스턴스
+            if not hasattr(cls, '_mp_face_landmarker_instance'):
+                base_options = python.BaseOptions(model_asset_path=model_path)
+                options = vision.FaceLandmarkerOptions(
+                    base_options=base_options,
+                    output_face_blendshapes=False,
+                    output_facial_transformation_matrixes=False,
+                    num_faces=5,
+                    min_face_detection_confidence=threshold,
+                    min_face_presence_confidence=threshold,
+                )
+                cls._mp_face_landmarker_instance = vision.FaceLandmarker.create_from_options(options)
+            
+            landmarker = cls._mp_face_landmarker_instance
+            detection_result = landmarker.detect(mp_image)
+            
+            # 3. 결과 파싱
+            detected_faces = []
+            if detection_result.face_landmarks:
+                for face_landmarks in detection_result.face_landmarks:
+                    xs = [l.x for l in face_landmarks]
+                    ys = [l.y for l in face_landmarks]
+                    
+                    min_x, max_x = min(xs), max(xs)
+                    min_y, max_y = min(ys), max(ys)
+                    
+                    box_x = int(min_x * img_w) + offset_x
+                    box_y = int(min_y * img_h) + offset_y
+                    box_w = int((max_x - min_x) * img_w)
+                    box_h = int((max_y - min_y) * img_h)
+                    
+                    if box_w <= 0 or box_h <= 0: continue
+
+                    face_cx = box_x + (box_w // 2)
+                    face_cy = box_y + (box_h // 2)
+                    area = box_w * box_h
+                    
+                    # 각도 계산
+                    roll_angle = 0.0
+                    yaw_angle = 0.0
+                    try:
+                        l_eye = face_landmarks[33]; r_eye = face_landmarks[263]
+                        nose = face_landmarks[1]
+                        l_cheek = face_landmarks[454]; r_cheek = face_landmarks[234]
+                        
+                        dy = (r_eye.y - l_eye.y) * img_h
+                        dx = (r_eye.x - l_eye.x) * img_w
+                        roll_angle = math.degrees(math.atan2(dy, dx))
+                        
+                        dist_l = abs(nose.x - l_cheek.x)
+                        dist_r = abs(nose.x - r_cheek.x)
+                        yaw_ratio = (dist_l - dist_r) / (dist_l + dist_r + 1e-6)
+                        yaw_angle = yaw_ratio * 120.0
+                    except: pass
+
+                    detected_faces.append({
+                        'cx': face_cx, 'cy': face_cy,
+                        'w': box_w, 'h': box_h, 
+                        'x1': box_x, 'x2': box_x + box_w,
+                        'area': area,
+                        'score': float(area),
+                        'angle': roll_angle,
+                        'yaw': yaw_angle,
+                        'body_idx': -1, 'is_virtual': False,
+                        'box': (box_x, box_y, box_w, box_h)
+                    })
+
+            if not detected_faces and not roi:
+                logger.debug(f"[{cls.site_name}] MP-Face: No faces detected. (Threshold: {threshold})")
+
+            # 4. 매칭 및 가상 얼굴 추가
+            valid_faces = []
+            if people_list:
+                for b_idx, person in enumerate(people_list):
+                    nx, ny = person['nose']
+                    best_match = None
+                    min_dist = float('inf')
+                    
+                    for face in detected_faces:
+                        if face['body_idx'] != -1: continue
+                        diag = (face['w']**2 + face['h']**2)**0.5
+                        dist = ((face['cx'] - nx)**2 + (face['cy'] - ny)**2)**0.5
+                        
+                        if dist < diag * 1.5:
+                            if dist < min_dist:
+                                min_dist = dist
+                                best_match = face
+                                
+                    if best_match:
+                        best_match['body_idx'] = b_idx
+                        best_match['score'] *= 2.0
+                        valid_faces.append(best_match)
+                    elif person['score'] > 0.2 and not roi:
+                        v_face = person['virtual_face']
+                        
+                        dummy_face = {
+                            'cx': v_face['cx'], 'cy': v_face['cy'],
+                            'w': v_face['w'], 'h': v_face['h'],
+                            'x1': v_face.get('x1', v_face['cx'] - v_face['w']//2),
+                            'x2': v_face.get('x2', v_face['cx'] + v_face['w']//2),
+                            'score': person['score'] * 50000,
+                            'angle': person['angle'], 
+                            'yaw': 0.0, 
+                            'body_idx': b_idx, 'is_virtual': True,
+                            'box': v_face['box'],
+                            'source': v_face.get('source', '?')
+                        }
+                        valid_faces.append(dummy_face)
+                        # logger.debug(f"Added Virtual Face for Body {b_idx}")
+
+            # 5. 매칭 안 된 얼굴 처리 (Unmatched Real Faces)
+            if not roi:
+                remaining_faces = [f for f in detected_faces if f['body_idx'] == -1]
+                main_face = valid_faces[0] if valid_faces else None
+                for sub in remaining_faces:
+                    if main_face:
+                        size_diff_ratio = abs(sub['area'] - main_face['area']) / max(sub['area'], main_face['area'])
+                        if size_diff_ratio > 0.8: continue
+                        dist = ((sub['cx'] - main_face['cx'])**2 + (sub['cy'] - main_face['cy'])**2)**0.5
+                        main_diag = (main_face['w']**2 + main_face['h']**2)**0.5
+                        if dist > main_diag * 3.0: continue
+                        valid_faces.append(sub)
+                    else:
+                        valid_faces.append(sub)
+            else:
+                # ROI Rescue 모드: 가장 큰 얼굴 선택
+                if not valid_faces and detected_faces:
+                    detected_faces.sort(key=lambda x: x['score'], reverse=True)
+                    valid_faces.append(detected_faces[0])
+
+            valid_faces.sort(key=lambda x: x['score'], reverse=True)
+
+            try:
+                log_header = "MP-Face (Rescue)" if roi else "MP-Face"
+                log_msg = f"[{cls.site_name}] {log_header}: {len(valid_faces)} valid / {len(detected_faces)} detected."
+                
+                for i, f in enumerate(valid_faces):
+                    f_type = "Virtual" if f.get('is_virtual') else "Real"
+                    b_str = f"Body:{f.get('body_idx', -1)}"
+                    yaw_val = f.get('yaw', 0.0)
+                    ang_val = f.get('angle', 0.0)
+                    src_str = f" Src:{f.get('source', '')}" if f_type == "Virtual" else ""
+                    
+                    log_msg += f"\n    #{i+1} [{f_type}] Score:{f['score']:.0f} W:{f['w']} Ang:{ang_val:.1f} Yaw:{yaw_val:.1f} {b_str}{src_str} Box:{f['box']}"
+                
+                if valid_faces or roi: logger.debug(log_msg)
+            except Exception as e:
+                logger.error(f"Log Error: {e}")
+
+            return True, valid_faces
+
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] MediaPipe Face Error: {e}")
+            return False, []
+
+
+    @classmethod
+    def _detect_face_yunet(cls, open_cv_image, threshold=None, roi=None):
+        model_path = cls.config.get('smart_crop_yunet_model_path')
+        if not model_path or not os.path.exists(model_path): return []
+
+        if threshold is None:
+            threshold = cls.config.get('smart_crop_face_threshold', 0.4)
+
+        try:
+            if roi:
+                rx, ry, rw, rh = roi
+                h_img, w_img = open_cv_image.shape[:2]
+                rx = max(0, rx); ry = max(0, ry)
+                rw = min(rw, w_img - rx); rh = min(rh, h_img - ry)
+                if rw <= 10 or rh <= 10: return []
+                img = open_cv_image[ry:ry+rh, rx:rx+rw]
+                off_x, off_y = rx, ry
+            else:
+                img = open_cv_image
+                off_x, off_y = 0, 0
+
+            h, w = img.shape[:2]
+            if not hasattr(cls, '_face_net_yunet'):
+                cls._face_net_yunet = cv2.FaceDetectorYN.create(
+                    model=model_path, config="", input_size=(w, h), 
+                    score_threshold=threshold, nms_threshold=0.3, top_k=5000
+                )
+            
+            net = cls._face_net_yunet
+            net.setInputSize((w, h))
+            net.setScoreThreshold(threshold)
+            _, faces = net.detect(img)
+            
+            results = []
+            if faces is not None:
+                for face in faces:
+                    box_x = int(face[0]) + off_x
+                    box_y = int(face[1]) + off_y
+                    box_w = int(face[2])
+                    box_h = int(face[3])
+                    cx = box_x + box_w // 2
+                    cy = box_y + box_h // 2
+
+                    logger.debug(f"YuNet Face: Score:{face[14]:.2f} Box:({box_x},{box_y},{box_w},{box_h})")
+                    
+                    results.append({
+                        'cx': cx, 'cy': cy, 'w': box_w, 'h': box_h,
+                        'x1': box_x, 'x2': box_x + box_w,
+                        'score': float(box_w * box_h), # Area Score
+                        'conf': float(face[14]), # YuNet Confidence
+                        'angle': 0.0, 'yaw': 0.0,
+                        'body_idx': -1, 'is_virtual': False,
+                        'box': (box_x, box_y, box_w, box_h)
+                    })
+            
+            if results:
+                logger.debug(f"[{cls.site_name}] YuNet: Found {len(results)} faces in ROI. Top Score:{results[0]['score']:.0f}")
+            else:
+                logger.debug(f"[{cls.site_name}] YuNet: No faces found in ROI.")
+                
+            return results
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] YuNet Error: {e}")
+            return []
+
+
+    @classmethod
+    def _attempt_face_rescue(cls, image, virtual_face, body_angle, thresh):
+        vx, vy, vw, vh = virtual_face['box']
+        # 가상 얼굴 중심점
+        vcx = vx + vw // 2
+        vcy = vy + vh // 2
+        
+        img_h, img_w = image.shape[:2]
+        
+        # 확장 스케일(가상 얼굴 크기 기준)
+        scales = [1.5, 2.0, 3.0]
+        
+        # 1. MediaPipe Scan
+        for scale in scales:
+            roi_w = int(vw * scale)
+            roi_h = int(vh * scale)
+            
+            roi_x = max(0, vcx - roi_w // 2)
+            roi_y = max(0, vcy - roi_h // 2)
+            
+            roi_x = min(roi_x, img_w - roi_w)
+            roi_y = min(roi_y, img_h - roi_h)
+            if roi_x < 0: roi_x = 0; roi_w = img_w
+            if roi_y < 0: roi_y = 0; roi_h = img_h
+
+            if roi_w <= 10 or roi_h <= 10: continue
+
+            roi = (roi_x, roi_y, roi_w, roi_h)
+
+            logger.debug(f"[{cls.site_name}] Rescue[MP] Trying Scale {scale}x ROI:{roi} Thresh:{thresh}")
+
+            res_mp = cls._detect_face(image, threshold=thresh, roi=roi)
+            if res_mp and res_mp[1]:
+                face = res_mp[1][0]
+                logger.debug(f"[{cls.site_name}] Rescue[MP] Success at Scale {scale}x")
+                return face
+                
+        # 2. YuNet Scan
+        for scale in scales:
+            roi_w = int(vw * scale)
+            roi_h = int(vh * scale)
+            
+            roi_x = max(0, vcx - roi_w // 2)
+            roi_y = max(0, vcy - roi_h // 2)
+            roi_x = min(roi_x, img_w - roi_w)
+            roi_y = min(roi_y, img_h - roi_h)
+            if roi_x < 0: roi_x = 0; roi_w = img_w
+            if roi_y < 0: roi_y = 0; roi_h = img_h
+            if roi_w <= 10 or roi_h <= 10: continue
+
+            roi = (roi_x, roi_y, roi_w, roi_h)
+
+            logger.debug(f"[{cls.site_name}] Rescue[YN] Trying Scale {scale}x ROI:{roi} Thresh:{thresh}")
+            
+            res_yu = cls._detect_face_yunet(image, threshold=thresh, roi=roi)
+            if res_yu:
+                face = res_yu[0]
+                face['angle'] = body_angle
+                face['yaw'] = 0.0
+                logger.debug(f"[{cls.site_name}] Rescue[YuNet] Success at Scale {scale}x")
+                return face
+        
+        return None
 
 
     @classmethod
     def _smart_crop_image(cls, pil_image, target_ratio=1.4225):
-        if not _OPENCV_AVAILABLE: return None
+        if not cls.config.get('use_smart_crop'):
+            return False, []
+
+        if not _OPENCV_AVAILABLE:
+            logger.warning(f"[{cls.site_name}] OpenCV library not installed. Skipping Smart Crop.")
+            return False, []
+
+        if not _MEDIAPIPE_AVAILABLE:
+            logger.warning(f"[{cls.site_name}] MediaPipe library not installed. Skipping Smart Crop.")
+            return False, []
 
         open_cv_image = np.array(pil_image)
         if pil_image.mode == 'RGB': open_cv_image = open_cv_image[:, :, ::-1].copy()
@@ -2549,215 +2871,433 @@ class SiteAvBase:
         
         h, w = open_cv_image.shape[:2]
         
-        # 1. 바디 인식
-        body_found, body_cx, body_box, nose_point, body_angle = cls._detect_body(open_cv_image)
-
-        # 2. 얼굴 인식 1차 (전체 스캔, High Threshold 0.7)
-        face_thresh_high = cls.config.get('smart_crop_face_threshold')
-        face_res = cls._detect_face(open_cv_image, threshold=face_thresh_high, nose_point=nose_point, limit_box=None)
+        # detect_image = cls._apply_clahe(open_cv_image) # 필터링이 오히려 해가 되는 경우가 있음...옵션화?
+        detect_image = open_cv_image
         
-        face_found, face_cx, is_shifted, face_box = False, None, False, None
-        if face_res[0]:
-            face_found, face_cx, is_shifted, face_box = face_res
-
-        # 3. [Face Rescue] 얼굴 실패 + 바디 성공 시
-        if not face_found and body_found:
-            # Low Threshold 0.5 + 바디 박스 제한
-            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold')
+        body_res = cls._detect_body(detect_image)
+        people_list = body_res[1]
+        
+        face_res = cls._detect_face(detect_image, people_list=people_list)
+        valid_faces = face_res[1]
+        
+        # Rescue Phase (with Safety Check)
+        if any(f.get('is_virtual') for f in valid_faces):
+            rescued_list = []
             
-            logger.debug(f"[{cls.site_name}] Smart Crop: Face not found (thresh {face_thresh_high}). Trying Rescue (thresh {rescue_thresh}) in Body Box.")
-            
-            rescue_res = cls._detect_face(open_cv_image, threshold=rescue_thresh, nose_point=nose_point, limit_box=body_box)
-            
-            if rescue_res[0]:
-                face_found, face_cx, is_shifted, face_box = rescue_res
-                logger.debug(f"[{cls.site_name}] Smart Crop: Face Rescued! Center: {face_cx}")
+            for face in valid_faces:
+                if face.get('is_virtual'):
+                    # [Safety Check]
+                    body_idx = face.get('body_idx', -1)
+                    if body_idx == -1: continue 
+                    
+                    body = people_list[body_idx]
+                    
+                    # (1) 크기 검증: 몸통 너비(tw)의 1.5배 OR 높이(th)의 0.6배 중 하나만 만족하면 OK
+                    body_w = body['box'][2]
+                    body_h = body['box'][3]
+                    
+                    is_width_ok = face['w'] < (body_w * 1.5)
+                    is_height_ok = face['w'] < (body_h * 0.6)
+                    
+                    is_size_safe = is_width_ok or is_height_ok
+                    
+                    # (2) 거리 검증: 몸통 너비의 2.0배 이내 OR 높이의 0.5배 이내
+                    tx, ty, tw, th = body['box']
+                    tcx, tcy = tx + tw//2, ty + th//2 
+                    
+                    dist_y = abs(face['cy'] - tcy)
+                    max_dist_y = th * 1.5 
+                    is_dist_y_safe = dist_y < max_dist_y
+                    
+                    dist_x = abs(face['cx'] - tcx)
+                    max_dist_x = max(tw * 2.0, th * 0.5) 
+                    is_dist_x_safe = dist_x < max_dist_x
 
-        # 4. [MediaPipe 백업] Rescue도 실패했지만 코 좌표는 있는 경우
-        if not face_found and nose_point:
-            logger.debug(f"[{cls.site_name}] Smart Crop: Face Rescue failed. Using MediaPipe Nose point.")
-            face_found = True
-            face_cx = nose_point[0]
-            is_shifted = False
-            face_box = None 
+                    if not (is_size_safe and is_dist_y_safe and is_dist_x_safe):
+                        logger.debug(f"[{cls.site_name}] Virtual Face Unsafe! Size:{is_size_safe} DistY:{is_dist_y_safe} DistX:{is_dist_x_safe}. Dropping.")
+                        continue
 
-        if not face_found:
-            # logger.debug(f"[{cls.site_name}] Smart Crop: Failed. No valid target found.")
+
+                    # (2) Rescue 시도
+                    rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold')
+                    
+                    rescued_face = cls._attempt_face_rescue(detect_image, face, body, rescue_thresh)
+                    
+                    if rescued_face:
+                        rescued_face['body_idx'] = body_idx
+                        rescued_list.append(rescued_face)
+                        logger.debug(f"[{cls.site_name}] Rescue Success! Score:{rescued_face['score']:.0f}")
+                    else:
+                        logger.debug(f"[{cls.site_name}] Rescue Failed. Using Virtual Face as Fallback.")
+                        rescued_list.append(face)
+                else:
+                    rescued_list.append(face)
+            
+            valid_faces = rescued_list
+
+        # [Multi-face Filtering]
+        final_faces = []
+        for f in valid_faces:
+            if not f.get('is_virtual') or f.get('body_idx') == 0:
+                final_faces.append(f)
+                if f.get('is_virtual'):
+                    logger.debug(f"[{cls.site_name}] Keep Main Body Virtual Face.")
+
+        if final_faces:
+            valid_faces = final_faces
+            valid_faces.sort(key=lambda x: x['score'], reverse=True)
+        else:
+            logger.debug(f"[{cls.site_name}] No valid faces found after filtering.")
             return None
 
+        # Center Calculation Phase
         final_center_x = None
-
-        # 가중치 헬퍼
-        def get_face_weight(angle):
-            min_w = cls.config.get('smart_crop_face_weight_min')
-            max_w = cls.config.get('smart_crop_face_weight_max')
-            
-            # 각도 절대값 (0~90도 범위로 정규화)
-            abs_angle = abs(angle)
-            if abs_angle > 90:
-                abs_angle = 180 - abs_angle
-            
-            # 0도(서있음) -> min_w
-            # 90도(누움) -> max_w
-            # 선형 보간 (Linear Interpolation)
-            ratio = abs_angle / 90.0
-            weight = min_w + (max_w - min_w) * ratio
-            
-            return weight
-
-        # [Case A] 얼굴 O + 바디 O
-        if body_found:
-            if is_shifted:
-                final_center_x = face_cx
-                logger.debug(f"[{cls.site_name}] Smart Crop: [Face+Body] Multi-face shift active. Center: {final_center_x}")
-            else:
-                # 얼굴 박스 없이 코 좌표만으로 복구된 경우(MP 백업)는 가중치를 높임
-                if not face_box:
-                    fw = max(get_face_weight(body_angle), 0.8)
-                    logger.debug(f"[{cls.site_name}] Smart Crop: [MP Backup] Boosted Weight {fw:.2f}.")
-                else:
-                    fw = get_face_weight(body_angle)
-                
-                final_center_x = int(face_cx * fw + body_cx * (1.0 - fw))
-                logger.debug(f"[{cls.site_name}] Smart Crop: [Face+Body] Blending. Face({face_cx})*{fw:.2f} + Body({body_cx}) -> Center: {final_center_x}")
-        
-        # [Case B] 얼굴 O + 바디 X
-        else:
-            final_center_x = face_cx
-            logger.debug(f"[{cls.site_name}] Smart Crop: [Face Only] Body not found. Center: {final_center_x}")
-
-        # --- 크롭 영역 계산 ---
+        main_face = valid_faces[0]
         target_w = int(h / target_ratio)
         
-        # 기울기 보정 (Tilt Shift) - MediaPipe 백업(얼굴박스 없음) 시
-        if not face_box and abs(body_angle) > 10:
-            eff_angle = abs(body_angle)
-            if eff_angle > 90:
-                eff_angle = 180 - eff_angle
-            
-            # 기준 너비: 바디 너비가 있으면 바디 너비 사용, 없으면 타겟 너비
-            ref_width = body_box[2] if body_box else target_w
-            
-            # 기울기 1도당 위치 보정값 0.1%
-            shift_ratio = eff_angle * 0.001 
-            shift_px = int(ref_width * shift_ratio)
-            
-            if body_angle > 0:
-                final_center_x += shift_px
-                logger.debug(f"[{cls.site_name}] Tilt Correction: Right {body_angle:.1f}deg -> Shift +{shift_px}")
-            else:
-                final_center_x -= shift_px
-                logger.debug(f"[{cls.site_name}] Tilt Correction: Left {body_angle:.1f}deg -> Shift -{shift_px}")
+        def get_face_weight(angle):
+            min_w = cls.config.get('smart_crop_face_weight_min', 0.3)
+            max_w = cls.config.get('smart_crop_face_weight_max', 0.9)
+            abs_angle = abs(angle)
+            if abs_angle > 90: abs_angle = 180 - abs_angle
+            ratio = abs_angle / 90.0
+            return min_w + (max_w - min_w) * ratio
 
+        shifted_cx = None
+        is_multi_face = False
+        target_w = int(h / target_ratio) 
+
+        # [A] Multi-face Logic
+        shifted_cx = None
+        is_multi_face = False
+        if len(valid_faces) > 1:
+            for sub_face in valid_faces[1:]:
+                # 메인 얼굴과 서브 얼굴
+                f1 = valid_faces[0]
+                f2 = sub_face
+                
+                # 기본: 정중앙 (0.5 : 0.5)
+                w1 = 0.5
+                
+                # Virtual Face Weighting (위치가 부정확할 수 있으므로, 잘림 방지)
+                if f1.get('is_virtual'):
+                    w1 = 0.55
+                
+                # 중심점 계산
+                mid_point = int(f1['cx'] * w1 + f2['cx'] * (1.0 - w1))
+                
+                half_crop = target_w // 2
+                crop_x1 = mid_point - half_crop
+                crop_x2 = mid_point + half_crop
+                
+                # Tolerance Check (가상 얼굴일 경우 Tolerance 여유 없음 -> 마진 증가)
+                tol_factor_1 = 0.2 if f1.get('body_idx') != -1 else 0.3
+                if f1.get('is_virtual'): tol_factor_1 = 0.0
+                
+                tol_1 = f1['w'] * tol_factor_1
+                tol_2 = f2['w'] * 0.2
+                
+                safe_x1 = f1['x1'] + tol_1
+                safe_x2 = f2['x2'] - tol_2
+                
+                # x1(왼쪽얼굴)이 x2(오른쪽얼굴)보다 왼쪽에 있다고 가정하고 정렬
+                if safe_x1 > safe_x2: safe_x1, safe_x2 = safe_x2, safe_x1
+                
+                if crop_x1 <= safe_x1 and crop_x2 >= safe_x2:
+                    shifted_cx = mid_point
+                    is_multi_face = True
+                    logger.debug(f"[{cls.site_name}] Smart Crop: Multi-face Shift applied (Weight:{w1:.2f}).")
+                    break
+
+        if shifted_cx:
+            final_center_x = shifted_cx
+        else:
+            # [B] Single Face Logic (Shift-based)
+            main_body = None
+            if main_face.get('body_idx') != -1 and people_list:
+                main_body = people_list[main_face['body_idx']]
+
+            # 1. Base Center: Torso Center (or Face if no body)
+            if main_body:
+                base_center = main_body['cx'] # Torso Center
+            else:
+                base_center = main_face['cx']
+            
+            final_center_x = base_center
+            
+            # 2. Calculate Shifts (S_face, S_limb, S_gaze)
+            shift_face = 0
+            shift_limb = 0
+            shift_gaze = 0
+            
+            # [LOG] Shift Details
+            log_details = []
+
+            # (1) Face Shift
+            if main_body:
+                fw_weight = get_face_weight(main_body['angle'])
+                if main_face.get('is_virtual'): 
+                    abs_angle = abs(main_body['angle'])
+                    if abs_angle > 90: abs_angle = 180 - abs_angle
+                    virtual_weight = 0.6 + (0.3 * (abs_angle / 90.0))
+                    fw_weight = max(fw_weight, virtual_weight)
+                
+                shift_face = int((main_face['cx'] - main_body['cx']) * fw_weight)
+                log_details.append(f"Face:{shift_face}(W:{fw_weight:.2f})")
+
+            # (2) Limbs Shift
+            if main_body:
+                limbs = main_body.get('limbs_subset_x', [])
+                if limbs and len(limbs) >= 2:
+                    torso_cx = main_body['cx_float'] # Torso Center
+                    
+                    # 1. Full Body Center (Geometry Center)
+                    # 팔다리 뻗은 범위의 중심
+                    all_x = limbs + [torso_cx]
+                    full_min = min(all_x)
+                    full_max = max(all_x)
+                    full_cx = (full_min + full_max) / 2.0
+                    
+                    # 2. Raw Shift Amount (Torso -> Full 방향)
+                    raw_shift = (full_cx - torso_cx) * w # 픽셀 단위 변환
+                    
+                    # 3. Damping Factors
+                    # 3-1. Size Damping (Target Width 기준)
+                    full_width_px = (full_max - full_min) * w 
+                    width_ratio_to_crop = full_width_px / target_w
+                    
+                    size_damp = cls._calculate_damping_factor(
+                        width_ratio_to_crop, 
+                        min_val=0.7, # 크롭 폭의 70% 이하면 100% 이동 허용
+                        max_val=1.0, # 크롭 폭의 100% 이상이면 0% (이동 불가)
+                        max_scale=1.0, 
+                        curve_type='linear'
+                    )
+                    
+                    # 3-2. Angle Damping
+                    # 누울수록(90도) 이동 줄임
+                    abs_angle = abs(main_body['angle'])
+                    if abs_angle > 90: abs_angle = 180 - abs_angle
+                    angle_damp = cls._calculate_damping_factor(
+                        abs_angle, 
+                        min_val=10.0, 
+                        max_val=60.0, 
+                        max_scale=1.0, 
+                        curve_type='linear'
+                    )
+                    
+                    # 4. Final Calculation
+                    # 최대 이동폭 제한: 크롭 너비의 30%
+                    max_limb_shift = int(target_w * 0.3)
+                    
+                    # 가중치 적용 (기본 50% 강도 * 댐핑들)
+                    # "토르소와 팔다리의 중간점" = 50% 이동
+                    base_strength = 0.5 
+                    
+                    shift_limb = int(raw_shift * base_strength * size_damp * angle_damp)
+                    
+                    # Clamp
+                    shift_limb = max(-max_limb_shift, min(max_limb_shift, shift_limb))
+                    
+                    if abs(shift_limb) <= 10: shift_limb = 0
+
+                    log_details.append(f"Limb:{shift_limb}(Sz:{size_damp:.2f}, An:{angle_damp:.2f})")
+
+            # (3) Gaze Shift
+            face_yaw = main_face.get('yaw', 0.0)
+            fw = main_face['w']
+            
+            yaw_trust_factor = 0.0
+            if fw >= 200: yaw_trust_factor = 1.0
+            elif fw >= 80: yaw_trust_factor = (fw - 80) / (200 - 80)
+
+            if abs(face_yaw) > 5 and yaw_trust_factor > 0:
+                cancel_gaze = False
+                if main_body:
+                    b_angle = main_body['angle']
+                    limbs_count = len(main_body.get('limbs_subset_x', []))
+                    
+                    if limbs_count >= 2:
+                        if abs(b_angle) > 5 and (b_angle * face_yaw > 0):
+                            cancel_gaze = True
+                            log_details.append("Gaze:Cross")
+                
+                if not cancel_gaze:
+                    shift_ratio = -(face_yaw / 60.0) 
+                    shift_ratio = max(-1.0, min(1.0, shift_ratio))
+                    calc_gaze = int(fw * shift_ratio * 0.8)
+
+                    face_ratio = fw / w
+                    size_damp = cls._calculate_damping_factor(face_ratio, 0.1, 0.3, 1.0, 'linear')
+                    
+                    angle_damp = 1.0
+                    if main_body:
+                        abs_angle = abs(main_body['angle'])
+                        if abs_angle > 90: abs_angle = 180 - abs_angle
+                        angle_damp = cls._calculate_damping_factor(abs_angle, 0.0, 30.0, 1.0, 'linear')
+
+                    shift_gaze = int(calc_gaze * yaw_trust_factor * size_damp * angle_damp)
+                    if abs(shift_gaze) <= 5: shift_gaze = 0
+                    
+                    log_details.append(f"Gaze:{shift_gaze}(Tr:{yaw_trust_factor:.1f}, Sz:{size_damp:.1f}, An:{angle_damp:.1f})")
+
+            # 3. Merge Shifts
+            shifts = [shift_face, shift_limb, shift_gaze]
+            pos_shifts = [s for s in shifts if s > 0]
+            neg_shifts = [s for s in shifts if s < 0]
+            
+            total_shift = 0
+            if pos_shifts: total_shift += max(pos_shifts)
+            if neg_shifts: total_shift += min(neg_shifts)
+            
+            final_center_x += total_shift
+            
+            details_str = ", ".join(log_details)
+            logger.debug(f"[{cls.site_name}] Shift Info: Base:{base_center} -> Final:{final_center_x} | {details_str}")
+
+            # 4. Tilt Correction
+            tilt_angle = main_face.get('angle', 0.0)
+            if abs(tilt_angle) > 10:
+                eff_angle = abs(tilt_angle)
+                if eff_angle > 90: eff_angle = 180 - eff_angle
+                shift_px = int(main_face['w'] * eff_angle * 0.001 * 1.5)
+                
+                if tilt_angle > 0: final_center_x += shift_px
+                else: final_center_x -= shift_px
+
+            # 5. Safety: Torso Protection
+            if main_body:
+                torso_cx = main_body['cx']
+                torso_w = main_body['box'][2]
+                
+                limit_rule = int(target_w * 0.15)
+                margin = target_w - torso_w
+                
+                limit = limit_rule
+                if margin > 0:
+                    pad = int(torso_w * 0.05)
+                    limit_phys = max(0, (margin // 2) - pad)
+                    limit = min(limit_rule, limit_phys)
+                
+                drift = final_center_x - torso_cx
+                if abs(drift) > limit:
+                    prev_x = final_center_x
+                    if drift > 0: final_center_x = torso_cx + limit
+                    else: final_center_x = torso_cx - limit
+                    logger.debug(f"[{cls.site_name}] Torso Protect: {prev_x} -> {final_center_x} (Limit:{limit})")
+
+        # --- Final Crop ---
         half_crop = target_w // 2
         crop_x1 = final_center_x - half_crop
         crop_x2 = final_center_x + half_crop
         
-        # Fit Face 로직 (face_box 있을 때)
-        if face_box:
-            fx1, fx2, fw = face_box
-            # 패딩 5%
-            padding = int(fw * 0.05)
-            safe_fx1 = fx1 - padding
-            safe_fx2 = fx2 + padding
-            
-            if (safe_fx2 - safe_fx1) > target_w:
-                safe_center = (safe_fx1 + safe_fx2) // 2
-                safe_fx1 = safe_center - half_crop
-                safe_fx2 = safe_center + half_crop
-
+        # [Safety: Fit Face (Cosine S-Curve + Directional)]
+        if not is_multi_face and main_face['w'] > 0:
+            fx1, fx2, fw = main_face['x1'], main_face['x2'], main_face['w']
             if fw < target_w:
+                face_ratio = fw / target_w
+                padding_multiplier = cls._calculate_damping_factor(
+                    face_ratio, 0.1, 1.0, 0.5, 'cosine'
+                )
+                base_padding = int(fw * padding_multiplier)
+                
+                yaw = main_face.get('yaw', 0.0)
+                abs_yaw = abs(yaw)
+                max_dir_pad = int(target_w * 0.05)
+                extra_pad = 0
+                
+                if abs_yaw > 20:
+                    ratio = min(1.0, (abs_yaw - 20) / 80.0)
+                    extra_pad = int(max_dir_pad * ratio)
+
+                pad_left = base_padding
+                pad_right = base_padding
+                
+                if yaw < 0: pad_right = max(base_padding, extra_pad)
+                else:       pad_left = max(base_padding, extra_pad)
+                
+                safe_fx1 = fx1 - pad_left
+                safe_fx2 = fx2 + pad_right
+                
+                req_width = safe_fx2 - safe_fx1
+                if req_width > target_w:
+                    overflow = req_width - target_w
+                    if yaw < -20:   safe_fx1 += overflow
+                    elif yaw > 20:  safe_fx2 -= overflow
+                    else:
+                        safe_fx1 += overflow // 2
+                        safe_fx2 -= overflow // 2
+
                 if crop_x1 > safe_fx1:
                     diff = crop_x1 - safe_fx1
-                    crop_x1 -= diff
-                    crop_x2 -= diff
-                    logger.debug(f"[{cls.site_name}] Fit Face: Shift LEFT by {diff}")
+                    crop_x1 = safe_fx1
+                    crop_x2 = safe_fx1 + target_w
+                    logger.debug(f"[{cls.site_name}] Fit Face: LEFT {diff}px (Base:{base_padding}, Extra:{extra_pad})")
                 elif crop_x2 < safe_fx2:
                     diff = safe_fx2 - crop_x2
-                    crop_x1 += diff
-                    crop_x2 += diff
-                    logger.debug(f"[{cls.site_name}] Fit Face: Shift RIGHT by {diff}")
+                    crop_x2 = safe_fx2
+                    crop_x1 = safe_fx2 - target_w
+                    logger.debug(f"[{cls.site_name}] Fit Face: RIGHT {diff}px (Base:{base_padding}, Extra:{extra_pad})")
 
-        # 이미지 범위 보정
-        if crop_x1 < 0: 
-            crop_x1 = 0
-            crop_x2 = target_w
-        elif crop_x2 > w:
-            crop_x2 = w
-            crop_x1 = w - target_w
+        if crop_x1 < 0: crop_x1 = 0; crop_x2 = target_w
+        elif crop_x2 > w: crop_x2 = w; crop_x1 = w - target_w
 
         return pil_image.crop((crop_x1, 0, crop_x2, h))
 
-    @classmethod
-    def _get_smart_center_x(cls, open_cv_image):
-        """
-        중심점 계산 전용 (JavDB 등에서 구역 판단용으로 사용 가능)
-        """
-        if not _OPENCV_AVAILABLE: return None, False, None
 
-        h, w = open_cv_image.shape[:2]
+    @staticmethod
+    def _calculate_damping_factor(current_val, min_val, max_val, max_scale=1.0, curve_type='cosine'):
+        """
+        입력값에 따라 감쇠 계수를 계산하는 헬퍼 메서드.
+        :param current_val: 현재 값 (예: 얼굴 비율, 각도)
+        :param min_val: 감쇠 시작 임계값 (이 값 이하에서는 max_scale 반환)
+        :param max_val: 감쇠 종료 임계값 (이 값 이상에서는 0.0 반환)
+        :param max_scale: 최대 반환값 (기본 1.0)
+        :param curve_type: 'linear' (선형), 'cosine' (S자 곡선), 'concave' (오목, 2차함수)
+        :return: 감쇠된 계수 (0.0 ~ max_scale)
+        """
+        # 1. 범위 벗어나는 경우 처리
+        if current_val <= min_val:
+            return float(max_scale)
+        if current_val >= max_val:
+            return 0.0
+
+        # 2. 정규화 (0.0 ~ 1.0)
+        # min일 때 0.0, max일 때 1.0
+        t = (current_val - min_val) / (max_val - min_val)
+
+        # 3. 곡선 적용 (팩터는 1.0 -> 0.0 으로 가야 함)
+        factor = 0.0
+        if curve_type == 'cosine':
+            # S-Curve: (1 + cos(πt)) / 2
+            # 양 끝은 완만하고 중간이 가파른 형태
+            factor = (1.0 + math.cos(math.pi * t)) / 2.0
         
-        body_found, body_cx, body_box, nose_point, body_angle = cls._detect_body(open_cv_image)
-
-        face_thresh = cls.config.get('smart_crop_face_threshold')
-        face_res = cls._detect_face(open_cv_image, threshold=face_thresh, nose_point=nose_point)
-        face_found, face_cx, is_shifted, face_box = False, None, False, None
-        if face_res[0]:
-            face_found, face_cx, is_shifted, face_box = face_res
-
-        if not face_found and body_found:
-            rescue_thresh = cls.config.get('smart_crop_face_rescue_threshold')
-            rescue_res = cls._detect_face(open_cv_image, threshold=rescue_thresh, nose_point=nose_point, limit_box=body_box)
-            if rescue_res[0]:
-                face_found, face_cx, is_shifted, face_box = rescue_res
-
-        if not face_found and nose_point:
-            face_found = True
-            face_cx = nose_point[0]
-            is_shifted = False
-            face_box = None
-
-        if not face_found:
-            return None, False, None
-
-        final_center_x = None
-
-        def get_face_weight(angle):
-            min_w = cls.config.get('smart_crop_face_weight_min')
-            max_w = cls.config.get('smart_crop_face_weight_max')
+        elif curve_type == 'linear':
+            # 직선 감소
+            factor = 1.0 - t
             
-            abs_angle = abs(angle)
-            if abs_angle > 90:
-                abs_angle = 180 - abs_angle
+        elif curve_type == 'concave': # (예: 제곱 함수)
+            # 초반에 급격히 줄고 나중에 천천히 0으로
+            factor = (1.0 - t) ** 2.0
             
-            ratio = abs_angle / 90.0
-            weight = min_w + (max_w - min_w) * ratio
-            
-            return weight
+        else: # Default Linear
+            factor = 1.0 - t
 
-        if body_found:
-            if is_shifted:
-                final_center_x = face_cx
-            else:
-                if not face_box:
-                    fw = max(get_face_weight(body_angle), 0.8)
-                else:
-                    fw = get_face_weight(body_angle)
-                
-                final_center_x = int(face_cx * fw + body_cx * (1.0 - fw))
-        else:
-            final_center_x = face_cx
-            
-        # 기울기 보정 (간소화)
-        if not face_box and abs(body_angle) > 10:
-            eff_angle = abs(body_angle)
-            if eff_angle > 90: eff_angle = 180 - eff_angle
-            ref_width = body_box[2] if body_box else int(h / 1.4225)
-            shift_px = int(ref_width * eff_angle * 0.001)
-            if body_angle > 0: final_center_x += shift_px
-            else: final_center_x -= shift_px
+        return factor * max_scale
 
-        return final_center_x, True, face_box
+
+    @staticmethod
+    def _apply_clahe(image):
+        try:
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            cl = clahe.apply(l)
+            limg = cv2.merge((cl, a, b))
+            return cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+        except:
+            return image
 
 
     # endregion 유틸
