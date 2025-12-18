@@ -60,10 +60,12 @@ class Site10Musume(SiteAvBase):
                 item.title_ko = item.title
 
             item.ui_code = cls._parse_ui_code_uncensored(keyword)
-            if not item.ui_code: # 파싱 실패 시 폴백
+            if not item.ui_code or '10MU' not in item.ui_code.upper():
                 item.ui_code = f'10MU-{code}'
 
             if '10mu' in keyword.lower():
+                item.score = 100
+            elif manual:
                 item.score = 100
             elif code.replace('_', '-') in keyword.replace('_', '-'):
                 item.score = 95

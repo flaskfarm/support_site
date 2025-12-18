@@ -69,8 +69,17 @@ class SitePaco(SiteAvBase):
                 item.desc = json_data.get('Desc')[:100] + "..."
             
             movie_id = json_data.get('MovieID', code)
-            item.ui_code = f"PACO-{movie_id}"
-            item.score = 100
+
+            item.ui_code = cls._parse_ui_code_uncensored(keyword)
+            if not item.ui_code or 'PACO' not in item.ui_code.upper():
+                item.ui_code = f"PACO-{movie_id}"
+
+            if 'paco' in keyword.lower():
+                item.score = 100
+            elif manual:
+                item.score = 100
+            else:
+                item.score = 90
 
             if manual:
                 item.title_ko = item.title

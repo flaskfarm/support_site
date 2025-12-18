@@ -29,7 +29,7 @@ class SiteHeyzo(SiteAvBase):
         try:
             ret = {}
             parsed_code = cls._parse_ui_code_uncensored(keyword)
-            match = re.search(r'heyzo-(\d{4})', parsed_code, re.I)
+            match = re.search(r'(\d{4})', parsed_code, re.I)
             if not match:
                 return {'ret': 'success', 'data': []}
             code = match.group(1)
@@ -43,8 +43,17 @@ class SiteHeyzo(SiteAvBase):
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code
-            item.ui_code = f'HEYZO-{code}'
-            item.score = 100
+
+            item.ui_code = parsed_code
+            if not item.ui_code or 'HEYZO' not in item.ui_code.upper():
+                item.ui_code = f'HEYZO-{code}'
+
+            if 'heyzo' in keyword.lower():
+                item.score = 100
+            elif manual:
+                item.score = 100
+            else:
+                item.score = 90
 
             tmp = {}
             try:
