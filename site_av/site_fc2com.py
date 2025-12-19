@@ -6,6 +6,9 @@ from threading import Lock
 from lxml import html
 from urllib.parse import urljoin
 
+from io import BytesIO
+from PIL import Image
+
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
 from ..setup import P, logger
@@ -29,14 +32,34 @@ class SiteFc2com(SiteAvBase):
 
     @classmethod
     def _add_fc2_cookies(cls, driver):
-        """FC2 성인 인증 쿠키 추가"""
+        """FC2 성인 인증 쿠키 추가 (메인 페이지 경유)"""
         try:
-            # 쿠키를 설정하려면 먼저 해당 도메인에 접속해야 함 (가벼운 페이지나 404 페이지 활용)
-            driver.get(cls.site_base_url + '/404') 
-            driver.add_cookie({'name': 'wei6H', 'value': '1', 'domain': '.fc2.com', 'path': '/'})
-            # logger.debug(f"[{cls.site_name}] Added adult cookie: wei6H=1")
+            # 1. 성인 메인 페이지 접속
+            driver.get(cls.site_base_url + '/')
+            time.sleep(3) # 대기 시간 조금 늘림
+
+            # 2. 성인 인증 버튼 클릭 (FC2 전용)
+            try:
+                yes_btn = driver.find_elements(By.XPATH, '//a[@data-button="yes"]')
+                if yes_btn:
+                    driver.execute_script("arguments[0].click();", yes_btn[0])
+                    time.sleep(3) # 클릭 후 이동/쿠키셋팅 대기
+            except: pass
+
+            # 3. 쿠키 보정 (도메인 이슈 방지를 위해 명시적 도메인 사용 안 함 -> 현재 페이지 도메인 따름)
+            # 이미 adult.contents.fc2.com 에 접속 중이므로 path만 지정하면 됨
+            
+            # wei6H (성인 인증)
+            driver.add_cookie({'name': 'wei6H', 'value': '1', 'path': '/'})
+            
+            # GDPRCHECK (유럽 등 해외 IP 접속 시 필수일 수 있음)
+            driver.add_cookie({'name': 'GDPRCHECK', 'value': 'true', 'path': '/'})
+            
+            # (선택) 언어 설정 - 영어권으로 인식되면 리디렉션이 덜할 수도 있음
+            # driver.add_cookie({'name': 'lang', 'value': 'en', 'path': '/'})
+
         except Exception as e:
-            logger.warning(f"[{cls.site_name}] Failed to add cookies: {e}")
+            logger.warning(f"[{cls.site_name}] Failed to prepare cookies: {e}")
 
 
     @classmethod
@@ -51,7 +74,7 @@ class SiteFc2com(SiteAvBase):
             from selenium.webdriver.common.by import By
             driver = cls._get_selenium_driver()
 
-            # cls._add_fc2_cookies(driver)
+            cls._add_fc2_cookies(driver)
 
             match = re.search(r'(\d{6,7})', keyword)
             if not match:
@@ -61,7 +84,7 @@ class SiteFc2com(SiteAvBase):
             search_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
 
             detail_page_wait_locator = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")]')
-            # 공용 메서드 호출
+            
             tree, page_source_text = cls._get_page_content_selenium(driver, search_url, wait_for_locator=detail_page_wait_locator)
 
             if page_source_text:
@@ -70,11 +93,11 @@ class SiteFc2com(SiteAvBase):
                 logger.debug(f"[{cls.site_name}] Page source for '{code_part}' cached.")
 
             if tree is None:
+                # 타임아웃 등 실패 시 빈 결과 반환
                 return {'ret': 'no_match', 'data': []}
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + code_part
-
             item.ui_code = cls._parse_ui_code_uncensored(keyword)
             if not item.ui_code or 'FC2' not in item.ui_code.upper():
                 item.ui_code = f'FC2-{code_part}'
@@ -200,14 +223,15 @@ class SiteFc2com(SiteAvBase):
         if entity.studio and entity.studio not in entity.tag:
             entity.tag.append(entity.studio)
 
-        # === 이미지 처리 로직 변경 ===
+        # === 이미지 처리 섹션 ===
+
         raw_image_urls = {'poster': None, 'pl': None, 'arts': []}
         
-        # 1. 메인 포스터(썸네일) 추출
+        # 1. 메인 포스터(썸네일)
         if poster_src := tree.xpath('//div[contains(@class, "items_article_MainitemThumb")]//img/@src | //div[contains(@class, "items_article_MainitemThumb")]//img/@data-src'):
-            raw_image_urls['poster'] = cls._normalize_url(poster_src[0], cls.site_base_url, upgrade_size=True)
+            raw_image_urls['pl'] = cls._normalize_url(poster_src[0], cls.site_base_url, upgrade_size=True)
 
-        # 2. 갤러리 이미지 추출
+        # 2. 갤러리 이미지
         gallery_urls = []
         for href in tree.xpath('//a[@data-fancybox="gallery"]/@href'):
             gallery_urls.append(cls._normalize_url(href, cls.site_base_url, upgrade_size=True))
@@ -215,17 +239,28 @@ class SiteFc2com(SiteAvBase):
         if not gallery_urls:
             for href in tree.xpath('//section[contains(@class, "items_article_SampleImages")]//a/@href'):
                 gallery_urls.append(cls._normalize_url(href, cls.site_base_url, upgrade_size=True))
+        
+        raw_image_urls['arts'] = gallery_urls
 
-        # 3. PL 및 Arts 할당 (갤러리 첫번째 = PL, 나머지 = Arts)
-        if gallery_urls:
-            raw_image_urls['pl'] = gallery_urls[0]
-            raw_image_urls['arts'] = gallery_urls[1:]
+        # 3. 스마트 크롭 (PL -> Poster)
+        use_smart = cls.config.get('use_smart_crop')
+        # 포스터가 없고 PL이 있는 경우 스마트 크롭 시도
+        if use_smart and raw_image_urls['pl']:
+            try:
+                res_pl = cls.get_response(raw_image_urls['pl'], stream=True, timeout=5)
+                if res_pl and res_pl.status_code == 200:
+                    img_pl = Image.open(BytesIO(res_pl.content))
+                    # 스마트 크롭 실행
+                    cropped = cls._smart_crop_image(img_pl)
+                    if cropped:
+                        temp_path = cls.save_pil_to_temp(cropped)
+                        if temp_path:
+                            raw_image_urls['poster'] = temp_path
+                            logger.debug(f"[{cls.site_name}] Smart Crop success. Temp Poster: {temp_path}")
+            except Exception as e:
+                logger.error(f"[{cls.site_name}] Smart Crop Error: {e}")
 
-        # 4. 포스터 Fallback (포스터가 없으면 PL을 포스터로 사용)
-        if not raw_image_urls['poster'] and raw_image_urls['pl']:
-            raw_image_urls['poster'] = raw_image_urls['pl']
-            logger.debug(f"[{cls.site_name}] Poster not found. Using first gallery image (PL) as Poster.")
-
+        # 4. 이미지 서버 경로 설정
         image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
         if image_mode == 'image_server':
             try:
@@ -244,8 +279,7 @@ class SiteFc2com(SiteAvBase):
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
 
-        # Base 클래스의 이미지 처리 로직 위임 (스마트 크롭 등 적용)
-        # raw_image_urls['poster']가 가로 이미지(PL)인 경우, use_smart_crop 설정에 따라 자동으로 크롭
+        # Base 클래스의 이미지 처리 로직 위임
         entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
 
         if cls.config['use_extras']:
