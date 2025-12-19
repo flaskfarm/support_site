@@ -255,20 +255,13 @@ class SiteAvBase:
     def _get_page_content_selenium(cls, driver, url, wait_for_locator):
         """
         Selenium을 사용하여 페이지 내용을 가져옵니다.
-        공통적인 성인 인증 클릭 및 Cloudflare 우회 로직이 포함되어 있습니다.
+        Cloudflare 우회 로직만 유지합니다. (성인 인증은 각 사이트별로 처리 권장)
         """
         driver.get(url)
         time.sleep(3) # 로딩 대기
 
-        # 1. 공통 성인 인증 버튼 처리
-        try:
-            # 일반적인 텍스트 기반 탐색
-            enter_btns = driver.find_elements(By.XPATH, '//a[contains(text(), "I am over 18")] | //button[contains(text(), "I am over 18")] | //a[contains(@href, "adult")] | //a[contains(text(), "Enter")] | //a[contains(@class, "btn_yes")]')
-            if enter_btns:
-                # logger.debug(f"[{cls.site_name}] Adult verification button found. Clicking...")
-                enter_btns[0].click()
-                time.sleep(2)
-        except: pass
+        # [삭제] 공통 성인 인증 버튼 처리 로직 제거
+        # 각 사이트(site_fc2com 등)에서 _add_cookies 나 별도 로직으로 처리하는 것이 안전함.
 
         # 2. Cloudflare Turnstile (Shadow DOM)
         if "Just a moment" in driver.title or "Cloudflare" in driver.title:
@@ -306,12 +299,6 @@ class SiteAvBase:
                 if not os.path.exists(tmp_dir): os.makedirs(tmp_dir, exist_ok=True)
                 timestamp = int(time.time())
                 
-                # HTML 저장
-                # filename = f"{cls.site_name}_timeout_{timestamp}.html"
-                # with open(os.path.join(tmp_dir, filename), 'w', encoding='utf-8') as f:
-                #     f.write(driver.page_source)
-                
-                # 스크린샷 저장
                 driver.save_screenshot(os.path.join(tmp_dir, f"{cls.site_name}_timeout_{timestamp}.png"))
                 logger.error(f"[{cls.site_name}] Timeout waiting for element. Screenshot saved.")
             except: pass
@@ -939,7 +926,7 @@ class SiteAvBase:
             # 가로 이미지(Landscape)인 경우에만 세로 포스터로 크롭 시도
             # 비율 기준: 가로가 세로보다 1.1배 이상 클 때
             w, h = im.size
-            if w > h * 1.1:
+            if w > h * 0.8:
                 cropped = cls._smart_crop_image(im)
                 if cropped:
                     im = cropped
