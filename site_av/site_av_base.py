@@ -206,7 +206,23 @@ class SiteAvBase:
             driver = webdriver.Remote(command_executor=selenium_url, options=options)
             
             if driver_type == 'chrome':
-                # Stealth 적용 로직 (생략 - 기존과 동일)
+                # 광고 및 트래커 차단 (Network.setBlockedURLs)
+                try:
+                    driver.execute_cdp_cmd("Network.enable", {})
+                    blocked_patterns = [
+                        "*.doubleclick.net", "*.googleadservices.com", "*.googlesyndication.com",
+                        "*.exoclick.com", "*.juicyads.com", "*.trafficjunky.com", "*.popads.net",
+                        "*.popcash.net", "*.propellerads.com", "*.ero-advertising.com", "*.adxpansion.com",
+                        "*.i-mobile.co.jp", "*.microad.jp", "*.ad-stir.com",
+                        "*.google-analytics.com", "*.scorecardresearch.com", "*.newrelic.com",
+                        "*fc2.com/ads/*", "*fc2.com/*/ads/*"
+                    ]
+                    driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": blocked_patterns})
+                    # logger.debug(f"[{cls.site_name}] AdBlock enabled via CDP.")
+                except Exception as e_cdp:
+                    logger.debug(f"[{cls.site_name}] Failed to set blocked URLs: {e_cdp}")
+
+                # Stealth 적용 로직
                 stealth_applied = False
                 if is_stealth_available:
                     try:
@@ -864,7 +880,7 @@ class SiteAvBase:
             return # 함수 종료
 
         if res.status_code != 200:
-            P.logger.error(f"image_proxy: Received status code {res.status_code} for URL: {image_url}. Content: {res.text[:200]}")
+            P.logger.warning(f"image_proxy: Received status code {res.status_code} for URL: {image_url}")
             abort(res.status_code if res.status_code >= 400 else 500)
             return
 
@@ -994,7 +1010,7 @@ class SiteAvBase:
             return # 함수 종료
         
         if res.status_code != 200:
-            P.logger.error(f"image_proxy: Received status code {res.status_code} for URL: {image_url}. Content: {res.text[:200]}")
+            P.logger.warning(f"image_proxy: Received status code {res.status_code} for URL: {image_url}. Content: {res.text[:200]}")
             abort(res.status_code if res.status_code >= 400 else 500)
             return
 
@@ -1618,7 +1634,7 @@ class SiteAvBase:
     # 이미지 처리모드는 기본(ff_proxy)와 discord_proxy, image_server가 있다.
     # 오리지널은 proxy사용 여부에 따라 ff_proxy에서 판단한다.
     @classmethod
-    def finalize_images_for_entity(cls, entity, decision_data): # 인자 2개 (cls 제외)
+    def finalize_images_for_entity(cls, entity, decision_data):
         if entity.thumb is None: entity.thumb = []
         if entity.fanart is None: entity.fanart = []
 
@@ -1632,6 +1648,18 @@ class SiteAvBase:
 
         if not image_sources or not poster_source:
             return
+
+        # 안전하게 jav_image 호출 헬퍼
+        def safe_jav_image(url, mode=None, site=None):
+            try:
+                from werkzeug.exceptions import HTTPException
+                return cls.jav_image(url=url, mode=mode, site=site)
+            except HTTPException as e:
+                logger.debug(f"Image processing failed (HTTP {e.code}) for {url}")
+                return None
+            except Exception as e:
+                logger.error(f"Image processing error for {url}: {e}")
+                return None
 
         if image_mode == 'ff_proxy':
             # proxy를 사용하거나, mode가 있거나, 로컬 파일인 경우 ff_proxy URL 생성
@@ -1687,43 +1715,45 @@ class SiteAvBase:
             webhook_url = None
 
             # --- 포스터 처리 ---
+            response_bytes = None
             if poster_mode == 'local_file':
-                # 로컬 파일인 경우, 파일을 직접 읽어서 BytesIO 생성
-                with open(poster_source, 'rb') as f:
-                    response_bytes = BytesIO(f.read())
+                try:
+                    with open(poster_source, 'rb') as f:
+                        response_bytes = BytesIO(f.read())
+                except Exception as e:
+                    logger.error(f"Failed to read local file for discord: {e}")
             else:
-                # 원격 URL인 경우, jav_image를 통해 이미지 데이터 가져오기
-                response = cls.jav_image(url=poster_source, mode=poster_mode, site=cls.site_name)
-                response_bytes = BytesIO(response.data)
+                response = safe_jav_image(url=poster_source, mode=poster_mode, site=cls.site_name)
+                if response: response_bytes = BytesIO(response.data)
 
-            if use_my_webhook and webhook_list:
-                webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
-
-            discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
-            final_url = apply(discord_url, use_proxy_server, server_url)
-            entity.thumb.append(EntityThumb(aspect="poster", value=final_url))
+            if response_bytes:
+                if use_my_webhook and webhook_list:
+                    webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
+                discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
+                final_url = apply(discord_url, use_proxy_server, server_url)
+                entity.thumb.append(EntityThumb(aspect="poster", value=final_url))
 
             # --- 랜드스케이프 처리 ---
             if landscape_source:
-                response = cls.jav_image(url=landscape_source, site=cls.site_name)
-                response_bytes = BytesIO(response.data)
-                if use_my_webhook and webhook_list:
-                    webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
-
-                discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
-                final_url = apply(discord_url, use_proxy_server, server_url)
-                entity.thumb.append(EntityThumb(aspect="landscape", value=final_url))
+                response = safe_jav_image(url=landscape_source, site=cls.site_name)
+                if response:
+                    response_bytes = BytesIO(response.data)
+                    if use_my_webhook and webhook_list:
+                        webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
+                    discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
+                    final_url = apply(discord_url, use_proxy_server, server_url)
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=final_url))
 
             # --- 팬아트 처리 ---
             for art_url in arts:
-                response = cls.jav_image(url=art_url, site=cls.site_name)
-                response_bytes = BytesIO(response.data)
-                if use_my_webhook and webhook_list:
-                    webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
-
-                discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
-                final_url = apply(discord_url, use_proxy_server, server_url)
-                entity.fanart.append(final_url)
+                response = safe_jav_image(url=art_url, site=cls.site_name)
+                if response:
+                    response_bytes = BytesIO(response.data)
+                    if use_my_webhook and webhook_list:
+                        webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
+                    discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
+                    final_url = apply(discord_url, use_proxy_server, server_url)
+                    entity.fanart.append(final_url)
 
         elif image_mode == 'image_server':
             image_server_paths = decision_data.get('image_server_paths', {})
@@ -1746,47 +1776,54 @@ class SiteAvBase:
                     system_poster_path = os.path.join(target_folder, f"{code_lower}_p.jpg")
                     os.makedirs(target_folder, exist_ok=True)
                     source_mode = image_sources.get('poster_mode')
-
+                    
+                    save_success = False
                     if source_mode == 'local_file':
                         try:
                             with open(poster_source, 'rb') as f:
                                 if not cls._save_image_as_jpeg(BytesIO(f.read()), system_poster_path):
-                                    # 실패 시 원본 복사
                                     import shutil
                                     shutil.copy(poster_source, system_poster_path)
+                            save_success = True
                         except Exception as e_read_local:
                             logger.error(f"Failed to read local file {poster_source}: {e_read_local}")
                     else:
-                        response = cls.jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
+                        response = safe_jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
                         if response and response.status_code == 200:
                             if not cls._save_image_as_jpeg(BytesIO(response.data), system_poster_path):
                                 with open(system_poster_path, 'wb') as f: f.write(response.data)
+                            save_success = True
                         else:
                             logger.error(f"Failed to download poster for {code_lower} from {poster_source}")
-
-                    entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{code_lower}_p.jpg"))
+                    
+                    # 파일 저장 성공 시 또는 파일이 존재할 시 엔티티 추가
+                    if save_success or os.path.exists(system_poster_path):
+                        entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{code_lower}_p.jpg"))
 
             # --- 랜드스케이프 처리 ---
             landscape_source = image_sources.get('landscape_source')
             if landscape_source:
                 if image_sources.get('skip_landscape_download'):
                     entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_source))
-                else: # 다운로드 필요
+                else: 
                     system_landscape_path = os.path.join(target_folder, f"{code_lower}_pl.jpg")
                     os.makedirs(target_folder, exist_ok=True)
-                    response = cls.jav_image(url=landscape_source, site=cls.site_name)
+                    
+                    save_success = False
+                    response = safe_jav_image(url=landscape_source, site=cls.site_name)
                     if response and response.status_code == 200:
                         if not cls._save_image_as_jpeg(BytesIO(response.data), system_landscape_path):
                             with open(system_landscape_path, 'wb') as f: f.write(response.data)
+                        save_success = True
                     else:
-                        logger.error(f"Failed to download landscape for {code_lower} from {landscape_source}")
-
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=f"{server_url_prefix}/{code_lower}_pl.jpg"))
+                        logger.warning(f"Failed to download landscape for {code_lower} from {landscape_source}")
+                    
+                    # 파일 저장 성공 시 또는 파일이 존재할 시 엔티티 추가
+                    if save_success or os.path.exists(system_landscape_path):
+                        entity.thumb.append(EntityThumb(aspect="landscape", value=f"{server_url_prefix}/{code_lower}_pl.jpg"))
 
             # --- 팬아트 처리 ---
-            # 덮어쓰기 on 또는 기존 팬아트 없음 -> 새로 다운로드
             if rewrite or system_files_exist.get('arts', 0) == 0:
-                # 덮어쓰기 모드이면 기존 아트 파일 삭제
                 if rewrite and os.path.exists(target_folder):
                     for f in os.listdir(target_folder):
                         if f.startswith(f"{code_lower}_art_"):
@@ -1797,16 +1834,16 @@ class SiteAvBase:
                     filename = f"{code_lower}_art_{idx+1}.jpg"
                     filepath = os.path.join(target_folder, filename)
                     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                    response = cls.jav_image(url=art_url, site=cls.site_name)
+                    
+                    response = safe_jav_image(url=art_url, site=cls.site_name)
                     if response and response.status_code == 200:
                         if cls._save_image_as_jpeg(BytesIO(response.data), filepath):
-                            entity.fanart.append(f"{server_url_prefix}/{os.path.basename(filepath)}")
+                            pass
                         else:
                             with open(filepath, 'wb') as f: f.write(response.data)
-                            entity.fanart.append(f"{server_url_prefix}/{os.path.basename(filepath)}")
+                        entity.fanart.append(f"{server_url_prefix}/{os.path.basename(filepath)}")
                     else:
                         logger.error(f"Failed to download art for {code_lower} from {art_url}")
-            # 덮어쓰기 off and 기존 팬아트 존재 -> 기존 파일 URL만 추가
             else:
                 if os.path.exists(target_folder):
                     for filename in sorted(os.listdir(target_folder)):
