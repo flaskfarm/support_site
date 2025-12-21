@@ -465,10 +465,10 @@ class SiteDaumTv(SiteDaum):
                     "status": -1,
                     "date": date or "",
                     "spId": spId,
-                    "timestamp": timestamp or 0,
+                    "timestamp": timestamp,
                     "schedule": schedule_text or "",
                     "labels": data.get('labels') or [],
-                    "season": season or "",
+                    "season": season,
                 }
                 seasons.setdefault(season, set()).add(spId)
             except Exception:
@@ -478,10 +478,16 @@ class SiteDaumTv(SiteDaum):
                 # 중복되는 시즌이 있을 경우 처리
                 for spid in sorted(spids)[1:]:
                     if additionals.get(spid):
-                        additionals[spid]['season'] = ""
+                        additionals[spid]['season'] = None
         # sjva 에이전트에서 출시일 순(마지막을 최근 시즌으로)으로 인식
         try:
-            return sorted(additionals.values(), key=lambda x: (x['year'], x['timestamp'], x['spId']))
+            return sorted(additionals.values(), key=lambda x: (
+                x['season'] is None,
+                x['season'],
+                x['timestamp'] is None,
+                x['timestamp'],
+                x['spId']
+            ))
         except Exception:
             logger.exception(f"시리즈/동명 정렬 실패")
         return additionals
