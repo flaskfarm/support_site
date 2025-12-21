@@ -17,7 +17,7 @@ from .site_av_base import SiteAvBase
 try:
     from selenium.webdriver.common.by import By
 except ImportError:
-    pass
+    By = None
 
 class SiteFc2com(SiteAvBase):
     site_name = 'fc2com'
@@ -34,7 +34,9 @@ class SiteFc2com(SiteAvBase):
     _page_source_cache = {}
     _cache_lock = Lock()
 
-    WAIT_LOCATOR = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")] | //div[contains(@class, "items_notfound_header")]')
+    WAIT_LOCATOR = None
+    if By:
+        WAIT_LOCATOR = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")] | //div[contains(@class, "items_notfound_header")]')
 
 
     @classmethod
