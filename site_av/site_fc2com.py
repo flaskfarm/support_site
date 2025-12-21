@@ -84,29 +84,16 @@ class SiteFc2com(SiteAvBase):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            # 정확한 매칭을 위해 가능한 모든 접두사 조합 시도 (FC2-PPV-, FC2-)
-            # 또는 DB의 product_id 컬럼에 인덱스가 걸려있다면 LIKE보다 = 검색이 빠름
-            # 여기서는 가장 일반적인 'FC2-PPV-{id}'와 'FC2-{id}'를 시도
-            target_ids = [f"FC2-PPV-{product_id}", f"FC2-{product_id}"]
+            # 가능한 ID 패턴: 'FC2-PPV-{id}', 'FC2-{id}', '{id}'(숫자만)
+            target_ids = [f"FC2-PPV-{product_id}", f"FC2-{product_id}", product_id]
             placeholders = ','.join('?' * len(target_ids))
-            
+
             cursor.execute(f"SELECT * FROM movies WHERE product_id IN ({placeholders})", target_ids)
             row = cursor.fetchone()
-            
-            # 만약 못 찾았다면, 최후의 수단으로 LIKE 검색 (느릴 수 있음)
-            if not row:
-                cursor.execute("SELECT * FROM movies WHERE product_id LIKE ?", (f"%{product_id}",))
-                row = cursor.fetchone()
-                # 검증: 숫자 부분만 추출해서 일치하는지 확인
-                if row:
-                    row_id_match = re.search(r'(\d+)$', row['product_id'])
-                    if not row_id_match or row_id_match.group(1) != product_id:
-                        row = None
 
             conn.close()
             
-            if row:
-                return dict(row)
+            if row: return dict(row)
         except Exception as e:
             logger.error(f"[{cls.site_name}] DB Query Error: {e}")
         return None
@@ -202,12 +189,18 @@ class SiteFc2com(SiteAvBase):
             item.title = db_data.get('tagline') or item.ui_code
             
             # 연도 추출
-            detail_url = db_data.get('detail_page_url', '')
-            if detail_url:
-                match_year = re.search(r'/video/(\d{4})', detail_url)
-                if match_year: item.year = int(match_year.group(1))
-            else:
-                item.year = 1900
+            item.year = 1900
+            if db_data.get('release_date'):
+                try:
+                    # YYYY-MM-DD 형식 가정
+                    item.year = int(db_data['release_date'][:4])
+                except: pass
+            
+            if item.year == 1900: # release_date 없거나 파싱 실패 시 URL에서 추정
+                detail_url = db_data.get('detail_page_url', '')
+                if detail_url:
+                    match_year = re.search(r'/video/(\d{4})', detail_url)
+                    if match_year: item.year = int(match_year.group(1))
 
             # 이미지 URL (Search용 - 작은 이미지 w360)
             img_url = db_data.get('landscape_url')
@@ -357,6 +350,20 @@ class SiteFc2com(SiteAvBase):
             if detail_url:
                 match_year = re.search(r'/video/(\d{4})', detail_url)
                 if match_year: entity.year = int(match_year.group(1))
+
+            entity.year = 1900
+            if db_data.get('release_date'):
+                entity.premiered = db_data['release_date']
+                try:
+                    entity.year = int(entity.premiered[:4])
+                except: pass
+            
+            if entity.year == 1900: # release_date 없거나 파싱 실패 시
+                detail_url = db_data.get('detail_page_url', '')
+                if detail_url:
+                    match_year = re.search(r'/video/(\d{4})', detail_url)
+                    if match_year: 
+                        entity.year = int(match_year.group(1))
 
             entity.tag.append('FC2')
 
