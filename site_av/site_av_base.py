@@ -825,8 +825,6 @@ class SiteAvBase:
             "smart_crop_face_threshold": float(image_settings.get('smart_crop_face_threshold', 0.5)),
             "smart_crop_face_rescue_threshold": float(image_settings.get('smart_crop_face_rescue_threshold', 0.3)),
 
-            "smart_crop_yunet_model_path": db.get(f'{common_config_prefix}_yunet_model_path'),
-
             # 스마트 크롭 설정 (Pose)
             "use_pose_landmarker": db.get_bool(f'{common_config_prefix}_use_pose_landmarker'), 
             "pose_landmarker_model_path": db.get(f'{common_config_prefix}_pose_landmarker_model_path'),
@@ -2311,7 +2309,7 @@ class SiteAvBase:
 
 
     # =========================================================================
-    # AI Detection Methods (MediaPipe + YuNet)
+    # AI Detection Methods (MediaPipe Face)
     # -------------------------------------------------------------------------
 
     @classmethod
@@ -2746,72 +2744,6 @@ class SiteAvBase:
 
 
     @classmethod
-    def _detect_face_yunet(cls, open_cv_image, threshold=None, roi=None):
-        model_path = cls.config.get('smart_crop_yunet_model_path')
-        if not model_path or not os.path.exists(model_path): return []
-
-        if threshold is None:
-            threshold = cls.config.get('smart_crop_face_threshold', 0.4)
-
-        try:
-            if roi:
-                rx, ry, rw, rh = roi
-                h_img, w_img = open_cv_image.shape[:2]
-                rx = max(0, rx); ry = max(0, ry)
-                rw = min(rw, w_img - rx); rh = min(rh, h_img - ry)
-                if rw <= 10 or rh <= 10: return []
-                img = open_cv_image[ry:ry+rh, rx:rx+rw]
-                off_x, off_y = rx, ry
-            else:
-                img = open_cv_image
-                off_x, off_y = 0, 0
-
-            h, w = img.shape[:2]
-            if not hasattr(cls, '_face_net_yunet'):
-                cls._face_net_yunet = cv2.FaceDetectorYN.create(
-                    model=model_path, config="", input_size=(w, h), 
-                    score_threshold=threshold, nms_threshold=0.3, top_k=5000
-                )
-            
-            net = cls._face_net_yunet
-            net.setInputSize((w, h))
-            net.setScoreThreshold(threshold)
-            _, faces = net.detect(img)
-            
-            results = []
-            if faces is not None:
-                for face in faces:
-                    box_x = int(face[0]) + off_x
-                    box_y = int(face[1]) + off_y
-                    box_w = int(face[2])
-                    box_h = int(face[3])
-                    cx = box_x + box_w // 2
-                    cy = box_y + box_h // 2
-
-                    logger.debug(f"YuNet Face: Score:{face[14]:.2f} Box:({box_x},{box_y},{box_w},{box_h})")
-                    
-                    results.append({
-                        'cx': cx, 'cy': cy, 'w': box_w, 'h': box_h,
-                        'x1': box_x, 'x2': box_x + box_w,
-                        'score': float(box_w * box_h), # Area Score
-                        'conf': float(face[14]), # YuNet Confidence
-                        'angle': 0.0, 'yaw': 0.0,
-                        'body_idx': -1, 'is_virtual': False,
-                        'box': (box_x, box_y, box_w, box_h)
-                    })
-            
-            if results:
-                logger.debug(f"[{cls.site_name}] YuNet: Found {len(results)} faces in ROI. Top Score:{results[0]['score']:.0f}")
-            else:
-                logger.debug(f"[{cls.site_name}] YuNet: No faces found in ROI.")
-                
-            return results
-        except Exception as e:
-            logger.error(f"[{cls.site_name}] YuNet Error: {e}")
-            return []
-
-
-    @classmethod
     def _attempt_face_rescue(cls, image, virtual_face, body_angle, thresh):
         vx, vy, vw, vh = virtual_face['box']
         # 가상 얼굴 중심점
@@ -2846,31 +2778,6 @@ class SiteAvBase:
             if res_mp and res_mp[1]:
                 face = res_mp[1][0]
                 logger.debug(f"[{cls.site_name}] Rescue[MP] Success at Scale {scale}x")
-                return face
-                
-        # 2. YuNet Scan
-        for scale in scales:
-            roi_w = int(vw * scale)
-            roi_h = int(vh * scale)
-            
-            roi_x = max(0, vcx - roi_w // 2)
-            roi_y = max(0, vcy - roi_h // 2)
-            roi_x = min(roi_x, img_w - roi_w)
-            roi_y = min(roi_y, img_h - roi_h)
-            if roi_x < 0: roi_x = 0; roi_w = img_w
-            if roi_y < 0: roi_y = 0; roi_h = img_h
-            if roi_w <= 10 or roi_h <= 10: continue
-
-            roi = (roi_x, roi_y, roi_w, roi_h)
-
-            logger.debug(f"[{cls.site_name}] Rescue[YN] Trying Scale {scale}x ROI:{roi} Thresh:{thresh}")
-            
-            res_yu = cls._detect_face_yunet(image, threshold=thresh, roi=roi)
-            if res_yu:
-                face = res_yu[0]
-                face['angle'] = body_angle
-                face['yaw'] = 0.0
-                logger.debug(f"[{cls.site_name}] Rescue[YuNet] Success at Scale {scale}x")
                 return face
         
         return None
