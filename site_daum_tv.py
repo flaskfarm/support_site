@@ -264,8 +264,8 @@ class SiteDaumTv(SiteDaum):
         entity.showtitle = card_title.get('title')
 
         # 에피소드 코드가 없어서 프로그램 코드로 요청한 경우 체크
-        if '#' in episode_code:
-            code, _ = episode_code.split('#')
+        if '..' in episode_code:
+            code, _, _ = cls.parse_episode_code(episode_code)
             if card_title.get('code') != code[2:]:
                 msg = f"검색된 에피소드가 요청한 에피소드와 일치하지 않습니다: {episode_url}"
                 logger.error(msg)
@@ -602,7 +602,9 @@ class SiteDaumTv(SiteDaum):
         # 첫번째 페이지의 회차 목록
         last_ep_no, last_ep_url = cls.parse_episode_list(container, episodes, spid, title)
         first_page_episodes = sorted(episodes.keys())
-        is_number = (sum(x < 19000101 for x in first_page_episodes)) >= len(first_page_episodes) / 2
+        #is_number = (sum(x < 19000101 for x in first_page_episodes)) >= len(first_page_episodes) / 2
+        # 캐시 도입했으니 캐시 믿고 모든 회차 조회
+        is_number = False
         if is_number:
             # 번호형 회차
             if last_ep_no > 19000101:
@@ -639,9 +641,9 @@ class SiteDaumTv(SiteDaum):
             2025.01.20.
             2025.01.21.
 
-            모든 회차, 회차 목록 페이지 접속 횟수 100회 제한
+            모든 회차, 회차 목록 페이지 접속 횟수 200회 제한
             '''
-            for _ in range(100):
+            for _ in range(200):
                 try:
                     next_epno_page = SiteDaum.get_tree(last_ep_url)
                     page_last_episode_no, page_last_episode_url = cls.parse_episode_list(next_epno_page, episodes, spid, title)
