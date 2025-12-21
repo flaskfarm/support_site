@@ -352,16 +352,26 @@ class SiteDaumTv(SiteDaum):
     @classmethod
     def parse_episode_list(cls, episode_root: HtmlElement, bucket: dict, show_id: str, show_title: str) -> tuple[int, str]:
         # 회차정보 페이지에서 최신 회차의 방영일 저장
-        current_ep_premiered = None
-        date_text = episode_root.xpath('.//span[contains(text(), "방영일")]/following-sibling::text()')
-        if date_text:
-            date: datetime = cls.parse_date_text(' '.join(date_text).strip())
-            current_ep_premiered = date.strftime('%Y-%m-%d') if date else ' '.join(date_text).strip()
+        selected_premiered = selected_episode = None
+        if date_text := episode_root.xpath('.//span[text()="방영일" and @class="screen_out"]/following-sibling::text()'):
+            date_text = date_text[0].strip()
+            date: datetime = cls.parse_date_text(date_text)
+            selected_premiered = date.strftime('%Y-%m-%d') if date else date_text
+        if episode_text := episode_root.xpath('.//span[text()="회차" and @class="screen_out"]/following-sibling::text()'):
+            episode_text = episode_text[0]
+            try:
+                selected_episode = int(episode_text.strip().replace('회', ''))
+            except Exception:
+                pass
+        if selected_premiered is not None and selected_episode is not None:
+            cache_key = f"daum:tv:show:{show_id}:episodes:{selected_episode}:premiered"
+            caching(lambda: selected_premiered, cache_key, cls.cache_expiry, cache_enable=cls.cache_enable)()
+            if bucket.get(selected_episode):
+                bucket[selected_episode]['daum']['premiered'] = selected_premiered
 
         episode_elements = episode_root.xpath('.//q-select/option')
         last_ep_no = -1
         last_ep_url = ''
-        selected_idx = -1
         current_episodes = []
         for element in episode_elements:
             try:
@@ -375,19 +385,14 @@ class SiteDaumTv(SiteDaum):
                     ep_no = last_ep_no = int(ep_no_date.strftime('%Y%m%d'))
                 if ep_no in bucket:
                     continue
-                if 'selected' in element.attrib:
-                    selected_idx = ep_no
                 if ep_no_date:
                     q_ = f'{show_title} {ep_no_date.strftime("%Y.%m.%d.")}'
                     premiered = ep_no_date.strftime("%Y-%m-%d")
                 else:
                     q_ = f'{show_title} {ep_no}회'
-                    if current_ep_premiered and ep_no == selected_idx:
-                        premiered = current_ep_premiered
-                    else:
-                        cache_key = f"daum:tv:show:{show_id}:episodes:{ep_no}:premiered"
-                        cached = caching(lambda: None, cache_key, cache_enable=cls.cache_enable)()
-                        premiered = cached or 'unknown'
+                    cache_key = f"daum:tv:show:{show_id}:episodes:{ep_no}:premiered"
+                    cached = caching(lambda: None, cache_key, cache_enable=cls.cache_enable)()
+                    premiered = cached or 'unknown'
                 # 첫 페이지에 노출되는 에피소드 목록
                 query = cls.get_request_query(q=q_, coll='tv-episode', spt='tv-episode', spId=ep_id)
                 last_ep_url = cls.get_request_url(query=query)
@@ -401,7 +406,7 @@ class SiteDaumTv(SiteDaum):
                 """
                 bucket[ep_no] = {
                     'daum': {
-                        # 실제 에피소드 id
+                        # 실제 에피소드 code
                         'code': cls.module_char + cls.site_char + str(ep_id) + '.' + encode_base64(show_title) + '.' + str(ep_no),
                         'premiered': premiered,
                     }
@@ -594,7 +599,7 @@ class SiteDaumTv(SiteDaum):
     @classmethod
     def parse_episodes(cls, container: HtmlElement, spid: str, title: str) -> dict:
         '''
-        회차 페이지의 회차 목록은 49개씩 최대 98(이전+다음)개를 보여줌
+        회차 페이지의 회차 목록은 현재 회차를 기준으로 이전, 이후 49개씩 최대 99개를 보여줌
         최신 회차가 2000일 경우 모든 회차 목록을 확인하려면 41번 요청해야함
             - 번호형 회차: 최신 회차 번호를 기준으로 나머지 회차를 유추
                 - 가끔 회차 번호가 날짜로 되어 있는 경우가 있는데 이런 케이스는 포기
@@ -608,10 +613,9 @@ class SiteDaumTv(SiteDaum):
         # 첫번째 페이지의 회차 목록
         last_ep_no, last_ep_url = cls.parse_episode_list(container, episodes, spid, title)
         first_page_episodes = sorted(episodes.keys())
-        #is_number = (sum(x < 19000101 for x in first_page_episodes)) >= len(first_page_episodes) / 2
-        # 캐시 도입했으니 캐시 믿고 모든 회차 조회
-        is_number = False
-        if is_number:
+        is_number = (sum(x < 19000101 for x in first_page_episodes)) >= len(first_page_episodes) / 2
+        # 캐시가 비활성화 되어 있고 번호형이면 검색어로 회차 code를 구성
+        if not cls.cache_enable and is_number:
             # 번호형 회차
             if last_ep_no > 19000101:
                 # 마지막 회차가 날짜형이면 그 전의 번호형으로 대체
@@ -634,7 +638,7 @@ class SiteDaumTv(SiteDaum):
                 cached = caching(lambda: None, f"daum:tv:show:{spid}:episodes:{idx}:premiered", cache_enable=cls.cache_enable)()
                 episodes[idx] = {
                     'daum': {
-                        # 가상의 에피소드 id
+                        # 가상의 에피소드 code
                         'code': cls.module_char + cls.site_char + str(spid) + '..' + encode_base64(title) + '..' + str(idx),
                         'premiered': cached or 'unknown',
                     }
