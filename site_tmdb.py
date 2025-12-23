@@ -358,7 +358,7 @@ class SiteTmdbMovie(SiteTmdb):
         try:
             info = tmdb.credits(language='ko')
             trans = False
-            if kor_trans and ((len(entity.country) > 0 and entity.country[0] in ['South Korea', u'한국', u'대한민국']) or (entity.extra_info.get('original_language') or '' == 'ko')):
+            if kor_trans and ((len(entity.country) > 0 and entity.country[0] in ['South Korea', u'한국', u'대한민국']) or ((entity.extra_info.get('original_language') or '') == 'ko')):
                 trans = True
             #trans = True
             # 한국배우는 자동번역
