@@ -168,8 +168,8 @@ class SiteDaumMovie(SiteDaum):
         else:
             # people
             try:
-                if card_tab.get('출연'):
-                    people_html = cls.get_tree(card_tab.get('출연'))
+                if (credit_url := card_tab.get('출연') or card_tab.get('출연/제작')):
+                    people_html = cls.get_tree(credit_url)
                     data = cls.parse_movie_people(people_html)
                     primary_movie.director.extend(data.get('director'))
                     primary_movie.producers.extend(data.get('producer'))
@@ -291,7 +291,7 @@ class SiteDaumMovie(SiteDaum):
             'director': [],
             'producer': [],
             'writer': [],
-            'actor': []
+            'actor': [],
         }
         if (cast_container := container.find(".//div[@id='em1Coll']//div[@class='cont_cast']")) is not None:
             people = cls.parse_people(cast_container)
@@ -300,12 +300,12 @@ class SiteDaumMovie(SiteDaum):
                 try:
                     match person.get('category'):
                         case 'director':
-                            data.director.append(person.get('name'))
+                            data['director'].append(person.get('name'))
                         case 'producer':
-                            data.producers.append(person.get('name'))
+                            data['producer'].append(person.get('name'))
                         case 'writer':
                             # SjvaAgent에서 credits을 플렉스 writers로 저장 중
-                            data.credits.append(person.get('name'))
+                            data['writer'].append(person.get('name'))
                         case 'actor':
                             entity = EntityActor('', site=cls.site_name)
                             entity.name = person.get('name')
@@ -315,7 +315,7 @@ class SiteDaumMovie(SiteDaum):
                                     entity.role = person.get('role')
                             if person.get('thumb'):
                                 entity.thumb = person.get('thumb')
-                            data.actor.append(entity)
+                            data['actor'].append(entity)
                             order_actor += 1
                 except Exception:
                     logger.exception(f"Failed to parse a person...")
