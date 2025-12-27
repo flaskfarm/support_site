@@ -2684,7 +2684,8 @@ class SiteAvBase:
                         
                         dummy_face = {
                             'cx': v_face['cx'], 'cy': v_face['cy'],
-                            'w': v_face['w'], 'h': v_face['h'],
+                            'w': v_face['w'], 'h': v_face['h'],,
+                            'area': v_face['w'] * v_face['h'],
                             'x1': v_face.get('x1', v_face['cx'] - v_face['w']//2),
                             'x2': v_face.get('x2', v_face['cx'] + v_face['w']//2),
                             'score': person['score'] * 50000,
