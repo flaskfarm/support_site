@@ -301,9 +301,7 @@ class SiteDaumTv(SiteDaum):
             clips = cls.parse_clips(related_video_elements[0])
             if include_kakao and clips:
                 entity.extras.extend(clips)
-            for idx, clip in enumerate(clips):
-                if '예고' in clip.title:
-                    continue
+            for idx, clip in enumerate(sorted(clips, key=lambda c: '예고' in c.title or '선공개' in c.title)):
                 if clip.thumb:
                     # sjva 에이전트에서 항상 'value' 키로 접근하니 주의(thumb만 있으면 안 됨)
                     entity.thumb.append(EntityThumb(aspect='landscape', value=clip.thumb, thumb=clip.thumb, site=cls.site_name, score=100 - idx))
@@ -608,6 +606,9 @@ class SiteDaumTv(SiteDaum):
         '''
         cache_key = f"daum:tv:show:{spid}:episodes"
         if cached := caching(lambda: None, cache_key, cache_enable=cls.cache_enable)():
+            # 캐시로 불러온 JSON 데이터는 key 타입이 str, 원래대로 int로 변환
+            for ep_number in tuple(cached.keys()):
+                cached[int(ep_number)] = cached.pop(ep_number)
             return cached
         episodes = {}
         # 첫번째 페이지의 회차 목록
@@ -653,19 +654,22 @@ class SiteDaumTv(SiteDaum):
 
             모든 회차, 회차 목록 페이지 접속 횟수 200회 제한
             '''
-            for _ in range(200):
+            counter = 0
+            max_counter = 200
+            for _ in range(max_counter):
                 try:
                     next_epno_page = SiteDaum.get_tree(last_ep_url)
                     page_last_episode_no, page_last_episode_url = cls.parse_episode_list(next_epno_page, episodes, spid, title)
                     if last_ep_no == page_last_episode_no or last_ep_url == page_last_episode_url:
-                        logger.debug(f'마지막 에피소드 도달: {page_last_episode_no}')
+                        logger.debug(f"last_episode={page_last_episode_no} {counter=} {spid=} {title=}")
                         break
                     last_ep_no = page_last_episode_no
                     last_ep_url = page_last_episode_url
                 except Exception:
                     logger.exception(f"code='{spid}' title='{title}'")
+                counter += 1
             else:
-                logger.debug(f'에피소드 목록 100회 조회: {last_ep_no=} {last_ep_url=}')
+                logger.error(f"회차 목록 조회 최대 횟수 도달: {counter=} {spid=} {last_ep_no=} {last_ep_url=}")
         return caching(lambda: episodes, cache_key, cls.cache_expiry, cls.cache_enable)()
 
     @classmethod
