@@ -309,15 +309,15 @@ class SiteAvBase:
             WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
         except TimeoutException:
             # 타임아웃 시 디버깅용 파일 저장
-            try:
-                import os
-                tmp_dir = '/data/tmp'
-                if not os.path.exists(tmp_dir): os.makedirs(tmp_dir, exist_ok=True)
-                timestamp = int(time.time())
-                
-                driver.save_screenshot(os.path.join(tmp_dir, f"{cls.site_name}_timeout_{timestamp}.png"))
-                logger.error(f"[{cls.site_name}] Timeout waiting for element. Screenshot saved.")
-            except: pass
+            #try:
+            #    import os
+            #    tmp_dir = '/data/tmp'
+            #    if not os.path.exists(tmp_dir): os.makedirs(tmp_dir, exist_ok=True)
+            #    timestamp = int(time.time())
+            #    
+            #    driver.save_screenshot(os.path.join(tmp_dir, f"{cls.site_name}_timeout_{timestamp}.png"))
+            #    logger.error(f"[{cls.site_name}] Timeout waiting for element. Screenshot saved.")
+            #except: pass
             
             return None, driver.page_source
 
@@ -418,10 +418,17 @@ class SiteAvBase:
         except ImportError:
             CONTEXT_SWITCH_RULES = {} # 임포트 실패 시 규칙 비활성화
 
-        # 기본값은 현재 실행 중인 모듈(cls)의 설정을 사용
-        proxies = None
-        if cls.config and cls.config.get('use_proxy', False):
-            proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
+        # 인자로 전달된 proxies가 있으면 우선 사용
+        proxies = kwargs.get("proxies")
+        
+        # 인자로 전달된 proxies가 없을 때만 기본 설정 사용
+        if proxies is None:
+            if cls.config and cls.config.get('use_proxy', False):
+                proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
+        
+        # kwargs에서 proxies 제거 (requests.request에 중복 전달 방지)
+        if "proxies" in kwargs:
+            del kwargs["proxies"]
 
         request_headers = kwargs.pop("headers", cls.default_headers.copy())
 
@@ -433,11 +440,10 @@ class SiteAvBase:
                 if expert_module and cls.site_name != expert_module.site_name:
                     # logger.debug(f"get_response: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: {url}")
 
-                    # 스위치 모듈의 프록시 설정으로 덮어쓰기
-                    if expert_module.config and expert_module.config.get('use_proxy', False):
-                        proxies = {"http": expert_module.config['proxy_url'], "https": expert_module.config['proxy_url']}
-                    else:
-                        proxies = None
+                    # proxies가 설정되지 않았을 때만 스위치 모듈 설정 적용
+                    if proxies is None:
+                        if expert_module.config and expert_module.config.get('use_proxy', False):
+                            proxies = {"http": expert_module.config['proxy_url'], "https": expert_module.config['proxy_url']}
 
                     # 스위치 모듈의 헤더를 가져와 업데이트 (기존 헤더에 추가/덮어쓰기)
                     request_headers.update(expert_module.default_headers)
@@ -457,7 +463,6 @@ class SiteAvBase:
             kwargs["data"] = post_data
 
         try:
-            # 요청의 주체는 항상 현재 모듈(cls)의 세션
             res = cls.session.request(method, url, headers=request_headers, proxies=proxies, **kwargs)
             return res
         except requests.exceptions.RequestException as e:
