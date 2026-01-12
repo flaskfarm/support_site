@@ -46,6 +46,8 @@ except ImportError:
     _IMAGEHASH_AVAILABLE = False
     hfun = phash = average_hash = None
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 try:
     import cv2
     import numpy as np
@@ -874,8 +876,16 @@ class SiteAvBase:
     # jav_image 기본 처리
     @classmethod
     def default_jav_image(cls, image_url, mode=None):
-        # image open
-        res = cls.get_response(image_url, verify=False)  # SSL 인증서 검증 비활성화 (필요시)
+        res = None
+        # 재시도 로직 (최대 3회, 타임아웃 60초)
+        for i in range(3):
+            try:
+                res = cls.get_response(image_url, verify=False, timeout=60)
+                if res and res.status_code == 200:
+                    break
+            except Exception as e:
+                if i < 2: 
+                    time.sleep(2)
 
         if res is None:
             P.logger.error(f"image_proxy: SiteUtil.get_response returned None for URL: {image_url}")

@@ -25,8 +25,6 @@ class SiteFc2com(SiteAvBase):
     site_char = 'F'
     module_char = 'E'
 
-    CACHE_EXPIRATION_SECONDS = 120
-
     site_base_url = 'https://adult.contents.fc2.com'
     default_headers = SiteAvBase.base_default_headers.copy()
     default_headers['Referer'] = site_base_url + "/"
@@ -37,6 +35,9 @@ class SiteFc2com(SiteAvBase):
     _page_source_cache = {} # Selenium HTML 소스 캐시
     _search_result_cache = {} # 통합 검색 결과 캐시 {code_part: {'source': str, 'data': any, 'timestamp': float}}
     _cache_lock = Lock()
+
+    CACHE_EXPIRATION_SECONDS = 180
+    MAX_CACHE_SIZE = 50
 
     WAIT_LOCATOR = None
     if By:
@@ -174,7 +175,7 @@ class SiteFc2com(SiteAvBase):
     def _check_image_validity(cls, url):
         if not url: return False
         try:
-            res = cls.get_response(url, method='GET', stream=True, timeout=5, allow_redirects=True)
+            res = cls.get_response(url, method='GET', stream=True, timeout=10, allow_redirects=True)
             
             if not res:
                 logger.debug(f"[{cls.site_name}] Image check failed: No response for {url}")
@@ -518,6 +519,19 @@ class SiteFc2com(SiteAvBase):
         # [통합 캐시 저장]
         if item and cache_source:
             with cls._cache_lock:
+                # 1. 만료된 항목 제거
+                now = time.time()
+                keys_to_delete = [k for k, v in cls._search_result_cache.items() if now - v['timestamp'] > cls.CACHE_EXPIRATION_SECONDS]
+                for k in keys_to_delete:
+                    del cls._search_result_cache[k]
+                    if k in cls._page_source_cache: del cls._page_source_cache[k]
+                
+                # 2. 그래도 많으면 전체 초기화 (안전장치)
+                if len(cls._search_result_cache) > cls.MAX_CACHE_SIZE:
+                    cls._search_result_cache.clear()
+                    cls._page_source_cache.clear()
+                
+                # 3. 저장
                 cls._search_result_cache[code_part] = {
                     'source': cache_source,
                     'data': cache_data,
