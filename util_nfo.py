@@ -108,7 +108,7 @@ class UtilNfo(object):
             root = movie
             tmp = ET.tostring(root, pretty_print=True, xml_declaration=True, encoding="utf-8")
             if isinstance(tmp, bytes):
-               tmp = tmp.decode('utf-8')
+                tmp = tmp.decode('utf-8')
             return tmp
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
