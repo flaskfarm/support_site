@@ -18,6 +18,7 @@ def check_packages(packages: Sequence[tuple[str, str]]) -> None:
 check_packages((
     ("xmltodict", "xmltodict"),
     ("lxml", "lxml"),
+    ("httpx", "httpx[http2]"),
 ))
 
 from support import SupportSC
