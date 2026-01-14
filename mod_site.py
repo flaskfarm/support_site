@@ -174,6 +174,12 @@ class ModuleSite(PluginModuleBase):
         '''
         self.plugin_load()
 
+    def plugin_unload(self):
+        """override"""
+        from . import SupportWavve
+        if api := getattr(SupportWavve, 'api', None):
+            api.close_sessions()
+
     def __wavve_init(self):
         from . import SupportWavve
         SupportWavve.initialize(
