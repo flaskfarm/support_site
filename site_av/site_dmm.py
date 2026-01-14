@@ -567,20 +567,36 @@ class SiteDmm(SiteAvBase):
                 # logger.debug("DMM Info (API): Step 2/3 'Maintenance' API call completed.")
 
                 # 3. 본편 데이터 요청 API 호출
-                # content_type에 따라 API 변수 동적 설정
-                variables = {
-                    "id": cid_part,
-                    "isLoggedIn": False,
-                    "isSP": False
-                }
-                if entity.content_type == 'amateur':
-                    variables.update({"isAmateur": True, "isAnime": False, "isAv": False, "isCinema": False})
-                else:  # videoa, vr
-                    variables.update({"isAmateur": False, "isAnime": False, "isAv": True, "isCinema": False})
+                # [헬퍼] API 호출 함수
+                def call_content_api(is_amateur_flag, is_av_flag):
+                    variables = {
+                        "id": cid_part,
+                        "isLoggedIn": False,
+                        "isSP": False,
+                        "isAmateur": is_amateur_flag,
+                        "isAnime": False,
+                        "isAv": is_av_flag,
+                        "isCinema": False,
+                        "shouldFetchRelatedTags": True,
+                    }
 
-                query_content = "query ContentPageData($id: ID!, $isLoggedIn: Boolean!, $isAmateur: Boolean!, $isAnime: Boolean!, $isAv: Boolean!, $isCinema: Boolean!, $isSP: Boolean!) {\n  ppvContent(id: $id) {\n    ...ContentData\n    __typename\n  }\n  reviewSummary(contentId: $id) {\n    ...ReviewSummary\n    __typename\n  }\n  ...basketCountFragment\n}\nfragment ContentData on PPVContent {\n  id\n  floor\n  title\n  isExclusiveDelivery\n  releaseStatus\n  description\n  notices\n  isNoIndex\n  isAllowForeign\n  announcements {\n    body\n    __typename\n  }\n  featureArticles {\n    link {\n      url\n      text\n      __typename\n    }\n    __typename\n  }\n  packageImage {\n    largeUrl\n    mediumUrl\n    __typename\n  }\n  sampleImages {\n    number\n    imageUrl\n    largeImageUrl\n    __typename\n  }\n  products {\n    ...ProductData\n    __typename\n  }\n  mostPopularContentImage {\n    ... on ContentSampleImage {\n      __typename\n      largeImageUrl\n      imageUrl\n    }\n    ... on PackageImage {\n      __typename\n      largeUrl\n      mediumUrl\n    }\n    __typename\n  }\n  priceSummary {\n    lowestSalePrice\n    lowestPrice\n    campaign {\n      title\n      id\n      endAt\n      __typename\n    }\n    __typename\n  }\n  weeklyRanking: ranking(term: Weekly)\n  monthlyRanking: ranking(term: Monthly)\n  wishlistCount\n  sample2DMovie {\n    fileID\n    __typename\n  }\n  sampleMovie {\n    has2d\n    hasVr\n    __typename\n  }\n  ...AmateurAdditionalContentData @include(if: $isAmateur)\n  ...AnimeAdditionalContentData @include(if: $isAnime)\n  ...AvAdditionalContentData @include(if: $isAv)\n  ...CinemaAdditionalContentData @include(if: $isCinema)\n  __typename\n}\nfragment ProductData on PPVProduct {\n  id\n  priority\n  deliveryUnit {\n    id\n    priority\n    streamMaxQualityGroup\n    downloadMaxQualityGroup\n    __typename\n  }\n  priceInclusiveTax\n  sale {\n    priceInclusiveTax\n    __typename\n  }\n  expireDays\n  utilization @include(if: $isLoggedIn) {\n    isTVODRentalPlayable\n    status\n    __typename\n  }\n  licenseType\n  shopName\n  availableCoupon {\n    name\n    expirationPolicy {\n      ... on ProductCouponExpirationAt {\n        expirationAt\n        __typename\n      }\n      ... on ProductCouponExpirationDay {\n        expirationDays\n        __typename\n      }\n      __typename\n    }\n    expirationAt\n    discountedPrice\n    minPayment\n    destinationUrl\n    __typename\n  }\n  __typename\n}\nfragment AmateurAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  amateurActress {\n    id\n    name\n    imageUrl\n    age\n    waist\n    bust\n    bustCup\n    height\n    hip\n    relatedContents {\n      id\n      title\n      __typename\n    }\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment PlayableInfo on PlayableInfo {\n  playableDevices {\n    deviceDeliveryUnits {\n      id\n      deviceDeliveryQualities {\n        isDownloadable\n        isStreamable\n        __typename\n      }\n      __typename\n    }\n    device\n    name\n    priority\n    __typename\n  }\n  deviceGroups {\n    id\n    devices {\n      deviceDeliveryUnits {\n        deviceDeliveryQualities {\n          isStreamable\n          isDownloadable\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n  vrViewingType\n  __typename\n}\nfragment AnimeAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment AvAdditionalContentData on PPVContent {\n  deliveryStartDate\n  makerReleasedAt\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    isBookmarked @include(if: $isLoggedIn)\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  contentType\n  relatedWords\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment CinemaAdditionalContentData on PPVContent {\n  deliveryStartDate\n  duration\n  actresses {\n    id\n    name\n    nameRuby\n    imageUrl\n    __typename\n  }\n  histrions {\n    id\n    name\n    __typename\n  }\n  directors {\n    id\n    name\n    __typename\n  }\n  authors {\n    id\n    name\n    __typename\n  }\n  series {\n    id\n    name\n    __typename\n  }\n  maker {\n    id\n    name\n    __typename\n  }\n  label {\n    id\n    name\n    __typename\n  }\n  genres {\n    id\n    name\n    __typename\n  }\n  makerContentId\n  playableInfo {\n    ...PlayableInfo\n    __typename\n  }\n  __typename\n}\nfragment ReviewSummary on ReviewSummary {\n  average\n  total\n  withCommentTotal\n  distributions {\n    total\n    withCommentTotal\n    rating\n    __typename\n  }\n  __typename\n}\nfragment basketCountFragment on Query {\n  basketCount: legacyBasket @include(if: $isSP) {\n    total\n    __typename\n  }\n  __typename\n}"
-                payload_content = {"operationName":"ContentPageData", "query":query_content, "variables":variables}
-                res = cls.get_response(api_url, method='POST', headers=headers, json=payload_content)
+                    query_content = "query ContentPageData($id: ID!, $isLoggedIn: Boolean!, $isAmateur: Boolean!, $isAnime: Boolean!, $isAv: Boolean!, $isCinema: Boolean!, $isSP: Boolean!, $shouldFetchRelatedTags: Boolean = false) { ppvContent(id: $id) { ...ContentData __typename } reviewSummary(contentId: $id) { ...ReviewSummary __typename } ...basketCountFragment @include(if: $isSP) } fragment ContentData on PPVContent { id floor title isExclusiveDelivery releaseStatus description notices isNoIndex isAllowForeign announcements { body __typename } featureArticles { link { url text __typename } __typename } packageImage { largeUrl mediumUrl __typename } sampleImages { number imageUrl largeImageUrl __typename } products { ...ProductData __typename } mostPopularContentImage { ... on ContentSampleImage { __typename largeImageUrl imageUrl } ... on PackageImage { __typename largeUrl mediumUrl } __typename } pricing { lowestEffectivePriceInclusiveTax lowestRegularPriceInclusiveTax sale { name id endAt __typename } pointRewardCampaign { name id endAt promotionId rate __typename } __typename } weeklyRanking: ranking(term: Weekly) monthlyRanking: ranking(term: Monthly) wishlistCount sample2DMovie { highestMovieUrl hlsMovieUrl __typename } sampleVRMovie { highestMovieUrl __typename } ...AmateurAdditionalContentData @include(if: $isAmateur) ...AnimeAdditionalContentData @include(if: $isAnime) ...AvAdditionalContentData @include(if: $isAv) ...CinemaAdditionalContentData @include(if: $isCinema) __typename } fragment ProductData on PPVProduct { id priority deliveryUnit { id priority streamMaxQualityGroup downloadMaxQualityGroup __typename } pricing { regularPriceInclusiveTax effectivePriceInclusiveTax __typename } expireDays utilizationStatus @include(if: $isLoggedIn) licenseType shopName couponDiscount { coupon { name expirationPolicy { ... on CouponExpirationAt { expirationAt __typename } ... on CouponExpirationDay { expirationDays __typename } __typename } expirationAt minPayment destinationUrl __typename } discountedPriceInclusiveTax __typename } __typename } fragment AmateurAdditionalContentData on PPVContent { deliveryStartDate duration amateurActress { id name imageUrl age waist bust bustCup height hip relatedContents { id title __typename } __typename } maker { id name __typename } label { id name __typename } genres { id name __typename } makerContentId playableInfo { ...PlayableInfo __typename } __typename } fragment PlayableInfo on PlayableInfo { playableDevices { deviceDeliveryUnits { id deviceDeliveryQualities { isDownloadable isStreamable __typename } __typename } device name priority isSupported __typename } deviceGroups { id devices { deviceDeliveryUnits { id deviceDeliveryQualities { isStreamable isDownloadable __typename } __typename } isSupported __typename } __typename } vrViewingType __typename } fragment AnimeAdditionalContentData on PPVContent { deliveryStartDate duration series { id name __typename } maker { id name __typename } label { id name __typename } genres { id name __typename } makerContentId playableInfo { ...PlayableInfo __typename } __typename } fragment AvAdditionalContentData on PPVContent { deliveryStartDate makerReleasedAt duration actresses { id name nameRuby imageUrl isBookmarked @include(if: $isLoggedIn) __typename } histrions { id name __typename } directors { id name __typename } series { id name __typename } maker { id name __typename } label { id name __typename } genres { id name __typename } contentType relatedWords @skip(if: $shouldFetchRelatedTags) relatedTags(limit: 16) @include(if: $shouldFetchRelatedTags) { ... on ContentTagGroup { tags { id name __typename } __typename } ... on ContentTag { id name __typename } __typename } makerContentId playableInfo { ...PlayableInfo __typename } __typename } fragment CinemaAdditionalContentData on PPVContent { deliveryStartDate duration actresses { id name nameRuby imageUrl __typename } histrions { id name __typename } directors { id name __typename } authors { id name __typename } series { id name __typename } maker { id name __typename } label { id name __typename } genres { id name __typename } makerContentId playableInfo { ...PlayableInfo __typename } __typename } fragment ReviewSummary on ReviewSummary { average total withCommentTotal distributions { total withCommentTotal rating __typename } __typename } fragment basketCountFragment on Query { legacyBasket @skip(if: $isLoggedIn) { total __typename } basketCount: user @include(if: $isLoggedIn) { ... on Member { ppvBasketItemCount __typename } __typename } __typename }"
+                    
+                    payload_content = {"operationName":"ContentPageData", "query":query_content, "variables":variables}
+                    return cls.get_response(api_url, method='POST', headers=headers, json=payload_content)
+
+                # 1차 시도
+                is_amateur = (entity.content_type == 'amateur')
+                res = call_content_api(is_amateur_flag=is_amateur, is_av_flag=not is_amateur)
+                
+                # 400 에러 시 재시도 (Amateur <-> Videoa)
+                if res.status_code == 400:
+                    logger.warning(f"DMM API 400 Error. Retrying with opposite type (Amateur <-> AV). Code: {code}")
+                    is_amateur = not is_amateur
+                    res = call_content_api(is_amateur_flag=is_amateur, is_av_flag=not is_amateur)
+                    if res.status_code == 200:
+                        entity.content_type = 'amateur' if is_amateur else 'videoa'
+                        logger.info(f"DMM Info: Content type corrected to '{entity.content_type}'")
 
                 logger.debug(f"DMM Info (API): Step 3/3 'ContentPageData' API call completed: {code} (type: {entity.content_type})")
 
@@ -590,6 +606,7 @@ class SiteDmm(SiteAvBase):
                 if 'errors' in data or not data.get('data', {}).get('ppvContent'):
                     logger.error(f"DMM API Error: Invalid JSON for {code} on ContentPageData call. Response: {data}"); return None
                 api_data = data['data']
+
             except Exception as e:
                 logger.exception(f"DMM API call sequence failed for {code}: {e}"); return None
 
@@ -1032,20 +1049,29 @@ class SiteDmm(SiteAvBase):
             # API로 정보를 가져온 경우 (videoa/vr)
             if api_data:
                 content = api_data.get('ppvContent', {})
-                sample_movie = content.get('sampleMovie', {})
-
-                if not sample_movie:
-                    logger.debug(f"DMM Trailer: No 'sampleMovie' info in API data for {code}. Skipping trailer search.")
-                elif sample_movie.get('has2d'):
-                    # 2D 예고편이 있으면, html5_player 방식만 시도
-                    logger.debug("DMM Trailer: API indicates a 2D trailer is available. Using html5_player method.")
-                    trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
-                elif sample_movie.get('hasVr'):
-                    # 2D 예고편은 없고 VR 예고편만 있으면, VR 전용 방식만 시도
-                    logger.debug("DMM Trailer: API indicates only a VR trailer is available. Using VR method.")
-                    trailer_url_final = cls._get_dmm_vr_trailer(cid_part, detail_url_for_referer)
-                else:
-                    logger.debug(f"DMM Trailer: 'has2d' and 'hasVr' are both false for {code}. Skipping.")
+                
+                # 신규 API 응답 구조 대응
+                sample_2d = content.get('sample2DMovie')
+                sample_vr = content.get('sampleVRMovie')
+                
+                # 1. 2D 예고편 확인 (highestMovieUrl 등 사용)
+                if sample_2d and sample_2d.get('highestMovieUrl'):
+                    # 직접 URL이 있으면 사용 (보통 mp4 직링크)
+                    trailer_url_final = sample_2d['highestMovieUrl']
+                    logger.debug("DMM Trailer: Found 2D movie URL in API response.")
+                    
+                # 2. VR 예고편 확인
+                elif sample_vr and sample_vr.get('highestMovieUrl'):
+                    trailer_url_final = sample_vr['highestMovieUrl']
+                    logger.debug("DMM Trailer: Found VR movie URL in API response.")
+                
+                # 3. 기존 방식 폴백 (sampleMovie 필드가 남아있거나 구조가 다를 경우 대비)
+                elif content.get('sampleMovie'):
+                    sample_movie = content.get('sampleMovie')
+                    if sample_movie.get('has2d'):
+                        trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, entity.content_type)
+                    elif sample_movie.get('hasVr'):
+                        trailer_url_final = cls._get_dmm_vr_trailer(cid_part, detail_url_for_referer)
 
             # HTML로 정보를 가져온 경우 (dvd/bluray)
             elif tree is not None:
