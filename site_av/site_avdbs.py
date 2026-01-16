@@ -269,7 +269,6 @@ class SiteAvdbs(SiteAvBase):
     @classmethod
     def set_config(cls, db):
         super().set_config(db)
-        cls.session = requests.Session()
         cls.config.update({
             "use_local_db": db.get_bool("jav_censored_avdbs_use_local_db"),
             "local_db_path": db.get("jav_censored_avdbs_local_db_path"),
@@ -277,7 +276,6 @@ class SiteAvdbs(SiteAvBase):
             "use_web_search": db.get_bool("jav_censored_avdbs_use_web_search"),
         })
 
-        res = cls.get_response(SITE_BASE_URL)
         #logger.debug(res.text)
 
     # endregion SiteAvBase 메서드 오버라이드
