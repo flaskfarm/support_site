@@ -19,6 +19,7 @@ check_packages((
     ("xmltodict", "xmltodict"),
     ("lxml", "lxml"),
     ("httpx", "httpx[http2]"),
+    ("curl_cffi", "curl_cffi"),
 ))
 
 from support import SupportSC
