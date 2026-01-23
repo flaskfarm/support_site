@@ -2,8 +2,6 @@
 import re
 import os
 import time
-import sqlite3
-import html as html_module
 from threading import Lock
 from lxml import html
 from urllib.parse import urljoin, urlencode
