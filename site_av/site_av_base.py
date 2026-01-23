@@ -27,11 +27,22 @@ from ..entity_base import EntityThumb
 from ..trans_util import TransUtil
 from ..entity_base import EntityActor
 
+_CURL_CFFI_AVAILABLE = False
 try:
-    import cloudscraper
+    from curl_cffi import requests as cffi_requests
+    _CURL_CFFI_AVAILABLE = True
 except ImportError:
-    os.system("pip install cloudscraper")
-    import cloudscraper
+    try:
+        logger.info("Installing curl_cffi...")
+        import subprocess
+        import sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "curl_cffi"])
+        
+        from curl_cffi import requests as cffi_requests
+        _CURL_CFFI_AVAILABLE = True
+        logger.info("curl_cffi installed successfully.")
+    except Exception as e:
+        logger.error(f"Failed to install curl_cffi: {e}")
 
 try:
     from dateutil.parser import parse
@@ -97,9 +108,6 @@ class SiteAvBase:
     config = None
     MetadataSetting = None
 
-    _cs_scraper_instance = None  # cloudscraper 인스턴스 캐싱용 (선택적)
-    _cs_scraper_no_verify_instance = None # SSL 검증 안하는 인스턴스 캐싱용
-
     _cf_cookies = {}
     _cf_cookie_timestamp = 0
     CF_COOKIE_EXPIRY = 3600
@@ -147,7 +155,7 @@ class SiteAvBase:
 
     @classmethod
     def get_text(cls, url, **kwargs):
-        res = cls.get_response(url, **kwargs)
+        res = cls.get_response_cffi(url, **kwargs)
         if res is None:
             logger.warning(f"get_text: get_response returned None for URL: {url}")
             return None
@@ -158,305 +166,45 @@ class SiteAvBase:
             return None
 
 
-    # ---------------------------------------------------------
-    # region Selenium & FlareSolverr Common Methods
-    # ---------------------------------------------------------
-
-    @classmethod
-    def _get_selenium_driver(cls):
-        if not is_selenium_available:
-            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다.")
-        
-        selenium_url = cls.config.get('selenium_url')
-        if not selenium_url: raise Exception("Selenium 서버 URL이 설정되지 않았습니다.")
-        
-        driver_type = cls.config.get('selenium_driver_type', 'chrome')
-        logger.debug(f"[{cls.site_name}] Preparing Selenium driver. Type: {driver_type}")
-
-        if driver_type == 'firefox':
-            options = webdriver.FirefoxOptions()
-            options.add_argument('--headless')
-        else:
-            options = webdriver.ChromeOptions()
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--disable-blink-features=AutomationControlled")
-            options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            options.add_experimental_option('useAutomationExtension', False)
-            options.add_argument("--disable-infobars")
-            options.add_argument("--window-size=1920,1080")
-            options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-
-        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
-            proxy_url = cls.config["proxy_url"]
-            if driver_type == 'firefox':
-                if '@' in proxy_url:
-                    parsed_proxy = urlparse(proxy_url)
-                    proxy_url = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
-                parsed_proxy = urlparse(proxy_url)
-                options.set_preference("network.proxy.type", 1)
-                options.set_preference("network.proxy.http", parsed_proxy.hostname)
-                options.set_preference("network.proxy.http_port", parsed_proxy.port)
-                options.set_preference("network.proxy.ssl", parsed_proxy.hostname)
-                options.set_preference("network.proxy.ssl_port", parsed_proxy.port)
-            else:
-                options.add_argument(f'--proxy-server={proxy_url}')
-
-        original_timeout = socket.getdefaulttimeout()
-        try:
-            socket.setdefaulttimeout(30) 
-            driver = webdriver.Remote(command_executor=selenium_url, options=options)
-            
-            if driver_type == 'chrome':
-                # 광고 및 트래커 차단 (Network.setBlockedURLs)
-                try:
-                    driver.execute_cdp_cmd("Network.enable", {})
-                    blocked_patterns = [
-                        "*.doubleclick.net", "*.googleadservices.com", "*.googlesyndication.com",
-                        "*.exoclick.com", "*.juicyads.com", "*.trafficjunky.com", "*.popads.net",
-                        "*.popcash.net", "*.propellerads.com", "*.ero-advertising.com", "*.adxpansion.com",
-                        "*.i-mobile.co.jp", "*.microad.jp", "*.ad-stir.com",
-                        "*.google-analytics.com", "*.scorecardresearch.com", "*.newrelic.com",
-                        "*fc2.com/ads/*", "*fc2.com/*/ads/*"
-                    ]
-                    driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": blocked_patterns})
-                    # logger.debug(f"[{cls.site_name}] AdBlock enabled via CDP.")
-                except Exception as e_cdp:
-                    logger.debug(f"[{cls.site_name}] Failed to set blocked URLs: {e_cdp}")
-
-                # Stealth 적용 로직
-                stealth_applied = False
-                if is_stealth_available:
-                    try:
-                        stealth(driver,
-                            languages=["en-US", "en"],
-                            vendor="Google Inc.",
-                            platform="Win32",
-                            webgl_vendor="Intel Inc.",
-                            renderer="Intel Iris OpenGL Engine",
-                            fix_hairline=True,
-                        )
-                        stealth_applied = True
-                    except ValueError: pass
-                
-                if not stealth_applied:
-                    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                        "source": """
-                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                            window.navigator.chrome = { runtime: {} };
-                            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-                            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                            const originalQuery = window.navigator.permissions.query;
-                            window.navigator.permissions.query = (parameters) => (
-                                parameters.name === 'notifications' ?
-                                Promise.resolve({ state: Notification.permission }) :
-                                originalQuery(parameters)
-                            );
-                        """
-                    })
-            return driver
-        except Exception as e:
-            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패: {e}")
-            raise
-        finally:
-            socket.setdefaulttimeout(original_timeout)
-
-
-    @classmethod
-    def _quit_selenium_driver(cls, driver):
-        if driver:
-            try: driver.quit()
-            except: pass
-
-
-    @classmethod
-    def _get_page_content_selenium(cls, driver, url, wait_for_locator):
-        """
-        Selenium을 사용하여 페이지 내용을 가져옵니다.
-        Cloudflare 우회 로직만 유지합니다. (성인 인증은 각 사이트별로 처리 권장)
-        """
-        driver.get(url)
-        time.sleep(3) # 로딩 대기
-
-        # [삭제] 공통 성인 인증 버튼 처리 로직 제거
-        # 각 사이트(site_fc2com 등)에서 _add_cookies 나 별도 로직으로 처리하는 것이 안전함.
-
-        # 2. Cloudflare Turnstile (Shadow DOM)
-        if "Just a moment" in driver.title or "Cloudflare" in driver.title:
-            logger.debug(f"[{cls.site_name}] Cloudflare detected. Attempting bypass...")
-            try:
-                driver.execute_script("""
-                    setInterval(() => {
-                        function findAndClick(root) {
-                            const checkbox = root.querySelector('input[type="checkbox"]');
-                            if (checkbox && !checkbox.checked) {
-                                checkbox.click();
-                                return true;
-                            }
-                            const all = root.querySelectorAll('*');
-                            for (let el of all) {
-                                if (el.shadowRoot) findAndClick(el.shadowRoot);
-                            }
-                        }
-                        findAndClick(document);
-                    }, 1000);
-                """)
-                time.sleep(8)
-            except Exception as e:
-                logger.debug(f"[{cls.site_name}] Bypass script error: {e}")
-
-        # 3. 결과 대기
-        timeout = cls.config.get('selenium_timeout', 30)
-        try:
-            WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
-        except TimeoutException:
-            # 타임아웃 시 디버깅용 파일 저장
-            #try:
-            #    import os
-            #    tmp_dir = '/data/tmp'
-            #    if not os.path.exists(tmp_dir): os.makedirs(tmp_dir, exist_ok=True)
-            #    timestamp = int(time.time())
-            #    
-            #    driver.save_screenshot(os.path.join(tmp_dir, f"{cls.site_name}_timeout_{timestamp}.png"))
-            #    logger.error(f"[{cls.site_name}] Timeout waiting for element. Screenshot saved.")
-            #except: pass
-            
-            return None, driver.page_source
-
-        return html.fromstring(driver.page_source), driver.page_source
-
-
-    @classmethod
-    def _get_page_content_flaresolverr(cls, url, validator=None):
-        """
-        FlareSolverr를 사용하여 페이지 내용을 가져옵니다.
-        쿠키 재사용 및 재시도 로직이 포함되어 있습니다.
-        """
-        flaresolverr_url = cls.config.get('flaresolverr_url', '').rstrip('/')
-        if not flaresolverr_url: return None, None
-        
-        api_url = f"{flaresolverr_url}/v1"
-        payload = {
-            "cmd": "request.get",
-            "url": url,
-            "maxTimeout": 60000,
-        }
-        
-        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
-            payload["proxy"] = {"url": cls.config['proxy_url']}
-
-        # 재시도 루프 (최대 3회)
-        for attempt in range(3):
-            # 쿠키 재사용 로직
-            if cls._cf_cookies and (time.time() - cls._cf_cookie_timestamp < cls.CF_COOKIE_EXPIRY):
-                cookies_payload = []
-                for k, v in cls._cf_cookies.items():
-                    cookie_dict = {
-                        "name": k, 
-                        "value": v,
-                        "domain": urlparse(url).hostname,
-                        "path": "/"
-                    }
-                    cookies_payload.append(cookie_dict)
-                payload["cookies"] = cookies_payload
-
-            try:
-                # logger.debug(f"[{cls.site_name}] Requesting FlareSolverr (Attempt {attempt+1}): {url}")
-                res = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=65)
-                
-                if res.status_code == 200:
-                    data = res.json()
-                    if data.get('status') == 'ok':
-                        html_source = data['solution']['response']
-                        tree = html.fromstring(html_source)
-                        
-                        # 쿠키 갱신
-                        if 'cookies' in data['solution']:
-                            new_cookies = {}
-                            for c in data['solution']['cookies']:
-                                new_cookies[c['name']] = c['value']
-                            cls._cf_cookies.update(new_cookies)
-                            cls._cf_cookie_timestamp = time.time()
-
-                        # 결과 검증 (Validator)
-                        if validator:
-                            if validator(tree):
-                                return tree, html_source
-                            else:
-                                logger.debug(f"[{cls.site_name}] FlareSolverr success but validation failed. Retrying...")
-                                time.sleep(2)
-                                continue
-                        else:
-                            return tree, html_source
-                    else:
-                        logger.warning(f"[{cls.site_name}] FlareSolverr error: {data}")
-                else:
-                    logger.warning(f"[{cls.site_name}] FlareSolverr HTTP Error: {res.status_code}")
-            except Exception as e:
-                logger.error(f"[{cls.site_name}] FlareSolverr Connection Error: {e}")
-            
-            # 실패 시 잠시 대기 후 재시도
-            time.sleep(2)
-        
-        return None, None
-
-    # ---------------------------------------------------------
-    # endregion Selenium & FlareSolverr Common Methods
-    # ---------------------------------------------------------
-
-
     @classmethod
     def get_response(cls, url, **kwargs):
-        # 순환 참조를 피하기 위해 함수 내에서 필요한 모듈을 임포트
         try:
             from .site_dmm import SiteDmm
             from .site_mgstage import SiteMgstage
-            # 규칙: {타겟 도메인: 해당 도메인을 처리할 스위치 사이트 모듈 클래스}
             CONTEXT_SWITCH_RULES = {
                 'dmm.co.jp': SiteDmm,
                 'mgstage.com': SiteMgstage,
                 'r18.com': SiteMgstage,
             }
         except ImportError:
-            CONTEXT_SWITCH_RULES = {} # 임포트 실패 시 규칙 비활성화
+            CONTEXT_SWITCH_RULES = {}
 
-        # 인자로 전달된 proxies가 있으면 우선 사용
-        proxies = kwargs.get("proxies")
-        
-        # 인자로 전달된 proxies가 없을 때만 기본 설정 사용
-        if proxies is None:
-            if cls.config and cls.config.get('use_proxy', False):
-                proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
-        
-        # kwargs에서 proxies 제거 (requests.request에 중복 전달 방지)
-        if "proxies" in kwargs:
-            del kwargs["proxies"]
+        # 기본 프록시
+        proxies = kwargs.pop("proxies", None)
+        if not proxies and cls.config and cls.config.get('use_proxy', False):
+            p_url = cls.config.get('proxy_url')
+            if p_url: proxies = {"http": p_url, "https": p_url}
 
-        request_headers = kwargs.pop("headers", cls.default_headers.copy())
+        request_headers = kwargs.pop("headers", cls.default_headers.copy() if cls.default_headers else cls.base_default_headers.copy())
 
-        # URL을 분석하여 스위치 모듈의 설정이 필요한지 확인
+        # 스위치 모듈 로직
         for domain, expert_module in CONTEXT_SWITCH_RULES.items():
             if domain in url:
-                # expert_module이 성공적으로 임포트되었고,
-                # 현재 모듈이 해당 도메인의 스위치가 아닐 경우에만 설정 빌려오기
                 if expert_module and cls.site_name != expert_module.site_name:
-                    # logger.debug(f"get_response: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: {url}")
+                    if not proxies and expert_module.config and expert_module.config.get('use_proxy', False):
+                        p_url = expert_module.config.get('proxy_url')
+                        if p_url: proxies = {"http": p_url, "https": p_url}
+                    
+                    if expert_module.default_headers:
+                        request_headers.update(expert_module.default_headers)
 
-                    # proxies가 설정되지 않았을 때만 스위치 모듈 설정 적용
-                    if proxies is None:
-                        if expert_module.config and expert_module.config.get('use_proxy', False):
-                            proxies = {"http": expert_module.config['proxy_url'], "https": expert_module.config['proxy_url']}
-
-                    # 스위치 모듈의 헤더를 가져와 업데이트 (기존 헤더에 추가/덮어쓰기)
-                    request_headers.update(expert_module.default_headers)
-
-                    # DMM의 경우, Referer와 Cookie를 확실하게 설정
                     if expert_module.site_name == 'dmm':
                         request_headers['Referer'] = 'https://www.dmm.co.jp/'
-                        dmm_cookie = expert_module.session.cookies.get('age_check_done', domain='.dmm.co.jp')
-                        if dmm_cookie:
-                            request_headers['Cookie'] = f"age_check_done={dmm_cookie}"
-                break # 첫 번째 일치하는 규칙만 적용
+                        request_headers['Cookie'] = 'age_check_done=1'
+                break
+
+        if 'dmm.co.jp' in url and cls.site_name == 'dmm':
+            request_headers['Cookie'] = 'age_check_done=1'
 
         method = kwargs.pop("method", "GET")
         post_data = kwargs.pop("post_data", None)
@@ -468,9 +216,79 @@ class SiteAvBase:
             res = cls.session.request(method, url, headers=request_headers, proxies=proxies, **kwargs)
             return res
         except requests.exceptions.RequestException as e:
-            logger.error(f"get_response: RequestException for URL='{url}'. Error: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"get_response (requests) error for {url}: {e}")
             return None
+
+
+    @classmethod
+    def get_response_cffi(cls, url, **kwargs):
+        """WAF 우회용 (curl_cffi 사용)"""
+        if not _CURL_CFFI_AVAILABLE:
+            logger.error("curl_cffi not available.")
+            return cls.get_response(url, **kwargs) # Fallback
+
+        try:
+            from .site_dmm import SiteDmm
+            from .site_mgstage import SiteMgstage
+            CONTEXT_SWITCH_RULES = {
+                'dmm.co.jp': SiteDmm,
+                'mgstage.com': SiteMgstage,
+                'r18.com': SiteMgstage,
+            }
+        except ImportError:
+            CONTEXT_SWITCH_RULES = {}
+
+        # 기본 프록시
+        proxies = kwargs.pop("proxies", None)
+        if not proxies and cls.config and cls.config.get('use_proxy', False):
+            p_url = cls.config.get('proxy_url')
+            if p_url: proxies = {"http": p_url, "https": p_url}
+
+        request_headers = kwargs.pop("headers", cls.default_headers.copy() if cls.default_headers else cls.base_default_headers.copy())
+
+        # 스위치 모듈 로직
+        for domain, expert_module in CONTEXT_SWITCH_RULES.items():
+            if domain in url:
+                if expert_module and cls.site_name != expert_module.site_name:
+                    if not proxies and expert_module.config and expert_module.config.get('use_proxy', False):
+                        p_url = expert_module.config.get('proxy_url')
+                        if p_url: proxies = {"http": p_url, "https": p_url}
+                    
+                    if expert_module.default_headers:
+                        request_headers.update(expert_module.default_headers)
+
+                    if expert_module.site_name == 'dmm':
+                        request_headers['Referer'] = 'https://www.dmm.co.jp/'
+                        request_headers['Cookie'] = 'age_check_done=1'
+                break
+
+        if 'dmm.co.jp' in url and cls.site_name == 'dmm':
+            request_headers['Cookie'] = 'age_check_done=1'
+
+        method = kwargs.pop("method", "GET").upper()
+        if "post_data" in kwargs:
+            kwargs["data"] = kwargs.pop("post_data")
+            if method == "GET": method = "POST"
+
+        impersonate = kwargs.pop("impersonate", "chrome110")
+        timeout = kwargs.pop("timeout", 30)
+        if 'verify' in kwargs: kwargs.pop('verify') # cffi 호환
+
+        try:
+            res = cffi_requests.request(
+                method=method,
+                url=url,
+                headers=request_headers,
+                proxies=proxies,
+                impersonate=impersonate,
+                timeout=timeout,
+                **kwargs
+            )
+            return res
+        except Exception as e:
+            logger.error(f"get_response_cffi error for {url}: {e}")
+            return None
+
 
 
     # 외부에서 이미지를 요청하는 URL을 만든다.
@@ -537,132 +355,6 @@ class SiteAvBase:
                 logger.error(f"trans plugin error: {str(e)}")
                 #logger.error(traceback.format_exc())
                 return TransUtil.trans_web2(text, source=source, target=target).strip()
-
-
-    @classmethod
-    def get_tree_cs(cls, url, **kwargs):
-        text = cls.get_text_cs(url, **kwargs)
-        if text is None:
-            return text
-        return html.fromstring(text)
-
-    @classmethod
-    def get_text_cs(cls, url, **kwargs):
-        res = cls.get_response_cs(url, **kwargs)
-        if res is None: return None
-        return res.text
-
-
-    @classmethod
-    def get_cloudscraper_instance(cls, new_instance=False, no_verify=False):
-        """
-        cloudscraper 인스턴스를 반환합니다.
-        no_verify=True일 경우, SSL 인증서 검증을 비활성화한 별도의 인스턴스를 반환합니다.
-        """
-        if no_verify:
-            if new_instance or cls._cs_scraper_no_verify_instance is None:
-                try:
-                    # 1. 커스텀 SSLContext 생성
-                    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-
-                    # 2. 커스텀 HTTPAdapter 정의
-                    class NoVerifyAdapter(HTTPAdapter):
-                        def init_poolmanager(self, *args, **kwargs):
-                            kwargs['ssl_context'] = context
-                            super().init_poolmanager(*args, **kwargs)
-
-                        def proxy_manager_for(self, *args, **kwargs):
-                            kwargs['ssl_context'] = context
-                            return super().proxy_manager_for(*args, **kwargs)
-
-                    # 3. requests.Session 객체를 만들고 어댑터 마운트
-                    custom_session = requests.Session()
-                    custom_session.mount('https://', NoVerifyAdapter())
-
-                    # 4. create_scraper에 직접 세션 객체 전달
-                    cls._cs_scraper_no_verify_instance = cloudscraper.create_scraper(
-                        sess=custom_session,
-                        delay=5
-                    )
-                    logger.debug("Created new cloudscraper instance with SSL verification DISABLED.")
-                except Exception as e_cs_create:
-                    logger.error(f"Failed to create no-verify cloudscraper instance: {e_cs_create}")
-                    logger.error(traceback.format_exc())
-                    return None
-            return cls._cs_scraper_no_verify_instance
-        else:
-            # 기본 인스턴스
-            if new_instance or cls._cs_scraper_instance is None:
-                try:
-                    cls._cs_scraper_instance = cloudscraper.create_scraper(sess=cls.session, delay=5)
-                    logger.debug("Created new cloudscraper instance.")
-                except Exception as e_cs_create:
-                    logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
-                    return None
-            return cls._cs_scraper_instance
-
-
-# site_av_base.py
-
-    @classmethod
-    def get_response_cs(cls, url, **kwargs):
-        """cloudscraper를 사용하여 HTTP GET 요청을 보내고 응답 객체를 반환합니다."""
-        method = kwargs.pop("method", "GET").upper()
-        post_data = kwargs.pop("post_data", None)
-        if post_data:
-            method = "POST"
-
-        proxies = kwargs.pop("proxies", None)
-        proxy_url = None
-
-        if proxies is None:
-            if cls.config and cls.config.get('use_proxy', False):
-                proxy_url = cls.config.get('proxy_url')
-                if proxy_url:
-                    proxies = {"http": proxy_url, "https": proxy_url}
-        else:
-            proxy_url = proxies.get("http", proxies.get("https"))
-
-        kwargs.pop("cookies", None) 
-
-        headers = kwargs.pop("headers", cls.default_headers)
-        verify = kwargs.pop("verify", True)
-
-        scraper = cls.get_cloudscraper_instance(no_verify=(not verify))
-        if scraper is None:
-            logger.error("SiteUtil.get_response_cs: Failed to get cloudscraper instance.")
-            return None
-
-        if headers: 
-            scraper.headers.update(headers)
-
-        try:
-            if method == "POST":
-                res = scraper.post(url, data=post_data, proxies=proxies, **kwargs)
-            else: # GET
-                res = scraper.get(url, proxies=proxies, **kwargs)
-
-            if res.status_code == 429:
-                return res
-
-            if res.status_code != 200:
-                logger.warning(f"SiteUtil.get_response_cs: Received status code {res.status_code} for URL='{url}'. Proxy='{proxy_url}'.")
-                if res.status_code == 403:
-                    logger.error(f"SiteUtil.get_response_cs: Received 403 Forbidden for URL='{url}'. Proxy='{proxy_url}'. Response text: {res.text[:500]}")
-                return None
-
-            return res
-        except requests.exceptions.RequestException as e_req:
-            logger.error(f"SiteUtil.get_response_cs: RequestException (not related to status code) for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
-            logger.error(traceback.format_exc())
-            return None
-        except Exception as e_general:
-            logger.error(f"SiteUtil.get_response_cs: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
-            logger.error(traceback.format_exc())
-            return None
-
 
 
     # endregion 
@@ -2323,6 +2015,128 @@ class SiteAvBase:
             return False
 
 
+    @classmethod
+    def save_actor_image(cls, entity_actor):
+        """
+        배우 이미지를 로컬에 저장하고 entity_actor.thumb를 업데이트합니다.
+        """
+        # 1. 정보 추출 (객체/딕셔너리 호환)
+        thumb_url = None
+        kor_name = ""
+        jpn_name = ""
+        actor_idx = ""
+
+        if isinstance(entity_actor, dict):
+            thumb_url = entity_actor.get('thumb')
+            kor_name = entity_actor.get('name', '')
+            jpn_name = entity_actor.get('originalname', '')
+            actor_idx = entity_actor.get('actor_idx', '')
+        else:
+            thumb_url = getattr(entity_actor, 'thumb', None)
+            kor_name = getattr(entity_actor, 'name', '')
+            jpn_name = getattr(entity_actor, 'originalname', '')
+            actor_idx = getattr(entity_actor, 'actor_idx', '')
+        
+        if not thumb_url or not actor_idx: return
+
+        # 2. 설정 가져오기
+        root_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+        actor_sub_path = cls.MetadataSetting.get('jav_censored_image_server_actor_path') or '/jav/actor'
+        server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+        rewrite = cls.MetadataSetting.get_bool('jav_censored_image_server_rewrite')
+
+        if not root_path or not server_url: return
+
+        # 3. URL 파싱 (프록시 URL인 경우 원본 추출)
+        real_thumb_url = thumb_url
+        if 'jav_image' in thumb_url and 'url=' in thumb_url:
+            try:
+                from urllib.parse import parse_qs, urlparse
+                parsed = urlparse(thumb_url)
+                qs_dict = parse_qs(parsed.query)
+                if 'url' in qs_dict:
+                    real_thumb_url = qs_dict['url'][0]
+            except Exception as e:
+                logger.error(f"Failed to parse proxy URL: {e}")
+
+        # 4. 파일명 및 경로 생성
+        def clean_name(n):
+            return re.sub(r'\s+', '_', str(n).strip())
+        
+        filename_base = f"{clean_name(kor_name)}"
+        if jpn_name:
+            filename_base += f"_({clean_name(jpn_name)})"
+        filename_base += f"_A{actor_idx}.jpg"
+
+        first_char = kor_name[0] if kor_name else 'A'
+        sub_folder = cls._get_actor_folder_name(first_char)
+        
+        relative_path = f"{actor_sub_path.strip('/')}/{sub_folder}/{filename_base}"
+        full_path = os.path.join(root_path, relative_path)
+        
+        # 5. 이미지 다운로드 및 저장
+        if rewrite or not os.path.exists(full_path):
+            try:
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                
+                # [중요] 원본 URL로 요청
+                res = cls.get_response(real_thumb_url)
+                if res and res.status_code == 200:
+                    if not cls._save_image_as_jpeg(BytesIO(res.content), full_path):
+                        with open(full_path, 'wb') as f: f.write(res.content)
+                else:
+                    logger.warning(f"Failed to download actor image. Status: {res.status_code if res else 'None'}")
+                    return # 저장 실패 시 URL 업데이트 안 함
+            except Exception as e:
+                logger.error(f"Failed to save actor image: {e}")
+                return
+
+        # 6. URL 업데이트 (성공 시에만)
+        new_url = f"{server_url.rstrip('/')}/{relative_path}"
+        
+        if isinstance(entity_actor, dict):
+            entity_actor['thumb'] = new_url
+        else:
+            entity_actor.thumb = new_url
+
+
+    @staticmethod
+    def _get_actor_folder_name(char):
+        """한글 초성 또는 알파벳에 따라 폴더명을 반환합니다."""
+        if '가' <= char <= '힣':
+            char_code = ord(char) - ord('가')
+            cho_index = char_code // 588
+            
+            # 초성 인덱스: 0(ㄱ), 1(ㄲ), 2(ㄴ), 3(ㄷ), 4(ㄸ), 5(ㄹ), 6(ㅁ), 7(ㅂ), 8(ㅃ), 9(ㅅ), 
+            #             10(ㅆ), 11(ㅇ), 12(ㅈ), 13(ㅉ), 14(ㅊ), 15(ㅋ), 16(ㅌ), 17(ㅍ), 18(ㅎ)
+            
+            # 폴더명 매핑 (된소리는 예사소리 폴더로, ㅋㅌㅍㅎ은 그대로)
+            mapping = {
+                0: '가', 1: '가',  # ㄱ, ㄲ -> 가
+                2: '나',          # ㄴ -> 나
+                3: '다', 4: '다',  # ㄷ, ㄸ -> 다
+                5: '라',          # ㄹ -> 라
+                6: '마',          # ㅁ -> 마
+                7: '바', 8: '바',  # ㅂ, ㅃ -> 바
+                9: '사', 10: '사', # ㅅ, ㅆ -> 사
+                11: '아',         # ㅇ -> 아
+                12: '자', 13: '자', # ㅈ, ㅉ -> 자
+                14: '차',         # ㅊ -> 차
+                15: '카',         # ㅋ -> 카
+                16: '타',         # ㅌ -> 타
+                17: '파',         # ㅍ -> 파
+                18: '하'          # ㅎ -> 하
+            }
+            return mapping.get(cho_index, '기타')
+            
+        elif 'A' <= char.upper() <= 'Z':
+            return "AZ"
+        elif '0' <= char <= '9':
+            return "#"
+        else:
+            return "#"
+
+
     # =========================================================================
     # AI Detection Methods (MediaPipe Face)
     # -------------------------------------------------------------------------
@@ -3242,3 +3056,376 @@ class SiteAvBase:
 
     # endregion 유틸
     ################################################
+
+
+    # ---------------------------------------------------------
+    # region Selenium & FlareSolverr Common Methods (Legacy)
+    # ---------------------------------------------------------
+
+
+    @classmethod
+    def get_tree_cs(cls, url, **kwargs):
+        text = cls.get_text_cs(url, **kwargs)
+        if text is None:
+            return text
+        return html.fromstring(text)
+
+
+    @classmethod
+    def get_text_cs(cls, url, **kwargs):
+        res = cls.get_response_cs(url, **kwargs)
+        if res is None: return None
+        return res.text
+
+
+    @classmethod
+    def get_cloudscraper_instance(cls, new_instance=False, no_verify=False):
+        """
+        cloudscraper 인스턴스를 반환합니다.
+        no_verify=True일 경우, SSL 인증서 검증을 비활성화한 별도의 인스턴스를 반환합니다.
+        """
+        if no_verify:
+            if new_instance or cls._cs_scraper_no_verify_instance is None:
+                try:
+                    # 1. 커스텀 SSLContext 생성
+                    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+
+                    # 2. 커스텀 HTTPAdapter 정의
+                    class NoVerifyAdapter(HTTPAdapter):
+                        def init_poolmanager(self, *args, **kwargs):
+                            kwargs['ssl_context'] = context
+                            super().init_poolmanager(*args, **kwargs)
+
+                        def proxy_manager_for(self, *args, **kwargs):
+                            kwargs['ssl_context'] = context
+                            return super().proxy_manager_for(*args, **kwargs)
+
+                    # 3. requests.Session 객체를 만들고 어댑터 마운트
+                    custom_session = requests.Session()
+                    custom_session.mount('https://', NoVerifyAdapter())
+
+                    # 4. create_scraper에 직접 세션 객체 전달
+                    cls._cs_scraper_no_verify_instance = cloudscraper.create_scraper(
+                        sess=custom_session,
+                        delay=5
+                    )
+                    logger.debug("Created new cloudscraper instance with SSL verification DISABLED.")
+                except Exception as e_cs_create:
+                    logger.error(f"Failed to create no-verify cloudscraper instance: {e_cs_create}")
+                    logger.error(traceback.format_exc())
+                    return None
+            return cls._cs_scraper_no_verify_instance
+        else:
+            # 기본 인스턴스
+            if new_instance or cls._cs_scraper_instance is None:
+                try:
+                    cls._cs_scraper_instance = cloudscraper.create_scraper(sess=cls.session, delay=5)
+                    logger.debug("Created new cloudscraper instance.")
+                except Exception as e_cs_create:
+                    logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
+                    return None
+            return cls._cs_scraper_instance
+
+
+    @classmethod
+    def get_response_cs(cls, url, **kwargs):
+        """cloudscraper를 사용하여 HTTP GET 요청을 보내고 응답 객체를 반환합니다."""
+        method = kwargs.pop("method", "GET").upper()
+        post_data = kwargs.pop("post_data", None)
+        if post_data:
+            method = "POST"
+
+        proxies = kwargs.pop("proxies", None)
+        proxy_url = None
+
+        if proxies is None:
+            if cls.config and cls.config.get('use_proxy', False):
+                proxy_url = cls.config.get('proxy_url')
+                if proxy_url:
+                    proxies = {"http": proxy_url, "https": proxy_url}
+        else:
+            proxy_url = proxies.get("http", proxies.get("https"))
+
+        kwargs.pop("cookies", None) 
+
+        headers = kwargs.pop("headers", cls.default_headers)
+        verify = kwargs.pop("verify", True)
+
+        scraper = cls.get_cloudscraper_instance(no_verify=(not verify))
+        if scraper is None:
+            logger.error("SiteUtil.get_response_cs: Failed to get cloudscraper instance.")
+            return None
+
+        if headers: 
+            scraper.headers.update(headers)
+
+        try:
+            if method == "POST":
+                res = scraper.post(url, data=post_data, proxies=proxies, **kwargs)
+            else: # GET
+                res = scraper.get(url, proxies=proxies, **kwargs)
+
+            if res.status_code == 429:
+                return res
+
+            if res.status_code != 200:
+                logger.warning(f"SiteUtil.get_response_cs: Received status code {res.status_code} for URL='{url}'. Proxy='{proxy_url}'.")
+                if res.status_code == 403:
+                    logger.error(f"SiteUtil.get_response_cs: Received 403 Forbidden for URL='{url}'. Proxy='{proxy_url}'. Response text: {res.text[:500]}")
+                return None
+
+            return res
+        except requests.exceptions.RequestException as e_req:
+            logger.error(f"SiteUtil.get_response_cs: RequestException (not related to status code) for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
+            logger.error(traceback.format_exc())
+            return None
+        except Exception as e_general:
+            logger.error(f"SiteUtil.get_response_cs: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
+            logger.error(traceback.format_exc())
+            return None
+
+
+    @classmethod
+    def _get_selenium_driver(cls):
+        if not is_selenium_available:
+            raise ImportError("Selenium 라이브러리가 설치되어 있지 않습니다.")
+        
+        selenium_url = cls.config.get('selenium_url')
+        if not selenium_url: raise Exception("Selenium 서버 URL이 설정되지 않았습니다.")
+        
+        driver_type = cls.config.get('selenium_driver_type', 'chrome')
+        logger.debug(f"[{cls.site_name}] Preparing Selenium driver. Type: {driver_type}")
+
+        if driver_type == 'firefox':
+            options = webdriver.FirefoxOptions()
+            options.add_argument('--headless')
+        else:
+            options = webdriver.ChromeOptions()
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--disable-blink-features=AutomationControlled")
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option('useAutomationExtension', False)
+            options.add_argument("--disable-infobars")
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
+            proxy_url = cls.config["proxy_url"]
+            if driver_type == 'firefox':
+                if '@' in proxy_url:
+                    parsed_proxy = urlparse(proxy_url)
+                    proxy_url = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
+                parsed_proxy = urlparse(proxy_url)
+                options.set_preference("network.proxy.type", 1)
+                options.set_preference("network.proxy.http", parsed_proxy.hostname)
+                options.set_preference("network.proxy.http_port", parsed_proxy.port)
+                options.set_preference("network.proxy.ssl", parsed_proxy.hostname)
+                options.set_preference("network.proxy.ssl_port", parsed_proxy.port)
+            else:
+                options.add_argument(f'--proxy-server={proxy_url}')
+
+        original_timeout = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(30) 
+            driver = webdriver.Remote(command_executor=selenium_url, options=options)
+            
+            if driver_type == 'chrome':
+                # 광고 및 트래커 차단 (Network.setBlockedURLs)
+                try:
+                    driver.execute_cdp_cmd("Network.enable", {})
+                    blocked_patterns = [
+                        "*.doubleclick.net", "*.googleadservices.com", "*.googlesyndication.com",
+                        "*.exoclick.com", "*.juicyads.com", "*.trafficjunky.com", "*.popads.net",
+                        "*.popcash.net", "*.propellerads.com", "*.ero-advertising.com", "*.adxpansion.com",
+                        "*.i-mobile.co.jp", "*.microad.jp", "*.ad-stir.com",
+                        "*.google-analytics.com", "*.scorecardresearch.com", "*.newrelic.com",
+                        "*fc2.com/ads/*", "*fc2.com/*/ads/*"
+                    ]
+                    driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": blocked_patterns})
+                    # logger.debug(f"[{cls.site_name}] AdBlock enabled via CDP.")
+                except Exception as e_cdp:
+                    logger.debug(f"[{cls.site_name}] Failed to set blocked URLs: {e_cdp}")
+
+                # Stealth 적용 로직
+                stealth_applied = False
+                if is_stealth_available:
+                    try:
+                        stealth(driver,
+                            languages=["en-US", "en"],
+                            vendor="Google Inc.",
+                            platform="Win32",
+                            webgl_vendor="Intel Inc.",
+                            renderer="Intel Iris OpenGL Engine",
+                            fix_hairline=True,
+                        )
+                        stealth_applied = True
+                    except ValueError: pass
+                
+                if not stealth_applied:
+                    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                        "source": """
+                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                            window.navigator.chrome = { runtime: {} };
+                            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                            const originalQuery = window.navigator.permissions.query;
+                            window.navigator.permissions.query = (parameters) => (
+                                parameters.name === 'notifications' ?
+                                Promise.resolve({ state: Notification.permission }) :
+                                originalQuery(parameters)
+                            );
+                        """
+                    })
+            return driver
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] Selenium 드라이버 생성 실패: {e}")
+            raise
+        finally:
+            socket.setdefaulttimeout(original_timeout)
+
+
+    @classmethod
+    def _quit_selenium_driver(cls, driver):
+        if driver:
+            try: driver.quit()
+            except: pass
+
+
+    @classmethod
+    def _get_page_content_selenium(cls, driver, url, wait_for_locator):
+        """
+        Selenium을 사용하여 페이지 내용을 가져옵니다.
+        Cloudflare 우회 로직만 유지합니다. (성인 인증은 각 사이트별로 처리 권장)
+        """
+        driver.get(url)
+        time.sleep(3) # 로딩 대기
+
+        # [삭제] 공통 성인 인증 버튼 처리 로직 제거
+        # 각 사이트(site_fc2com 등)에서 _add_cookies 나 별도 로직으로 처리하는 것이 안전함.
+
+        # 2. Cloudflare Turnstile (Shadow DOM)
+        if "Just a moment" in driver.title or "Cloudflare" in driver.title:
+            logger.debug(f"[{cls.site_name}] Cloudflare detected. Attempting bypass...")
+            try:
+                driver.execute_script("""
+                    setInterval(() => {
+                        function findAndClick(root) {
+                            const checkbox = root.querySelector('input[type="checkbox"]');
+                            if (checkbox && !checkbox.checked) {
+                                checkbox.click();
+                                return true;
+                            }
+                            const all = root.querySelectorAll('*');
+                            for (let el of all) {
+                                if (el.shadowRoot) findAndClick(el.shadowRoot);
+                            }
+                        }
+                        findAndClick(document);
+                    }, 1000);
+                """)
+                time.sleep(8)
+            except Exception as e:
+                logger.debug(f"[{cls.site_name}] Bypass script error: {e}")
+
+        # 3. 결과 대기
+        timeout = cls.config.get('selenium_timeout', 30)
+        try:
+            WebDriverWait(driver, timeout).until(EC.presence_of_element_located(wait_for_locator))
+        except TimeoutException:
+            # 타임아웃 시 디버깅용 파일 저장
+            #try:
+            #    import os
+            #    tmp_dir = '/data/tmp'
+            #    if not os.path.exists(tmp_dir): os.makedirs(tmp_dir, exist_ok=True)
+            #    timestamp = int(time.time())
+            #    
+            #    driver.save_screenshot(os.path.join(tmp_dir, f"{cls.site_name}_timeout_{timestamp}.png"))
+            #    logger.error(f"[{cls.site_name}] Timeout waiting for element. Screenshot saved.")
+            #except: pass
+            
+            return None, driver.page_source
+
+        return html.fromstring(driver.page_source), driver.page_source
+
+
+    @classmethod
+    def _get_page_content_flaresolverr(cls, url, validator=None):
+        """
+        FlareSolverr를 사용하여 페이지 내용을 가져옵니다.
+        쿠키 재사용 및 재시도 로직이 포함되어 있습니다.
+        """
+        flaresolverr_url = cls.config.get('flaresolverr_url', '').rstrip('/')
+        if not flaresolverr_url: return None, None
+        
+        api_url = f"{flaresolverr_url}/v1"
+        payload = {
+            "cmd": "request.get",
+            "url": url,
+            "maxTimeout": 60000,
+        }
+        
+        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
+            payload["proxy"] = {"url": cls.config['proxy_url']}
+
+        # 재시도 루프 (최대 3회)
+        for attempt in range(3):
+            # 쿠키 재사용 로직
+            if cls._cf_cookies and (time.time() - cls._cf_cookie_timestamp < cls.CF_COOKIE_EXPIRY):
+                cookies_payload = []
+                for k, v in cls._cf_cookies.items():
+                    cookie_dict = {
+                        "name": k, 
+                        "value": v,
+                        "domain": urlparse(url).hostname,
+                        "path": "/"
+                    }
+                    cookies_payload.append(cookie_dict)
+                payload["cookies"] = cookies_payload
+
+            try:
+                # logger.debug(f"[{cls.site_name}] Requesting FlareSolverr (Attempt {attempt+1}): {url}")
+                res = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=65)
+                
+                if res.status_code == 200:
+                    data = res.json()
+                    if data.get('status') == 'ok':
+                        html_source = data['solution']['response']
+                        tree = html.fromstring(html_source)
+                        
+                        # 쿠키 갱신
+                        if 'cookies' in data['solution']:
+                            new_cookies = {}
+                            for c in data['solution']['cookies']:
+                                new_cookies[c['name']] = c['value']
+                            cls._cf_cookies.update(new_cookies)
+                            cls._cf_cookie_timestamp = time.time()
+
+                        # 결과 검증 (Validator)
+                        if validator:
+                            if validator(tree):
+                                return tree, html_source
+                            else:
+                                logger.debug(f"[{cls.site_name}] FlareSolverr success but validation failed. Retrying...")
+                                time.sleep(2)
+                                continue
+                        else:
+                            return tree, html_source
+                    else:
+                        logger.warning(f"[{cls.site_name}] FlareSolverr error: {data}")
+                else:
+                    logger.warning(f"[{cls.site_name}] FlareSolverr HTTP Error: {res.status_code}")
+            except Exception as e:
+                logger.error(f"[{cls.site_name}] FlareSolverr Connection Error: {e}")
+            
+            # 실패 시 잠시 대기 후 재시도
+            time.sleep(2)
+        
+        return None, None
+
+    # ---------------------------------------------------------
+    # endregion Selenium & FlareSolverr Common Methods
+    # ---------------------------------------------------------
+

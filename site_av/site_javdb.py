@@ -18,6 +18,7 @@ class SiteJavdb(SiteAvBase):
     default_headers = SiteAvBase.base_default_headers.copy()
     default_headers.update({"Referer": SITE_BASE_URL + "/"})
 
+
     ################################################
     # region SEARCH
 
@@ -47,45 +48,10 @@ class SiteJavdb(SiteAvBase):
         search_url = f"{SITE_BASE_URL}/search?q={search_keyword_for_url}&f=all"
         logger.debug(f"JavDB Search: original='{original_keyword}', parsed_kw='{kw_ui_code}', url='{search_url}'")
 
-        tree = None
-        
-        # 1순위: FlareSolverr 사용
-        if cls.config.get('use_flaresolverr') and cls.config.get('flaresolverr_url'):
-            validator = lambda t: t.xpath('//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]') or t.xpath('//div[contains(@class, "empty-message")]')
-            tree, _ = cls._get_page_content_flaresolverr(search_url, validator=validator)
-            if tree is None:
-                logger.warning("JavDB Search: FlareSolverr failed. Falling back if possible.")
-
-        # 2순위: Selenium 사용
-        if tree is None and cls.config.get('use_selenium', False):
-            driver = None
-            try:
-                from selenium.webdriver.common.by import By
-                driver = cls._get_selenium_driver()
-                wait_locator = (By.XPATH, '//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]')
-                tree, _ = cls._get_page_content_selenium(driver, search_url, wait_for_locator=wait_locator)
-            except Exception as e:
-                logger.error(f"JavDB Search (Selenium): Error: {e}")
-            finally:
-                cls._quit_selenium_driver(driver)
-        
-        # 3순위: 일반 Requests
-        if tree is None:
-            custom_cookies_for_search = {'over18': '1'}
-            res_for_search = cls.get_response_cs(search_url, cookies=custom_cookies_for_search)
-
-            if res_for_search:
-                html_content_text = res_for_search.text
-                if res_for_search.status_code != 200:
-                    logger.warning(f"JavDB Search: Status code {res_for_search.status_code} for URL: {res_for_search.url}")
-                    if "cf-error-details" in html_content_text or "Cloudflare to restrict access" in html_content_text:
-                        logger.error(f"JavDB Search: Cloudflare restriction page detected.")
-                try:
-                    tree = html.fromstring(html_content_text)
-                except Exception as e_parse:
-                    logger.error(f"JavDB Search: Failed to parse HTML: {e_parse}")
+        tree = cls.get_tree(search_url)
 
         if tree is None:
+            logger.warning(f"JavDB Search: Failed to get content for '{original_keyword}' (curl_cffi failed).")
             return []
 
         item_list_xpath_expression = '//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]//div[contains(@class, "item")]/a[contains(@class, "box")]'
@@ -95,7 +61,7 @@ class SiteJavdb(SiteAvBase):
             if tree.xpath('//div[contains(@class, "empty-message") and (contains(text(), "No videos found") or contains(text(), "沒有找到影片"))]'):
                 logger.info(f"JavDB Search: 'No videos found' message on page for keyword '{kw_ui_code}'.")
             else:
-                logger.warning(f"JavDB Search: No item nodes found for keyword '{kw_ui_code}'.")
+                logger.warning(f"JavDB Search: No item nodes found for keyword '{kw_ui_code}'. (Possible parsing error or empty result)")
             return []
 
         final_search_results_list = []
@@ -146,8 +112,7 @@ class SiteJavdb(SiteAvBase):
                             break
 
                 if manual: 
-                    # FlareSolverr 사용 시에는 프록시 URL 생성을 피함 (이미지 직접 다운로드 불가)
-                    if cls.config.get('use_proxy') and not cls.config.get('flaresolverr_url'):
+                    if cls.config.get('use_proxy'):
                         item.image_url = cls.make_image_url(item.image_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else: 
@@ -195,73 +160,29 @@ class SiteJavdb(SiteAvBase):
             ret["data"] = str(e)
             logger.exception(f"JavDB info error: {e}")
         return ret
-    
+
 
     @classmethod
     def __info(cls, code, keyword=None, fp_meta_mode=False):
-        custom_cookies = { 'over18': '1', 'locale': 'en' }
-        custom_cookies['cf_clearance'] = ''
-
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{SITE_BASE_URL}/v/{original_code_for_url}"
         
         original_keyword = None
         if keyword:
             original_keyword = keyword
-            logger.debug(f"JavDB Info: Using provided keyword '{original_keyword}' for {code}.")
         else:
             try:
                 keyword_cache = F.get_cache('jav_censored_keyword_cache')
                 if keyword_cache:
                     original_keyword = keyword_cache.get(code)
-                    if original_keyword:
-                        logger.debug(f"JavDB Info: Found keyword '{original_keyword}' in cache for {code}.")
-            except Exception as e_cache:
-                logger.warning(f"JavDB Info: Failed to get keyword from cache for {code}: {e_cache}")
+            except Exception: pass
 
-        tree = None
-        
-        # 1순위: FlareSolverr 사용
-        if cls.config.get('use_flaresolverr') and cls.config.get('flaresolverr_url'):
-            validator = lambda t: t.xpath('//h2[@class="title is-4"]')
-            tree, _ = cls._get_page_content_flaresolverr(detail_url, validator=validator)
-            if tree is None:
-                logger.warning("JavDB Info: FlareSolverr failed.")
+        logger.debug(f"JavDB Info: Accessing URL: {detail_url}")
+        tree = cls.get_tree(detail_url)
 
-        # 2순위: Selenium 사용
-        if tree is None and cls.config.get('use_selenium', False):
-            driver = None
-            try:
-                from selenium.webdriver.common.by import By
-                driver = cls._get_selenium_driver()
-                wait_locator = (By.XPATH, '//h2[@class="title is-4"]')
-                tree, _ = cls._get_page_content_selenium(driver, detail_url, wait_for_locator=wait_locator)
-            except Exception as e:
-                logger.error(f"JavDB Info (Selenium): Error: {e}")
-            finally:
-                cls._quit_selenium_driver(driver)
-
-        # 3순위: Requests
         if tree is None:
-            try:
-                logger.debug(f"JavDB Info: Accessing URL: {detail_url}")
-                res_info = cls.get_response_cs(detail_url,  cookies=custom_cookies)
-
-                if res_info is None or res_info.status_code != 200:
-                    status_code_val = res_info.status_code if res_info else "None"
-                    logger.warning(f"JavDB Info: Failed to get page or status not 200 for {code}. Status: {status_code_val}")
-                    if res_info and ("cf-error-details" in res_info.text or "Cloudflare to restrict access" in res_info.text):
-                        logger.error(f"JavDB Info: Cloudflare restriction page detected for {code}.")
-                    return None
-
-                html_info_text = res_info.text
-                tree = html.fromstring(html_info_text)
-                if tree is None:
-                    logger.warning(f"JavDB Info: Failed to parse detail page HTML for {code}.")
-                    return None
-            except Exception as e:
-                logger.error(f"JavDB Info: Error getting page: {e}")
-                return None
+            logger.warning(f"JavDB Info: Failed to get detail page for {code} (curl_cffi failed).")
+            return None
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ['일본']; entity.mpaa = '청소년 관람불가'

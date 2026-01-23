@@ -1,39 +1,19 @@
-import requests
-from lxml import html
+import re
 import os
 import sqlite3
-import re
-from urllib.parse import urljoin, urlencode
-import time
+import json
+from urllib.parse import urljoin, urlencode, quote
+from lxml import html
 
-from ..setup import P, logger
+from ..setup import P, logger, path_data
 from .site_av_base import SiteAvBase
-
-# DiscordUtil 제거
 
 SITE_BASE_URL = "https://www.avdbs.com"
 
 class SiteAvdbs(SiteAvBase):
     site_char = "A"
     site_name = "avdbs"
-    default_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": SITE_BASE_URL + "/",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
-        "Sec-CH-UA": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        "Sec-CH-UA-Mobile": "?0",
-        "Sec-CH-UA-Platform": '"Windows"',
-        "DNT": "1",
-        "Cache-Control": "max-age=0",
-    }
-
+    default_headers = SiteAvBase.base_default_headers.copy()
 
     @classmethod
     def get_actor_info(cls, entity_actor) -> bool:
@@ -48,131 +28,203 @@ class SiteAvdbs(SiteAvBase):
             final_info = cls._search_from_local_db(name_variations_to_search)
         if final_info is None and cls.config['use_web_search']:
             final_info = cls._search_from_web(original_input_name)
+        
         if final_info is not None:
             entity_actor["name"] = final_info["name"]
             entity_actor["name2"] = final_info["name2"]
             entity_actor["thumb"] = final_info["thumb"]
             entity_actor["site"] = final_info.get("site", "unknown_source")
+            # actor_idx는 save_actor_image 등에서 사용하기 위해 저장
+            if final_info.get("actor_idx"):
+                # EntityActor 클래스 구조에 따라 저장 방식이 다를 수 있음 (속성 추가)
+                try: entity_actor.actor_idx = final_info.get("actor_idx")
+                except: entity_actor["actor_idx"] = final_info.get("actor_idx")
             return True
         return False
 
 
     @classmethod
     def _search_from_local_db(cls, name_variations_to_search):
-
-        if (cls.config['local_db_path'] and os.path.exists(cls.config['local_db_path'])) == False:
+        if not (cls.config['local_db_path'] and os.path.exists(cls.config['local_db_path'])):
             return None
 
-        db_uri = f"file:{os.path.abspath(cls.config['local_db_path'])}?mode=ro"
-        conn = None
+        db_path = os.path.abspath(cls.config['local_db_path'])
 
         try:
-            conn = sqlite3.connect(db_uri, uri=True, timeout=10)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
 
-            for current_search_name in name_variations_to_search:
-                row = None
-                query1 = "SELECT * FROM actors WHERE site = ? AND inner_name_cn = ? LIMIT 1"
-                cursor.execute(query1, (cls.site_name, current_search_name))
-                row = cursor.fetchone()
-                if not row:
-                    query2 = """
-                        SELECT *
-                        FROM actors 
-                        WHERE site = ? AND (actor_onm LIKE ? OR inner_name_cn LIKE ?)
-                    """
-                    like_search_term = f"%{current_search_name}%"
-                    cursor.execute(query2, (cls.site_name, like_search_term, like_search_term))
-                    potential_rows = cursor.fetchall()
-                    if potential_rows:
-                        for potential_row in potential_rows:
-                            matched_by_onm = False
-                            if potential_row["actor_onm"]:
-                                matched_by_onm = cls._parse_and_match_other_names(potential_row["actor_onm"], current_search_name)
-                            
-                            matched_by_cn = False
-                            if potential_row["inner_name_cn"]:
-                                cn_parts = set()
-                                cn_text = potential_row["inner_name_cn"]
-                                for part in re.split(r'[（）()/]', cn_text):
-                                    cleaned_part = part.strip()
-                                    if cleaned_part:
-                                        cn_parts.add(cleaned_part)
-                                if current_search_name in cn_parts:
-                                    matched_by_cn = True
-
-                            if matched_by_onm or matched_by_cn:
-                                row = potential_row
-                                logger.debug(f"DB 검색 2단계: '{current_search_name}' 매칭 성공 (ONM: {matched_by_onm}, CN: {matched_by_cn})")
-                                break
-                if not row:
-                    query3 = "SELECT * FROM actors WHERE site = ? AND (inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ?) LIMIT 1"
-                    cursor.execute(query3, (cls.site_name, current_search_name, current_search_name, f"%({current_search_name})%"))
+                for current_search_name in name_variations_to_search:
+                    row = None
+                    query1 = "SELECT * FROM actors WHERE site = ? AND inner_name_cn = ? LIMIT 1"
+                    cursor.execute(query1, (cls.site_name, current_search_name))
                     row = cursor.fetchone()
-                
-                if row:
-                    korean_name = row["inner_name_kr"]
-                    name2_field = row["inner_name_en"] if row["inner_name_en"] else ""
-                    db_relative_path = row["profile_img_path"]
-                    thumb_url = ""
+                    
+                    if not row:
+                        query2 = """
+                            SELECT *
+                            FROM actors 
+                            WHERE site = ? AND (actor_onm LIKE ? OR inner_name_cn LIKE ?)
+                        """
+                        like_search_term = f"%{current_search_name}%"
+                        cursor.execute(query2, (cls.site_name, like_search_term, like_search_term))
+                        potential_rows = cursor.fetchall()
+                        if potential_rows:
+                            for potential_row in potential_rows:
+                                matched_by_onm = False
+                                if potential_row["actor_onm"]:
+                                    matched_by_onm = cls._parse_and_match_other_names(potential_row["actor_onm"], current_search_name)
+                                
+                                matched_by_cn = False
+                                if potential_row["inner_name_cn"]:
+                                    cn_parts = set()
+                                    cn_text = potential_row["inner_name_cn"]
+                                    for part in re.split(r'[（）()/]', cn_text):
+                                        cleaned_part = part.strip()
+                                        if cleaned_part:
+                                            cn_parts.add(cleaned_part)
+                                    if current_search_name in cn_parts:
+                                        matched_by_cn = True
 
-                    # 2025.07.14 by soju
-                    # 구글 cdn
-                    if 'google_fileid' in row.keys() and row['google_fileid']:
-                        thumb_url = f"https://drive.google.com/thumbnail?id={row['google_fileid']}"
-                    else:
-                        if cls.config['image_url_prefix']:
-                            thumb_url = cls.config['image_url_prefix'] + '/' + db_relative_path.lstrip('/')
-                            # logger.debug(f"DB: 이미지 URL 생성 (Prefix 사용): {thumb_url}")
+                                if matched_by_onm or matched_by_cn:
+                                    row = potential_row
+                                    logger.debug(f"DB 검색 2단계: '{current_search_name}' 매칭 성공 (ONM: {matched_by_onm}, CN: {matched_by_cn})")
+                                    break
+                    if not row:
+                        query3 = "SELECT * FROM actors WHERE site = ? AND (inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ?) LIMIT 1"
+                        cursor.execute(query3, (cls.site_name, current_search_name, current_search_name, f"%({current_search_name})%"))
+                        row = cursor.fetchone()
+                    
+                    if row:
+                        korean_name = row["inner_name_kr"]
+                        name2_field = row["inner_name_en"] if row["inner_name_en"] else ""
+                        db_relative_path = row["profile_img_path"]
+                        thumb_url = ""
+
+                        # 2025.07.14 by soju
+                        # 구글 cdn
+                        if 'google_fileid' in row.keys() and row['google_fileid']:
+                            thumb_url = f"https://drive.google.com/thumbnail?id={row['google_fileid']}"
                         else:
-                            thumb_url = db_relative_path
-                            logger.warning(f"DB: db_image_base_url (jav_actor_img_url_prefix) 설정 없음. 상대 경로 사용: {thumb_url}")
+                            if cls.config['image_url_prefix']:
+                                thumb_url = cls.config['image_url_prefix'] + '/' + db_relative_path.lstrip('/')
+                                # logger.debug(f"DB: 이미지 URL 생성 (Prefix 사용): {thumb_url}")
+                            else:
+                                thumb_url = db_relative_path
+                                logger.warning(f"DB: db_image_base_url (jav_actor_img_url_prefix) 설정 없음. 상대 경로 사용: {thumb_url}")
+                            
+                        if name2_field:
+                            match_name2 = re.match(r"^(.*?)\s*\(.*\)$", name2_field)
+                            if match_name2: name2_field = match_name2.group(1).strip()
                         
-                    if name2_field:
-                        match_name2 = re.match(r"^(.*?)\s*\(.*\)$", name2_field)
-                        if match_name2: name2_field = match_name2.group(1).strip()
+                        # actor_idx 추출 (A11340 -> 11340)
+                        actor_idx = ""
+                        if row["actor_id"]:
+                            match = re.search(r'(\d+)', row["actor_id"])
+                            if match: actor_idx = match.group(1)
 
-                    if korean_name and thumb_url:
-                        # logger.debug(f"DB에서 '{current_search_name}' 유효 정보 찾음 ({korean_name}).")
-                        final_info = {
-                            "name": korean_name, 
-                            "name2": name2_field, 
-                            "thumb": thumb_url, 
-                            "site": f"{cls.site_name}_db"}
-                        return final_info
+                        if korean_name and thumb_url:
+                            logger.debug(f"AVDBS DB: Match found for '{current_search_name}': {korean_name} ({name2_field})")
+                            final_info = {
+                                "name": korean_name, 
+                                "name2": name2_field, 
+                                "thumb": thumb_url, 
+                                "actor_idx": actor_idx,
+                                "site": f"{cls.site_name}_db"}
+                            return final_info
+
         except sqlite3.Error as e: 
             logger.error(f"DB 조회 중 오류: {e}")
-        finally:
-            if conn: 
-                conn.close()
+        
+        return None
 
 
     @classmethod
     def _search_from_web(cls, originalname) -> dict:
-        """Avdbs.com 웹사이트에서 배우 정보를 가져오는 내부 메소드 (Fallback용)"""
-        # logger.debug(f"WEB Fallback: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
-        current_timestamp = int(time.time())
-        value_to_subtract = 1735310957
-        seq = current_timestamp - value_to_subtract
-
-        search_url = f"{SITE_BASE_URL}/w2017/page/search/search_actor.php"
-        search_params = {'kwd': originalname,'seq': seq, 'tab':"1"}
-        search_url = f"{search_url}?{urlencode(search_params)}"
+        # logger.debug(f"AVDBS WEB: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
         
         try:
-            tree = cls.get_tree(search_url, timeout=20)
-            if tree is None: 
+            from curl_cffi import requests as cffi_requests
+            # [중요] 세션을 하나 생성하여 API 호출과 검색 페이지 접속을 연속으로 수행 (쿠키 유지)
+            session = cffi_requests.Session(impersonate="chrome110")
+        except ImportError:
+            logger.error("curl_cffi not installed.")
+            return None
+
+        try:
+            headers = cls.default_headers.copy()
+            headers['Referer'] = SITE_BASE_URL + "/"
+            
+            # --- 1. 메타/API 호출하여 seq 및 쿠키 획득 ---
+            api_path = f"/w2017/api/iux_kwd_srch_log2.php?op=srch&kwd={quote(originalname)}"
+            api_url = f"{SITE_BASE_URL}{api_path}"
+            
+            # 메인 접속 (기본 쿠키 획득)
+            session.get(SITE_BASE_URL, headers=headers)
+            
+            # API 접속
+            res = session.get(api_url, headers=headers)
+            
+            # WAF(자바스크립트 챌린지) 우회
+            if res and "<script>" in res.text and "localStorage" in res.text:
+                match = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', res.text)
+                if match:
+                    bypass_url = urljoin(SITE_BASE_URL, match.group(1))
+                    # 리디렉션 따라가며 쿠키 갱신
+                    res = session.get(bypass_url, headers=headers, allow_redirects=True)
+            
+            seq = None
+            if res and res.status_code == 200:
+                try:
+                    data = res.json()
+                    seq = data.get('seq')
+                except: pass
+            
+            if not seq:
+                logger.warning("AVDBS WEB: Failed to obtain seq.")
                 return None
-            actor_items = tree.xpath('//div[contains(@class, "srch")]/following-sibling::ul/li')
+
+            # logger.debug(f"AVDBS WEB: Got seq: {seq}")
+
+            # --- 2. 검색 페이지 접속 (쿠키 유지된 세션 사용) ---
+            search_url = f"{SITE_BASE_URL}/w2017/page/search/search_actor.php"
+            params = {'kwd': originalname, 'seq': seq, 'tab': '1'}
+            
+            res_search = session.get(search_url, params=params, headers=headers)
+            if res_search.status_code != 200:
+                logger.warning(f"AVDBS WEB: Search failed. Status: {res_search.status_code}")
+                return None
+
+            tree = html.fromstring(res_search.text)
+            if tree is None: return None
+
+            # 검색 결과 파싱 (XPath 보강)
+            actor_items = tree.xpath('//ul[contains(@class, "lst")]/li')
             if not actor_items:
+                # Fallback XPath
+                actor_items = tree.xpath('//div[contains(@class, "srch")]/following-sibling::ul/li')
+
+            if not actor_items:
+                logger.warning("AVDBS WEB: No actor items found in HTML.")
                 return None
 
             names_to_check = cls._parse_name_variations(originalname)
+            
             for idx, item_li in enumerate(actor_items):
                 try:
-                    name_ko_raw = item_li.xpath('.//p[@class="k_name"]//text()')[0].strip()
-                    tmp = item_li.xpath('.//p[contains(@class, "e_name")]')[0].text_content().strip()
+                    # actor_idx 추출
+                    actor_idx = item_li.get('data-idx')
+                    
+                    # 이름 파싱 (k_name, e_name)
+                    k_name_node = item_li.xpath('.//span[contains(@class, "k_name")]') or item_li.xpath('.//p[contains(@class, "k_name")]')
+                    if not k_name_node: continue
+                    name_ko_raw = k_name_node[0].text_content().strip()
+
+                    e_name_node = item_li.xpath('.//span[contains(@class, "e_name")]') or item_li.xpath('.//p[contains(@class, "e_name")]')
+                    if not e_name_node: continue
+                    tmp = e_name_node[0].text_content().strip()
+                    
                     match = re.match(r'(?P<en>.*?)\((?P<jp>.*?)\)', tmp)
                     if match:
                         name_en_raw = match.group('en').strip()
@@ -181,29 +233,47 @@ class SiteAvdbs(SiteAvBase):
                         name_en_raw = tmp.strip()
                         name_ja_raw = ""
 
-                    if name_ja_raw in names_to_check:
-                        logger.debug(f"WEB: Match found for '{originalname}' - JA:'{name_ja_raw}'")
-                        img_tag = item_li.xpath('.//img/@src')
-                        if not img_tag: 
-                            continue
+                    # 매칭 확인
+                    if (name_ja_raw and name_ja_raw in names_to_check) or \
+                       (name_en_raw and name_en_raw in names_to_check) or \
+                       (name_ko_raw == originalname):
+                        
+                        logger.debug(f"AVDBS WEB: Match found for '{originalname}': {name_ko_raw} ({name_en_raw})")
+
+                        # 이미지 URL 추출
+                        img_tag = item_li.xpath('.//div[@class="photo"]//img/@src')
+                        if not img_tag: continue
                         img_url_raw = img_tag[0].strip()
+                        
                         if not img_url_raw.startswith('http'):
                             img_url_raw = urljoin(SITE_BASE_URL, img_url_raw)
+                        
+                        # 고화질 변환
+                        if img_url_raw.endswith('_ns.jpg'):
+                            img_url_raw = img_url_raw.replace('_ns.jpg', '_n.jpg')
+                        
                         processed_thumb = cls.make_image_url(img_url_raw)
+                        
                         return {
                             "name": name_ko_raw, 
-                            "name2": name_en_raw, 
+                            "name2": name_en_raw,
+                            "actor_idx": actor_idx,
                             "site": "avdbs_web", 
-                            "thumb": processed_thumb
+                            "thumb": processed_thumb 
                         }
                 except Exception as e_item: 
-                    logger.exception(f"WEB: Error processing item at index {idx}: {e_item}")
+                    logger.exception(f"AVDBS WEB: Error processing item at index {idx}: {e_item}")
 
-            logger.debug("WEB: No matching actor found in search results.")
+            logger.debug("AVDBS WEB: No matching actor found in search results.")
             return None
-        except Exception as e_parse_results: 
-            logger.exception(f"WEB: Error parsing search results: {e_parse_results}")
-            return None
+
+        except Exception as e:
+            logger.error(f"AVDBS WEB: Exception: {e}")
+            logger.error(traceback.format_exc())
+        finally:
+            session.close()
+        
+        return None
 
 
     ################################################
@@ -260,11 +330,13 @@ class SiteAvdbs(SiteAvBase):
         # logger.debug(f"원본 이름 '{originalname}'에 대한 검색 변형 생성: {list(variations)}")
         return list(variations)
 
+
     # endregion 유틸
     ################################################
 
     ################################################
     # region SiteAvBase 메서드 오버라이드
+
 
     @classmethod
     def set_config(cls, db):
@@ -277,6 +349,7 @@ class SiteAvdbs(SiteAvBase):
         })
 
         #logger.debug(res.text)
+
 
     # endregion SiteAvBase 메서드 오버라이드
     ################################################

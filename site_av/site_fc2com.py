@@ -10,11 +10,6 @@ from urllib.parse import urljoin, urlencode
 from io import BytesIO 
 from PIL import Image
 
-try:
-    from selenium.webdriver.common.by import By
-except ImportError:
-    By = None
-
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
 from ..setup import P, logger, path_data
@@ -38,10 +33,6 @@ class SiteFc2com(SiteAvBase):
 
     CACHE_EXPIRATION_SECONDS = 180
     MAX_CACHE_SIZE = 50
-
-    WAIT_LOCATOR = None
-    if By:
-        WAIT_LOCATOR = (By.XPATH, '//div[contains(@class, "items_article_headerInfo")] | //div[contains(@class, "items_notfound_header")]')
 
 
     @classmethod
@@ -67,58 +58,12 @@ class SiteFc2com(SiteAvBase):
 
 
     @classmethod
-    def _add_fc2_cookies(cls, driver):
-        """FC2 성인 인증 쿠키 추가 (메인 페이지 경유)"""
-        try:
-            driver.get(cls.site_base_url + '/')
-            time.sleep(3)
-
-            try:
-                yes_btn = driver.find_elements(By.XPATH, '//a[@data-button="yes"]')
-                if yes_btn:
-                    driver.execute_script("arguments[0].click();", yes_btn[0])
-                    time.sleep(3)
-            except: pass
-
-            driver.add_cookie({'name': 'wei6H', 'value': '1', 'path': '/'})
-            driver.add_cookie({'name': 'GDPRCHECK', 'value': 'true', 'path': '/'})
-        except Exception as e:
-            logger.warning(f"[{cls.site_name}] Failed to prepare cookies: {e}")
-
-
-    @classmethod
     def _get_javten_proxies(cls):
         if cls.config.get('use_javten_proxy'):
             proxy_url = cls.config.get('javten_proxy_url')
             if proxy_url:
                 return {"http": proxy_url, "https": proxy_url}
         
-        return None
-
-
-    @classmethod
-    def _query_javten_db(cls, product_id):
-        """로컬 SQLite DB에서 품번으로 데이터 조회"""
-        db_path = cls.config.get('javten_db_path')
-        if not cls.config.get('use_javten_db') or not db_path or not os.path.exists(db_path):
-            return None
-
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            target_ids = [f"FC2-PPV-{product_id}", f"FC2-{product_id}", product_id]
-            placeholders = ','.join('?' * len(target_ids))
-
-            cursor.execute(f"SELECT * FROM movies WHERE product_id IN ({placeholders})", target_ids)
-            row = cursor.fetchone()
-
-            conn.close()
-            
-            if row: return dict(row)
-        except Exception as e:
-            logger.error(f"[{cls.site_name}] DB Query Error: {e}")
         return None
 
 
@@ -201,63 +146,37 @@ class SiteFc2com(SiteAvBase):
 
 
     @classmethod
-    def _fetch_fc2_embed_poster(cls, embed_url):
-        if not embed_url: return None
-        if embed_url.startswith('//'): embed_url = 'https:' + embed_url
-        
-        logger.debug(f"[{cls.site_name}] Fetching embed poster from: {embed_url}")
+    def _fetch_video_api_info(cls, content_id):
+        api_url = f"https://adult.contents.fc2.com/api/v2/videos/{content_id}/sample"
         
         headers = cls.default_headers.copy()
-        headers['Referer'] = 'https://javten.com/'
-        proxies = cls._get_javten_proxies()
-
-        # 1. HTML 파싱 / 정규식 시도
+        headers['Referer'] = f"https://adult.contents.fc2.com/article/{content_id}/"
+        headers['Cookie'] = 'wei6H=1; GDPRCHECK=true'
+        
+        info = {'poster': None, 'video': None}
+        
         try:
-            res = cls.get_response(embed_url, headers=headers, proxies=proxies)
+            res = cls.get_response_cffi(api_url, headers=headers)
             if res and res.status_code == 200:
-                # 1-1. HTML 파싱
-                try:
-                    tree = html.fromstring(res.text)
-                    poster = tree.xpath('//video[@poster]/@poster')
-                    if poster:
-                        candidate = cls._process_fc2_image_url(poster[0], target_size='original')
-                        logger.debug(f"[{cls.site_name}] Found poster in embed (XPath): {candidate}")
-                        return candidate
-                except: pass
-
-                # 1-2. 정규식 추출
-                match = re.search(r'poster=["\'](https?://[^"\']+)["\']', res.text)
-                if match:
-                    candidate = cls._process_fc2_image_url(match.group(1), target_size='original')
-                    logger.debug(f"[{cls.site_name}] Found poster in embed (Regex): {candidate}")
-                    return candidate
+                data = res.json()
+                if data.get('poster_image_path'):
+                    info['poster'] = cls._process_fc2_image_url(data['poster_image_path'], target_size='original')
+                if data.get('path'):
+                    info['video'] = cls._process_fc2_image_url(data['path'], target_size=None)
         except Exception as e:
-            logger.debug(f"[{cls.site_name}] Embed HTML fetch failed: {e}")
+            logger.debug(f"[{cls.site_name}] Video API fetch failed: {e}")
+            
+        return info
 
-        # 2. API 호출 시도 (Fallback)
-        try:
-            match_id = re.search(r'/embed/(\d+)', embed_url)
-            if match_id:
-                content_id = match_id.group(1)
-                api_url = f"https://adult.contents.fc2.com/api/v2/videos/{content_id}/sample"
-                
-                # API 호출용 헤더 (Referer를 임베드 URL로)
-                api_headers = headers.copy()
-                api_headers['Referer'] = embed_url
-                
-                res_api = cls.get_response(api_url, headers=api_headers, proxies=proxies)
-                if res_api and res_api.status_code == 200:
-                    data = res_api.json()
-                    poster_path = data.get('poster_image_path')
-                    if poster_path:
-                        candidate = cls._process_fc2_image_url(poster_path, target_size='original')
-                        logger.debug(f"[{cls.site_name}] Found poster via API: {candidate}")
-                        return candidate
-        except Exception as e:
-            logger.debug(f"[{cls.site_name}] Embed API fetch failed: {e}")
 
-        logger.debug(f"[{cls.site_name}] No poster found in embed page.")
-        return None
+    @classmethod
+    def _fetch_fc2_embed_info(cls, embed_url):
+        if not embed_url: return None
+        match_id = re.search(r'/embed/(\d+)', embed_url)
+        if not match_id: return None
+        
+        # 공통 API 메서드 호출
+        return cls._fetch_video_api_info(match_id.group(1))
 
 
     @classmethod
@@ -273,7 +192,7 @@ class SiteFc2com(SiteAvBase):
 
         try:
             # 1. 검색 요청 (리디렉션 자동 처리)
-            res = cls.get_response(search_url, allow_redirects=True, proxies=proxies)
+            res = cls.get_response_cffi(search_url, allow_redirects=True, proxies=proxies)
             if not res or res.status_code != 200:
                 return None
 
@@ -295,7 +214,7 @@ class SiteFc2com(SiteAvBase):
                         if link_el:
                             detail_url = urljoin("https://javten.com", link_el[0])
                             # 상세 페이지 재요청
-                            res_detail = cls.get_response(detail_url, proxies=proxies)
+                            res_detail = cls.get_response_cffi(detail_url, proxies=proxies)
                             if res_detail and res_detail.status_code == 200:
                                 tree = html.fromstring(res_detail.text)
                             break
@@ -324,45 +243,39 @@ class SiteFc2com(SiteAvBase):
             meta_pub = tree.xpath('//meta[@property="videos:published_time"]/@content')
             if meta_pub: ret['release_date'] = meta_pub[0].split('T')[0]
 
-            # Images 처리 (검증 및 Iframe 백업)
-            landscape_url = None
+            # Embed URL 추출 (항상 실행)
+            embed_url = None
+            iframe_el = tree.xpath('//div[contains(@class, "card-img-top")]//iframe/@src') or \
+                        tree.xpath('//div[contains(@class, "card-img-top")]//iframe/@data-src')
+            if iframe_el: embed_url = iframe_el[0]
             
             # 1. 메타 태그 이미지
+            landscape_url = None
             meta_og_img = tree.xpath('//meta[@property="og:image"]/@content')
             if meta_og_img:
                 candidate_url = cls._process_fc2_image_url(meta_og_img[0], target_size='original')
-                logger.debug(f"[{cls.site_name}] Checking Meta Image: {candidate_url}")
+                # logger.debug(f"[{cls.site_name}] Checking Meta Image: {candidate_url}")
                 
                 if cls._check_image_validity(candidate_url):
                     landscape_url = candidate_url
-                    logger.debug(f"[{cls.site_name}] Meta Image is VALID.")
+                    # logger.debug(f"[{cls.site_name}] Meta Image is VALID: {landscape_url}")
                 else:
-                    logger.warning(f"[{cls.site_name}] Meta Image INVALID. Trying fallback...")
+                    logger.debug(f"[{cls.site_name}] Meta Image INVALID({candidate_url}). Trying fallback...")
 
-            # 2. Iframe 포스터 시도
-            if not landscape_url:
-                embed_url = None
-                iframe_el = tree.xpath('//div[contains(@class, "card-img-top")]//iframe/@src') or \
-                            tree.xpath('//div[contains(@class, "card-img-top")]//iframe/@data-src')
-                
-                if iframe_el:
-                    embed_url = iframe_el[0]
-                    logger.debug(f"[{cls.site_name}] Found Embed URL: {embed_url}")
+            # 2. Iframe 정보 추출 (포스터 및 트레일러)
+            if embed_url:
+                embed_info = cls._fetch_fc2_embed_info(embed_url)
+                if embed_info:
+                    # 포스터 백업 (메타 이미지가 없을 때만)
+                    if not landscape_url and embed_info.get('poster'):
+                        if cls._check_image_validity(embed_info['poster']):
+                            landscape_url = embed_info['poster']
                     
-                    poster_candidate = cls._fetch_fc2_embed_poster(embed_url)
-                    if poster_candidate:
-                        if cls._check_image_validity(poster_candidate):
-                            landscape_url = poster_candidate
-                            logger.debug(f"[{cls.site_name}] Embed Poster is VALID: {landscape_url}")
-                        else:
-                            logger.debug(f"[{cls.site_name}] Embed Poster INVALID: {poster_candidate}")
-                else:
-                    logger.debug(f"[{cls.site_name}] No Embed URL found on page.")
+                    # 트레일러 URL 저장
+                    if embed_info.get('video'):
+                        ret['trailer_url'] = embed_info['video']
 
-            if landscape_url:
-                ret['landscape_url'] = landscape_url
-            else:
-                logger.warning(f"[{cls.site_name}] Failed to find any valid landscape image.")
+            if landscape_url: ret['landscape_url'] = landscape_url
 
             # Sample (Gallery) - 첫 번째 이미지 검증
             gallery_el = tree.xpath('//a[@data-fancybox="gallery"]/@href')
@@ -376,8 +289,6 @@ class SiteFc2com(SiteAvBase):
             # Plot
             plot_divs = tree.xpath('//div[contains(@class, "col") and contains(@class, "des")]')
             if plot_divs:
-                # 불필요 태그 제거 로직은 복잡하니 text_content()로 단순화하거나 필요한 경우 html string 처리
-                # 여기서는 간단히 text_content 사용 후 정제
                 raw_plot = plot_divs[0].text_content()
                 ret['plot'] = cls.A_P(raw_plot)
 
@@ -398,17 +309,22 @@ class SiteFc2com(SiteAvBase):
         cache_source = None
         cache_data = None
 
-        # 1. [Selenium 검색] (FC2 공식)
-        if cls.config.get('use_fc2_com') and cls.config.get('selenium_url'):
-            driver = None
+        # 1. [공식 사이트 검색]
+        if cls.config.get('use_fc2_com'):
             try:
-                driver = cls._get_selenium_driver()
-                cls._add_fc2_cookies(driver)
                 search_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
                 
-                tree, page_source_text = cls._get_page_content_selenium(driver, search_url, wait_for_locator=cls.WAIT_LOCATOR)
+                cookies = {'wei6H': '1', 'GDPRCHECK': 'true'}
+                res = cls.get_response_cffi(search_url, cookies=cookies)
+                
+                tree = None
+                page_source_text = None
 
-                if tree and not tree.xpath('//div[contains(@class, "items_notfound_header")]'):
+                if res and res.status_code == 200:
+                    page_source_text = res.text
+                    tree = html.fromstring(page_source_text)
+
+                if tree is not None and not tree.xpath('//div[contains(@class, "items_notfound_header")]'):
                     # 캐시 저장
                     if page_source_text:
                         with cls._cache_lock:
@@ -421,7 +337,7 @@ class SiteFc2com(SiteAvBase):
                     item.ui_code = cls._parse_ui_code_uncensored(keyword)
                     if not item.ui_code or 'FC2' not in item.ui_code.upper(): item.ui_code = f'FC2-{code_part}'
                     
-                    # 메타 태그 파싱 우선
+                    # 메타 태그 파싱
                     head_meta = {}
                     for meta in tree.xpath('//meta'):
                         name = meta.get('name') or meta.get('property')
@@ -429,17 +345,38 @@ class SiteFc2com(SiteAvBase):
                         if name and content: head_meta[name] = content
 
                     # Title
-                    if 'og:title' in head_meta:
-                        item.title = head_meta['og:title'].split('|')[0].strip()
-                    elif h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
-                        item.title = cls._extract_fc2com_title(h3_title[0])
+                    raw_title_candidate = ""
+                    
+                    # 1. head > title
+                    if title_tags := tree.xpath('//title/text()'):
+                        raw_title_candidate = title_tags[0]
+                    
+                    # 2. meta og:title (Fallback 1)
+                    if not raw_title_candidate:
+                        if og_titles := tree.xpath('//meta[@property="og:title"]/@content'):
+                            raw_title_candidate = og_titles[0]
+
+                    # 3. body h3 (Fallback 2)
+                    if not raw_title_candidate:
+                        if h3_nodes := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
+                            raw_title_candidate = cls._extract_fc2com_title(h3_nodes[0])
+
+                    # 공통 정제 로직
+                    if raw_title_candidate:
+                        # 1. 품번(FC2-PPV-xxxx) 제거 (대소문자 무시)
+                        raw_title_candidate = re.sub(r'^FC2-PPV-\d+\s+', '', raw_title_candidate, flags=re.IGNORECASE)
+                        # 2. 사이트명(| FC2...) 제거
+                        raw_title_candidate = raw_title_candidate.split('|')[0].strip()
+                        
+                        item.title = raw_title_candidate
                     else:
                         item.title = item.ui_code
 
                     # Year
-                    if date_text := tree.xpath('//p[contains(text(), "Sale Day")]/text()'):
-                        if match_year := re.search(r'(\d{4})/\d{2}/\d{2}', date_text[0]):
-                            item.year = int(match_year.group(1))
+                    date_xpath = '//p[contains(text(), "Sale Day") or contains(text(), "販売日")]/text()'
+                    if date_text := tree.xpath(date_xpath):
+                        if match_date := re.search(r'(\d{4})[./-](\d{2})[./-](\d{2})', date_text[0]):
+                            item.year = int(match_date.group(1))
                     else:
                         item.year = 1900
 
@@ -452,11 +389,9 @@ class SiteFc2com(SiteAvBase):
                         item.image_url = cls._process_fc2_image_url(img_src[0], base_url=search_url, target_size='w360')
                     
                     item.score = 100
-                    logger.info(f"[{cls.site_name} - Official] Search Success: {item.ui_code}")
+                    logger.debug(f"[{cls.site_name} - Official] Search Success: {item.ui_code}")
             except Exception as e:
                 logger.error(f"[{cls.site_name} - Official] Search Exception: {e}")
-            finally:
-                cls._quit_selenium_driver(driver)
 
         # 2. [Javten Web 검색] (FC2 실패 시)
         if not item:
@@ -482,39 +417,7 @@ class SiteFc2com(SiteAvBase):
                 if web_data.get('landscape_url'):
                     item.image_url = cls._process_fc2_image_url(web_data['landscape_url'], target_size='w1280')
                 
-                logger.info(f"[{cls.site_name} - JavtenWeb] Search Success: {item.ui_code}")
-
-        # 3. [DB 검색] (모두 실패 시)
-        if not item:
-            db_data = cls._query_javten_db(code_part)
-            if db_data:
-                cache_source = 'db'
-                cache_data = db_data
-
-                item = EntityAVSearch(cls.site_name)
-                item.code = cls.module_char + cls.site_char + code_part
-                item.ui_code = f'FC2-{code_part}'
-                item.score = 100
-                item.title = db_data.get('tagline') or item.ui_code
-                
-                item.year = 1900
-                if db_data.get('release_date'):
-                    try: item.year = int(db_data['release_date'][:4])
-                    except: pass
-                if item.year == 1900 and (detail_url := db_data.get('detail_page_url')):
-                    if match_year := re.search(r'/video/(\d{4})', detail_url):
-                        item.year = int(match_year.group(1))
-
-                # Search용 이미지는 w1280 (로컬일 경우 Proxy 변환)
-                img_url = cls._get_javten_image_url(db_data, 'landscape', target_size='w1280')
-                if img_url and not img_url.startswith('http'):
-                    param = {'site': 'system', 'path': img_url}
-                    module_prefix = 'jav_image' if cls.module_char == 'C' else 'jav_image_un'
-                    item.image_url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{module_prefix}?{urlencode(param)}"
-                else:
-                    item.image_url = img_url
-                
-                logger.info(f"[{cls.site_name} - JavtenDB] Search Success: {item.ui_code}")
+                logger.debug(f"[{cls.site_name} - Javten] Search Success: {item.ui_code}")
 
         # [통합 캐시 저장]
         if item and cache_source:
@@ -595,13 +498,12 @@ class SiteFc2com(SiteAvBase):
                     cached_data = cache_entry['data']
                     logger.debug(f"[{cls.site_name}] Info: Using search cache for '{code_part}' (Source: {cached_source})")
 
-        # 1. [Selenium 조회] (Official)
-        should_try_official = (cached_source == 'official') or (not cached_source and cls.config.get('use_fc2_com') and cls.config.get('selenium_url'))
+        # 1. [공식 사이트 조회] (cffi)
+        should_try_official = (cached_source == 'official') or (not cached_source and cls.config.get('use_fc2_com'))
         
         if should_try_official:
             tree = None
-            driver = None
-            
+
             # 페이지 소스 캐시 확인
             with cls._cache_lock:
                 if code_part in cls._page_source_cache:
@@ -615,19 +517,17 @@ class SiteFc2com(SiteAvBase):
             # 캐시 없으면 웹 요청
             if tree is None:
                 try:
-                    driver = cls._get_selenium_driver()
-                    cls._add_fc2_cookies(driver)
                     info_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
-                    tree, _ = cls._get_page_content_selenium(driver, info_url, wait_for_locator=cls.WAIT_LOCATOR)
-                finally:
-                    cls._quit_selenium_driver(driver)
+                    tree, _ = cls.get_tree(info_url)
+                except Exception as e:
+                    logger.error(f"[{cls.site_name}] Info CFFI Exception: {e}")
 
             # 정상 페이지 확인
             if tree and not tree.xpath('//div[contains(@class, "items_notfound_header")]'):
                 is_data_found = True
-                logger.info(f"[{cls.site_name} - Official] Info Success: {code_part}")
+                logger.debug(f"[{cls.site_name} - Official] Info Found: {code_part}")
                 
-                # 메타 태그 파싱 우선
+                # 메타 태그 파싱
                 head_meta = {}
                 for meta in tree.xpath('//meta'):
                     name = meta.get('name') or meta.get('property')
@@ -635,31 +535,44 @@ class SiteFc2com(SiteAvBase):
                     if name and content: head_meta[name] = content
 
                 # 1. Title
-                if 'og:title' in head_meta:
-                    raw_title = head_meta['og:title'].split('|')[0].strip()
-                elif h3_title := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
-                    raw_title = cls._extract_fc2com_title(h3_title[0])
-                else:
-                    raw_title = entity.ui_code
+                raw_title_candidate = ""
+                # 1-1. head > title
+                if title_tags := tree.xpath('//title/text()'):
+                    raw_title_candidate = title_tags[0]
+                # 1-2. meta og:title
+                if not raw_title_candidate:
+                    raw_title_candidate = head_meta.get('og:title', "")
+                # 1-3. body h3
+                if not raw_title_candidate:
+                    if h3_nodes := tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3'):
+                        raw_title_candidate = cls._extract_fc2com_title(h3_nodes[0])
+
+                if raw_title_candidate:
+                    raw_title_candidate = re.sub(r'^FC2-PPV-\d+\s+', '', raw_title_candidate, flags=re.IGNORECASE)
+                    raw_title_candidate = raw_title_candidate.split('|')[0].strip()
                 
-                cleaned_text = cls.A_P(raw_title)
+                final_title = raw_title_candidate or entity.ui_code
+                cleaned_text = cls.A_P(final_title)
                 entity.original['tagline'] = cleaned_text; entity.tagline = cls.trans(cleaned_text)
+
+                # 2. Plot
+                plot_text = head_meta.get('description') or head_meta.get('og:description')
                 
-                # 2. Plot (본문 우선 -> 없으면 Tagline)
-                plot_el = tree.xpath('//div[contains(@class, "items_article_Contents")]')
-                if plot_el:
-                    plot_text = plot_el[0].text_content().strip()
-                    if plot_text:
-                        entity.original['plot'] = cls.A_P(plot_text)
-                        entity.plot = cls.trans(entity.original['plot'])
+                if not plot_text:
+                    if plot_el := tree.xpath('//div[contains(@class, "items_article_Contents")]'):
+                        plot_text = plot_el[0].text_content().strip()
                 
-                if not entity.plot: # Plot 못 찾았으면 Tagline 복사
+                if plot_text:
+                    entity.original['plot'] = cls.A_P(plot_text)
+                    entity.plot = cls.trans(entity.original['plot'])
+                elif not entity.plot:
                     entity.original['plot'] = entity.original['tagline']
                     entity.plot = entity.tagline
 
                 # 3. Date
-                if date_text := tree.xpath('//p[contains(text(), "Sale Day")]/text()'):
-                    if match_date := re.search(r'(\d{4})/(\d{2})/(\d{2})', date_text[0]):
+                date_xpath = '//p[contains(text(), "Sale Day") or contains(text(), "販売日")]/text()'
+                if date_text := tree.xpath(date_xpath):
+                    if match_date := re.search(r'(\d{4})[./-](\d{2})[./-](\d{2})', date_text[0]):
                         entity.premiered = f"{match_date.group(1)}-{match_date.group(2)}-{match_date.group(3)}"
                         entity.year = int(match_date.group(1))
                 else:
@@ -691,11 +604,12 @@ class SiteFc2com(SiteAvBase):
                 for href in tree.xpath('//a[@data-fancybox="gallery"]/@href') or tree.xpath('//section[contains(@class, "items_article_SampleImages")]//a/@href'):
                     raw_image_urls['arts'].append(cls._process_fc2_image_url(href, base_url=cls.site_base_url, target_size='w1280'))
 
-                # 8. Trailer (Video Tag)
+                # 8. Trailer (API 사용)
                 if cls.config['use_extras']:
-                    if video_src := tree.xpath('//video[contains(@id, "sample_video")]/@src'):
-                        trailer_url = cls._process_fc2_image_url(video_src[0], base_url=cls.site_base_url, target_size=None)
-                        if url := cls.make_video_url(trailer_url):
+                    video_info = cls._fetch_video_api_info(code_part)
+                    if video_info and video_info.get('video'):
+                        logger.debug(f"[{cls.site_name}] Trailer (API): {video_info['video']}")
+                        if url := cls.make_video_url(video_info['video']):
                             entity.extras.append(EntityExtra("trailer", entity.tagline, "mp4", url))
 
         # 2. [Javten Web 조회]
@@ -705,7 +619,7 @@ class SiteFc2com(SiteAvBase):
             javten_web_data = cached_data if cached_source == 'web' else cls._get_javten_web_content(code_part)
             
             if javten_web_data:
-                logger.info(f"[{cls.site_name} - JavtenWeb] Info Success: {code_part}")
+                logger.debug(f"[{cls.site_name} - Javten] Info Found: {code_part}")
                 is_data_found = True
                 
                 if javten_web_data.get('tagline'):
@@ -730,53 +644,17 @@ class SiteFc2com(SiteAvBase):
                     match_year = re.search(r'/video/(\d{4})', javten_web_data['detail_url'])
                     if match_year: entity.year = int(match_year.group(1))
 
-                # 이미지
                 raw_image_urls['pl'] = cls._process_fc2_image_url(javten_web_data.get('landscape_url'), target_size='w1280')
                 if javten_web_data.get('sample_url'):
                     raw_image_urls['arts'].append(cls._process_fc2_image_url(javten_web_data.get('sample_url'), target_size='w1280'))
 
-        # 3. [DB 조회]
-        should_try_db = (cached_source == 'db') or (not is_data_found and not cached_source)
-        
-        if not is_data_found and should_try_db:
-            db_data = cached_data if cached_source == 'db' else cls._query_javten_db(code_part)
-            if db_data:
-                logger.info(f"[{cls.site_name} - JavtenDB] Info Success: {code_part}")
-                is_data_found = True
-                
-                if db_data.get('tagline'):
-                    val = cls.A_P(db_data['tagline'])
-                    entity.original['tagline'] = val; entity.tagline = cls.trans(val)
-                if db_data.get('plot'):
-                    val = cls.A_P(db_data['plot'])
-                    entity.original['plot'] = val; entity.plot = cls.trans(val)
-                if db_data.get('seller'):
-                    val = db_data['seller']
-                    entity.director = val; entity.studio = cls.trans(val); entity.tag.append(val)
-                if db_data.get('genres'):
-                    for g in [x.strip() for x in db_data['genres'].split(',')]:
-                        if g: entity.genre.append(cls.trans(g))
+                if cls.config['use_extras']:
+                    trailer_url = javten_web_data.get('trailer_url')
+                    if trailer_url:
+                        if url := cls.make_video_url(trailer_url):
+                            entity.extras.append(EntityExtra("trailer", entity.tagline, "mp4", url))
 
-                entity.year = 1900
-                if db_data.get('release_date'):
-                    entity.premiered = db_data['release_date']
-                    try: entity.year = int(entity.premiered[:4])
-                    except: pass
-                if entity.year == 1900 and (detail_url := db_data.get('detail_page_url')):
-                    if match_year := re.search(r'/video/(\d{4})', detail_url):
-                        entity.year = int(match_year.group(1))
-
-                # 이미지
-                raw_image_urls['pl'] = cls._get_javten_image_url(db_data, 'landscape', target_size='w1280')
-                local_root = cls.config.get('javten_local_image_path')
-                if local_root and db_data.get('landscape_relative_path'):
-                    temp_path = os.path.join(local_root, db_data['landscape_relative_path'].strip('/'))
-                    if os.path.exists(temp_path): local_pl_path_for_crop = temp_path
-
-                art_url = cls._get_javten_image_url(db_data, 'sample', target_size='w1280')
-                if art_url: raw_image_urls['arts'].append(art_url)
-
-        # 4. [공통 이미지 처리] (오리지널 확인 + 스마트 크롭)
+        # 3. [공통 이미지 처리] (오리지널 확인 + 스마트 크롭)
         if is_data_found:
             entity.tag.append('FC2')
             

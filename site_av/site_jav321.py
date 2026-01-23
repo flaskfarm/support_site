@@ -50,8 +50,10 @@ class SiteJav321(SiteAvBase):
         if res is None:
             logger.error(f"Jav321 Search: Failed to get response for keyword '{keyword_for_url}'.")
             return []
-
-        if not res.history or not res.url.startswith(SITE_BASE_URL + "/video/"):
+        
+        is_detail_page = res.url.startswith(SITE_BASE_URL + "/video/")
+        
+        if not is_detail_page:
             logger.debug(f"Jav321 Search: No direct match or multiple results for keyword '{keyword_for_url}'. Final URL: {res.url}")
             return []
 
@@ -118,7 +120,6 @@ class SiteJav321(SiteAvBase):
 
             item_dict = item.as_dict()
 
-            # --- 우선순위 레이블 처리 로직 추가 ---
             item_dict['is_priority_label_site'] = False
             item_dict['site_key'] = cls.site_name
 
