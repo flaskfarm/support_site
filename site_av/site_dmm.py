@@ -24,6 +24,7 @@ class SiteDmm(SiteAvBase):
     default_headers = SiteAvBase.base_default_headers.copy()
     default_headers.update({
         "Referer": SITE_BASE_URL + "/",
+        "Cookie": "age_check_done=1",
         "Sec-Ch-Ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
         "Sec-Ch-Ua-Mobile": "?0", "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "same-origin",
@@ -53,7 +54,7 @@ class SiteDmm(SiteAvBase):
     @classmethod
     def __search(cls, keyword, do_trans, manual, is_retry: bool = False):
         # logger.debug(f"SITE_DMM: __search received dmm_parser_rules: {dmm_parser_rules}")
-        if not cls._ensure_age_verified(): return []
+        #if not cls._ensure_age_verified(): return []
 
         original_keyword = keyword
 
@@ -493,9 +494,9 @@ class SiteDmm(SiteAvBase):
         if current_content_type == 'unknown':
             current_content_type = 'videoa'
 
-        if not cls._ensure_age_verified():
-            logger.error(f"DMM Info ({current_content_type}): Age verification failed for {code}.")
-            return None
+        #if not cls._ensure_age_verified():
+        #    logger.error(f"DMM Info ({current_content_type}): Age verification failed for {code}.")
+        #    return None
 
         cid_part = code[len(cls.module_char)+len(cls.site_char):]
         
@@ -600,18 +601,25 @@ class SiteDmm(SiteAvBase):
 
                 logger.debug(f"DMM Info (API): Step 3/3 'ContentPageData' API call completed: {code} (type: {entity.content_type})")
 
-                if res.status_code != 200:
-                    logger.error(f"DMM API Error: Status {res.status_code} for {code} on ContentPageData call."); return None
-                data = res.json()
-                if 'errors' in data or not data.get('data', {}).get('ppvContent'):
-                    logger.error(f"DMM API Error: Invalid JSON for {code} on ContentPageData call. Response: {data}"); return None
-                api_data = data['data']
+                if res.status_code == 200:
+                    data = res.json()
+                    if 'errors' in data or not data.get('data', {}).get('ppvContent'):
+                        logger.warning(f"DMM API: No content found for {code}. Falling back to DVD/HTML parsing.")
+                        api_data = None
+                        entity.content_type = 'dvd'
+                    else:
+                        api_data = data['data']
+                else:
+                    logger.error(f"DMM API Error: Status {res.status_code}")
+                    entity.content_type = 'dvd'
+                    api_data = None
 
             except Exception as e:
-                logger.exception(f"DMM API call sequence failed for {code}: {e}"); return None
+                logger.exception(f"DMM API call failed: {e}")
+                entity.content_type = 'dvd'
+                api_data = None
 
-        elif entity.content_type in ['dvd', 'bluray']:
-            # --- 기존 방식: dvd/bluray는 HTML 페이지 파싱 ---
+        if entity.content_type in ['dvd', 'bluray']:
             logger.debug(f"DMM Info (HTML): Getting info for {code} (type: {entity.content_type})")
             detail_url = SITE_BASE_URL + f"/mono/dvd/-/detail/=/cid={cid_part}/"
             referer = SITE_BASE_URL + "/mono/dvd/"

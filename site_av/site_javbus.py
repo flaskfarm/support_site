@@ -16,7 +16,10 @@ class SiteJavbus(SiteAvBase):
     site_char = "B"
     module_char = "C"
     default_headers = SiteAvBase.base_default_headers.copy()
-    default_headers.update({"Referer": SITE_BASE_URL + "/"})
+    default_headers.update({
+        "Referer": SITE_BASE_URL + "/",
+        "Cookie": "age=verified; age_check_done=1; ckcy=1; dv=1; existmag=mag"
+    })
     _ps_url_cache = {}
 
     ################################################
@@ -25,7 +28,7 @@ class SiteJavbus(SiteAvBase):
     @classmethod
     def search(cls, keyword, do_trans, manual):
         ret = {}
-        try:
+        try: 
             data = cls.__search(keyword, do_trans, manual)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
@@ -397,36 +400,6 @@ class SiteJavbus(SiteAvBase):
         })
         cls.config['ps_force_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('ps_force_labels_list', []) if lbl.strip()}
         cls.config['priority_labels_set'] = {lbl.strip().upper() for lbl in cls.config.get('priority_labels', []) if lbl.strip()}
-
-
-    @classmethod
-    def get_response(cls, url, **kwargs):
-        """
-        Javbus는 모든 요청에 Cloudflare 보호가 적용되므로,
-        get_response를 오버라이드하여 항상 cloudscraper를 사용하도록 강제하고,
-        SSL 검증을 비활성화하며, 필요한 헤더와 쿠키를 설정합니다.
-        """
-        if 'cookies' not in kwargs:
-            kwargs['cookies'] = {}
-        kwargs['cookies'].update({'age': 'verified', 'age_check_done': '1', 'ckcy': '1', 'dv': '1', 'existmag': 'mag'})
-
-        # SSL 인증서 검증 비활성화 (ValueError 해결)
-        # 이 값이 get_response_cs로 전달되어 no_verify 인스턴스를 선택하게 함
-        kwargs['verify'] = False
-
-        # logger.debug(f"Javbus: Using overridden get_response -> get_response_cs for URL: {url}")
-        return super().get_response_cs(url, **kwargs)
-
-
-    @classmethod
-    def jav_image(cls, url, mode=None, **kwargs):
-        """
-        [이미지 요청용] jav_image 요청도 Cloudflare를 통과해야 하므로,
-        get_response를 오버라이드한 이 클래스의 로직을 타도록 default_jav_image를 호출.
-        kwargs를 통해 사용하지 않는 인자(예: site)를 받아 에러를 방지.
-        """
-        # logger.debug(f"Javbus: Using overridden jav_image (default_jav_image) for URL: {url}")
-        return cls.default_jav_image(url, mode)
 
 
     # endregion SiteAvBase 메서드 오버라이드
