@@ -1,5 +1,4 @@
 import re
-import os
 from lxml import html
 
 from ..constants import MGS_CODE_LEN, MGS_LABEL_MAP, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO

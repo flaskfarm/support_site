@@ -1,6 +1,4 @@
 import re
-from lxml import html
-from typing import Union
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb

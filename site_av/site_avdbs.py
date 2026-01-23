@@ -1,7 +1,6 @@
 import re
 import os
 import sqlite3
-import json
 from urllib.parse import urljoin, urlencode, quote
 from lxml import html
 
@@ -206,7 +205,7 @@ class SiteAvdbs(SiteAvBase):
                 actor_items = tree.xpath('//div[contains(@class, "srch")]/following-sibling::ul/li')
 
             if not actor_items:
-                logger.warning("AVDBS WEB: No actor items found in HTML.")
+                # logger.debug("AVDBS WEB: No actor items found in HTML.")
                 return None
 
             names_to_check = cls._parse_name_variations(originalname)

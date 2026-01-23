@@ -21,7 +21,6 @@ from requests.adapters import HTTPAdapter
 # FF
 from support import SupportDiscord
 from ..setup import P, F, logger, path_data
-from tool import ToolUtil
 from ..site_util_av import SiteUtilAv
 from ..entity_base import EntityThumb
 from ..trans_util import TransUtil

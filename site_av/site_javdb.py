@@ -2,7 +2,6 @@
 import re
 import urllib.parse as py_urllib_parse
 from lxml import html
-import os 
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
