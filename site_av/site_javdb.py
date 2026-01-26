@@ -5,7 +5,7 @@ from lxml import html
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
-from ..setup import P, logger, F, path_data
+from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
 SITE_BASE_URL = 'https://javdb.com'
@@ -166,15 +166,7 @@ class SiteJavdb(SiteAvBase):
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{SITE_BASE_URL}/v/{original_code_for_url}"
         
-        original_keyword = None
-        if keyword:
-            original_keyword = keyword
-        else:
-            try:
-                keyword_cache = F.get_cache('jav_censored_keyword_cache')
-                if keyword_cache:
-                    original_keyword = keyword_cache.get(code)
-            except Exception: pass
+        original_keyword = keyword
 
         logger.debug(f"JavDB Info: Accessing URL: {detail_url}")
         tree = cls.get_tree(detail_url)

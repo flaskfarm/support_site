@@ -4,7 +4,7 @@ import sqlite3
 from urllib.parse import urljoin, urlencode, quote
 from lxml import html
 
-from ..setup import P, logger, path_data
+from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
 SITE_BASE_URL = "https://www.avdbs.com"

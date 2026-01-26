@@ -192,20 +192,9 @@ class SiteJav321(SiteAvBase):
             entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
             logger.debug(f"Jav321 Info: UI Code set from URL PID '{url_pid}' -> '{entity.ui_code}'")
 
-            # 키워드는 '검증용'으로만 사용
-            trusted_ui_code_from_keyword = ""
-            if not keyword:
-                try:
-                    cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
-                    keyword = cache.get(code)
-                    if keyword:
-                        logger.debug(f"[{cls.site_name} Info] Restored keyword '{keyword}' from cache for code '{code}'.")
-                except Exception as e:
-                    logger.warning(f"[{cls.site_name} Info] Failed to get keyword from cache: {e}")
-
             if keyword:
                 trusted_ui_code_from_keyword, _, _ = cls._parse_ui_code(keyword)
-                logger.debug(f"Jav321 Info: Verifying against trusted UI code '{trusted_ui_code_from_keyword}' from keyword '{keyword}'.")
+                logger.debug(f"Jav321 Info: Verifying UI code '{trusted_ui_code_from_keyword}' from keyword '{keyword}'.")
 
             tagline_h3_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[1]/h3')
             if tagline_h3_nodes:

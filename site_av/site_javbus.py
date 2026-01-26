@@ -2,7 +2,7 @@ import re
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb
-from ..setup import P, logger, F
+from ..setup import P, logger
 from .site_av_base import SiteAvBase
 from ..constants import AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 
@@ -154,29 +154,19 @@ class SiteJavbus(SiteAvBase):
             info_node = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")[0]
 
             # 페이지 내 품번을 최우선으로 사용, 키워드는 폴백으로 사용
-            # 1. 페이지에서 "識別碼"(식별 코드)를 가져옵니다.
             ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/span[not(@class='header')]//text()")
             if not ui_code_val_nodes:
                 ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/text()[normalize-space()]")
             raw_ui_code_from_page = "".join(ui_code_val_nodes).strip()
 
-            # 2. 페이지 품번이 존재하면 그것을 최종 UI Code로 확정합니다.
             if raw_ui_code_from_page:
                 entity.ui_code, _, _ = cls._parse_ui_code(raw_ui_code_from_page)
-                logger.debug(f"JavBus Info: UI Code set from page '識別碼' -> '{entity.ui_code}'")
+                # logger.debug(f"JavBus Info: UI Code set from page '識別碼' -> '{entity.ui_code}'")
             else:
-                # 3. 페이지 품번이 없을 경우, 키워드를 폴백으로 사용합니다.
                 logger.warning(f"JavBus Info: '識別碼' not found on page. Falling back to keyword.")
-                if not keyword:
-                    try:
-                        cache = F.get_cache(f"{P.package_name}_jav_censored_keyword_cache")
-                        keyword = cache.get(code)
-                    except Exception as e:
-                        logger.warning(f"[{cls.site_name} Info] Failed to get keyword from cache: {e}")
-                
                 if keyword:
                     entity.ui_code, _, _ = cls._parse_ui_code(keyword)
-                    logger.debug(f"JavBus Info: UI Code set from keyword (fallback) -> '{entity.ui_code}'")
+                    # logger.debug(f"JavBus Info: UI Code set from keyword (fallback) -> '{entity.ui_code}'")
                 else:
                     # 키워드도 없으면 URL 일부를 최후의 폴백으로 사용
                     logger.error(f"JavBus Info: No keyword available. Using URL part as last resort.")
