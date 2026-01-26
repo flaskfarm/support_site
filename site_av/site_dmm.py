@@ -124,7 +124,6 @@ class SiteDmm(SiteAvBase):
             logger.debug(f"DMM Search: No item blocks found using any XPath for '{original_keyword}'.")
 
         ret_temp_before_filtering = []
-        score = 60
 
         for node in lists[:30]:
             try:

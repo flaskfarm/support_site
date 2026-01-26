@@ -10,7 +10,7 @@ from PIL import Image
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import (EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb)
-from ..setup import P, logger, path_data
+from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
 SITE_BASE_URL = 'https://www.heyzo.com'

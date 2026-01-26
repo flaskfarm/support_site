@@ -10,7 +10,7 @@ from PIL import Image
 
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
-from ..setup import P, logger, path_data
+from ..setup import P, logger
 from .site_av_base import SiteAvBase
 
 class SiteFc2com(SiteAvBase):
@@ -42,13 +42,6 @@ class SiteFc2com(SiteAvBase):
             "use_javten_web": db.get_bool(f"jav_uncensored_{cls.site_name}_use_javten_web"),
             "use_javten_proxy": db.get_bool(f"jav_uncensored_{cls.site_name}_use_javten_proxy"),
             "javten_proxy_url": db.get(f"jav_uncensored_{cls.site_name}_javten_proxy_url"),
-
-            "use_javten_db": db.get_bool(f"jav_uncensored_{cls.site_name}_use_javten_db"),
-            "javten_db_path": os.path.join(path_data, 'db', 'javten.db'),
-
-            "javten_local_image_path": db.get(f"jav_uncensored_{cls.site_name}_local_image_path"),
-            "use_javten_image_server": db.get_bool(f"jav_uncensored_{cls.site_name}_use_image_server_url"),
-            "javten_local_image_url": db.get(f"jav_uncensored_{cls.site_name}_local_image_url"),
             
             "main_image_server_url": db.get("jav_censored_image_server_url"),
             "main_image_mode": db.get("jav_censored_image_mode"),
@@ -561,6 +554,9 @@ class SiteFc2com(SiteAvBase):
                         plot_text = plot_el[0].text_content().strip()
                 
                 if plot_text:
+                    # Plot 맨 앞의 품번 제거 (FC2-PPV-xxxx)
+                    plot_text = re.sub(r'^FC2-PPV-\d+\s*', '', plot_text, flags=re.IGNORECASE).strip()
+
                     entity.original['plot'] = cls.A_P(plot_text)
                     entity.plot = cls.trans(entity.original['plot'])
                 elif not entity.plot:
@@ -624,7 +620,9 @@ class SiteFc2com(SiteAvBase):
                     val = cls.A_P(javten_web_data['tagline'])
                     entity.original['tagline'] = val; entity.tagline = cls.trans(val)
                 if javten_web_data.get('plot'):
-                    val = cls.A_P(javten_web_data['plot'])
+                    raw_plot = javten_web_data['plot']
+                    raw_plot = re.sub(r'^FC2-PPV-\d+\s*', '', raw_plot, flags=re.IGNORECASE).strip()
+                    val = cls.A_P(raw_plot)
                     entity.original['plot'] = val; entity.plot = cls.trans(val)
                 if javten_web_data.get('seller'):
                     val = javten_web_data['seller']
