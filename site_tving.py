@@ -253,27 +253,35 @@ class SiteTvingTv(SiteTving):
             if search_list:
                 show_list = []
                 for idx, item in enumerate(search_list):
-                    if item['gubun'] == 'VODBC':
-                        entity = EntitySearchItemTv(cls.site_name)
-                        entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + item['mast_cd']
-                        entity.title = item['mast_nm']
-                        entity.image_url = cls.tving_base_image + item['web_url']
-                        entity.studio = item['ch_nm']
-                        entity.genre = item['cate_nm']
-                        if SiteUtil.compare_show_title(entity.title, keyword):
-                            entity.score = 100
-                        else:
-                            entity.score = 60 - idx * 5
 
-                        show_list.append(entity.as_dict())
-                ret['ret'] = 'success'
-                ret['data'] = show_list
+                    program_code = item.get("code")
+                    title = item.get("title") or ""
+
+                    if not program_code or not title:
+                        continue
+
+                    entity = EntitySearchItemTv(cls.site_name)
+                    entity.code = (kwargs.get("module_char") if "module_char" in kwargs else cls.module_char) + cls.site_char + program_code
+                    entity.title = title
+                    entity.image_url = item.get("imageUrl") or ""
+                    entity.studio = ""
+                    entity.genre = ""
+                    if SiteUtil.compare_show_title(entity.title, keyword):
+                        entity.score = 100
+                    else:
+                        entity.score = 60 - idx * 5
+                    show_list.append(entity.as_dict())
+                if show_list:
+                    ret["ret"] = "success"
+                    ret["data"] = show_list
+                else:
+                    ret["ret"] = "empty"
             else:
-                ret['ret'] = 'empty'
+                ret["ret"] = "empty"
         except Exception as e:
             logger.exception(f"검색에 실패했습니다: {keyword=}")
-            ret['ret'] = 'exception'
-            ret['data'] = str(e)
+            ret = {"ret": "exception", "data": str(e)}
+
         caching(lambda: ret, cache_key, cls.cache_expiry, cls.cache_enable)()
         return ret
 
