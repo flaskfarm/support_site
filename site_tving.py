@@ -191,6 +191,7 @@ class SiteTvingTv(SiteTving):
 
     @classmethod
     def apply_tv_by_search(cls, show, apply_plot=True, apply_image=True, force_search_title=None):
+        return
         try:
             """
             2025.11.12 halfaider
@@ -202,27 +203,35 @@ class SiteTvingTv(SiteTving):
             keyword = force_search_title if force_search_title is not None else show['title']
             data = cls.search_api(keyword)
             if data:
-                for item in data:
-                    if item['gubun'] != 'VODBC':
+                for band in data:
+                    if not isinstance(band, dict):
                         continue
-                    refined_keyword = keyword.replace(' ', '').lower()
-                    refined_name = item['mast_nm'].replace(' ', '').lower()
-                    if not (
-                        SiteUtil.compare_show_title(item['mast_nm'], keyword)
-                        or refined_name.find(refined_keyword) > -1
-                        or refined_keyword.find(refined_name) > -1
-                    ):
-                        #logger.debug(f'Not match: {show["title"]=} {item["mast_nm"]=}')
+
+                    if '시리즈' not in (band.get("bandName") or ""):
                         continue
-                    if (
-                        show.get('code') not in SiteUtil.loose_match_shows
-                        and not SiteUtil.is_same_channel(show['studio'], item['ch_nm'])
-                    ):
-                        logger.debug(f'Not match: {show["title"]=} {item["mast_nm"]=} {show["studio"]=} {item["ch_nm"]=}')
-                        continue
-                    tving_program = SupportTving.get_program_programid(item['mast_cd'])
-                    cls._apply_tv_by_program(show, tving_program, apply_plot=apply_plot, apply_image=apply_image)
-                    break
+
+                    for item in (band.get("items") or []):
+                        if not isinstance(item, dict):
+                            continue
+                            
+                        refined_keyword = keyword.replace(' ', '').lower()
+                        refined_name = item.get("title").replace(' ', '').lower()
+                        if not (
+                            SiteUtil.compare_show_title(item.get("title"), keyword)
+                            or refined_name.find(refined_keyword) > -1
+                            or refined_keyword.find(refined_name) > -1
+                        ):
+                            #logger.debug(f'Not match: {show["title"]=} {item["mast_nm"]=}')
+                            continue
+                        if (
+                            show.get('code') not in SiteUtil.loose_match_shows
+                            and not SiteUtil.is_same_channel(show['studio'], item['ch_nm'])
+                        ):
+                            logger.debug(f'Not match: {show["title"]=} {item["mast_nm"]=} {show["studio"]=} {item["ch_nm"]=}')
+                            continue
+                        tving_program = SupportTving.get_program_programid(item['mast_cd'])
+                        cls._apply_tv_by_program(show, tving_program, apply_plot=apply_plot, apply_image=apply_image)
+                        break
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -252,25 +261,35 @@ class SiteTvingTv(SiteTving):
             search_list = cls.search_api(keyword)
             if search_list:
                 show_list = []
-                for idx, item in enumerate(search_list):
-
-                    program_code = item.get("code")
-                    title = item.get("title") or ""
-
-                    if not program_code or not title:
+                for band in search_list:
+                    if not isinstance(band, dict):
                         continue
 
-                    entity = EntitySearchItemTv(cls.site_name)
-                    entity.code = (kwargs.get("module_char") if "module_char" in kwargs else cls.module_char) + cls.site_char + program_code
-                    entity.title = title
-                    entity.image_url = item.get("imageUrl") or ""
-                    entity.studio = ""
-                    entity.genre = ""
-                    if SiteUtil.compare_show_title(entity.title, keyword):
-                        entity.score = 100
-                    else:
-                        entity.score = 60 - idx * 5
-                    show_list.append(entity.as_dict())
+                    if '시리즈' not in (band.get("bandName") or ""):
+                        continue
+
+                    items = band.get("items") or []
+                    for idx, item in enumerate(items):
+                        if not isinstance(item, dict):
+                            continue
+
+                        program_code = item.get("code")
+                        title = item.get("title") or ""
+
+                        if not program_code or not title:
+                            continue
+
+                        entity = EntitySearchItemTv(cls.site_name)
+                        entity.code = (kwargs.get("module_char") if "module_char" in kwargs else cls.module_char) + cls.site_char + program_code
+                        entity.title = title
+                        entity.image_url = item.get("imageUrl") or ""
+                        entity.studio = ""
+                        entity.genre = ""
+                        if SiteUtil.compare_show_title(entity.title, keyword):
+                            entity.score = 100
+                        else:
+                            entity.score = 60 - idx * 5
+                        show_list.append(entity.as_dict())
                 if show_list:
                     ret["ret"] = "success"
                     ret["data"] = show_list
@@ -368,13 +387,21 @@ class SiteTvingMovie(SiteTving):
             #logger.debug(json.dumps(search_list, indent=4))
             result_list = []
             if search_list:
-                for idx, item in enumerate(search_list):
-                    if item['gubun'] == 'VODMV':
+                for band in search_list:  
+                    if not isinstance(band, dict):
+                        continue
+
+                    if '영화' not in (band.get("bandName") or ""):
+                        continue
+
+                    items = band.get("items") or []
+                    for idx, item in enumerate(items): 
+                        if not isinstance(item, dict):
+                            continue
                         entity = EntitySearchItemMovie(cls.site_name)
-                        entity.code = cls.module_char + cls.site_char + item['mast_cd']
-                        entity.title = item['mast_nm']
-                        entity.image_url = cls.tving_base_image + item['web_url']
-                        entity.desc = u'%s' % (item['cate_cd'])
+                        entity.code = cls.module_char + cls.site_char + item.get("code")
+                        entity.title = item.get("title")
+                        entity.image_url = cls.tving_base_image + item.get("imageUrl")
                         if SiteUtil.compare(keyword, entity.title):
                             entity.score = 94
                         else:
