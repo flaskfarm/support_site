@@ -1,6 +1,13 @@
 ## 공동개발
 
 ## Changelog
+- 1.2.21 (2026.01.31)
+    - Wavve: API 요청 방식 변경
+    - Wavve: 파일명 설정 추가
+      - 시즌 번호
+      - 콘텐츠 ID
+    - Tving: 검색 api 변경 대응
+<br><br>
 - 1.2.20 (2026.01.13)
     - Wavve: HTTP 요청 패키지를 httpx로 변경
 <br><br>
