@@ -1,5 +1,5 @@
 title: "support_site"
-version: "1.2.20"
+version: "1.2.21"
 package_name: "support_site"
 developer: "flaskfarm"
 description: "사이트 크롤링 라이브러리"
