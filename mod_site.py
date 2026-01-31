@@ -6,17 +6,19 @@ from .setup import *
 
 class ModuleSite(PluginModuleBase):
     db_default = {
-        f'db_version' : '1.2',
-        f"site_wavve_credential": "",
+        'db_version' : '1.2',
+        "site_wavve_credential": "",
         "site_wavve_credentials": "",
-        f"site_wavve_use_proxy": "False",
-        f"site_wavve_proxy_url": "",
-        f"site_wavve_profile":'{"id": "", "password": "", "profile": "0", "device_id": ""}',
+        "site_wavve_use_proxy": "False",
+        "site_wavve_proxy_url": "",
+        "site_wavve_profile":'{"id": "", "password": "", "profile": "0", "device_id": ""}',
         'site_wavve_patterns_episode': '^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$',
         'site_wavve_patterns_title': '^(?P<title>.*)$',
+        'site_wavve_patterns_season': '',
         'site_wavve_headers': '',
         'site_wavve_use_cache' : 'False',
         'site_wavve_cache_expiry' : '60',
+        'site_wavve_filename_contentid' : 'False',
         'site_daum_cookie' : '',
         'site_daum_use_proxy' : 'False',
         'site_daum_proxy_url' : '',
@@ -186,6 +188,7 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get('site_wavve_credentials'),
             P.ModelSetting.get_list('site_wavve_patterns_episode'),
             P.ModelSetting.get_list('site_wavve_patterns_title'),
+            P.ModelSetting.get_list('site_wavve_patterns_season'),
             P.ModelSetting.get('site_wavve_headers'),
             P.ModelSetting.get('site_common_headers')
         )

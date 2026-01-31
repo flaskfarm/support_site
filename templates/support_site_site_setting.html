@@ -44,7 +44,9 @@
   {{ macros.setting_input_int('site_wavve_cache_expiry', 'Cache 수명', desc=['단위: 초'], value=arg['site_wavve_cache_expiry']) }}
   </div>
   {{ macros.setting_input_textarea('site_wavve_patterns_title', '제목 정규식', value=arg['site_wavve_patterns_title'], row='6', desc=['파일명으로 사용할 제목을 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 title 그룹의 문자열을 사용', '기본값: ^(?P<title>.*)$', '예시: ^(?P<title>1박2일) 시즌.*$']) }}
+  {{ macros.setting_input_textarea('site_wavve_patterns_season', '시즌 번호 정규식', value=arg['site_wavve_patterns_season'], row='6', desc=['파일명으로 사용할 시즌 번호를 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 season 그룹의 문자열을 시즌 번호로 판단', '시즌번호는 0보다 크고 최대 5자리까지만 인정', '예시: 시즌\s?(?P<season>\d+)', '']) }}
   {{ macros.setting_input_textarea('site_wavve_patterns_episode', '회차 번호 정규식', value=arg['site_wavve_patterns_episode'], row='6', desc=['파일명으로 사용할 회차 번호를 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 episode 그룹의 문자열을 회차 번호로 판단', '회차번호는 0보다 크고 최대 5자리까지만 인정', '기본값: ^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$', '']) }}
+  {{ macros.setting_checkbox('site_wavve_filename_contentid', '파일 이름에 ID 추가', value=arg['site_wavve_filename_contentid'], desc=('파일명에 content_id를 추가', 'KBS NEWS 24.260131.360p.K01_NEWS-8474087.1-SW.mp4')) }}
   {{ macros.setting_input_textarea('site_wavve_headers', 'HTTP 헤더', value=arg['site_wavve_headers'], row='6', desc=['지정하지 않으면 일반 탭의 기본 HTTP 헤더를 사용', '형식: JSON']) }}
 {{ macros.m_tab_content_end() }}
 
