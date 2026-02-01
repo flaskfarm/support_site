@@ -19,6 +19,8 @@ class ModuleSite(PluginModuleBase):
         'site_wavve_use_cache' : 'False',
         'site_wavve_cache_expiry' : '60',
         'site_wavve_filename_contentid' : 'False',
+        'site_wavve_credential_ttl' : '21600',
+        'site_wavve_credential_cooldown' : '600',
         'site_daum_cookie' : '',
         'site_daum_use_proxy' : 'False',
         'site_daum_proxy_url' : '',
@@ -190,7 +192,9 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get_list('site_wavve_patterns_title'),
             P.ModelSetting.get_list('site_wavve_patterns_season'),
             P.ModelSetting.get('site_wavve_headers'),
-            P.ModelSetting.get('site_common_headers')
+            P.ModelSetting.get('site_common_headers'),
+            P.ModelSetting.get_int('site_wavve_credential_ttl'),
+            P.ModelSetting.get_int('site_wavve_credential_cooldown'),
         )
         from .site_wavve import SiteWavve
         SiteWavve.initialize(

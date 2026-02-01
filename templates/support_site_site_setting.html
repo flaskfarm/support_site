@@ -48,6 +48,8 @@
   {{ macros.setting_input_textarea('site_wavve_patterns_episode', '회차 번호 정규식', value=arg['site_wavve_patterns_episode'], row='6', desc=['파일명으로 사용할 회차 번호를 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 episode 그룹의 문자열을 회차 번호로 판단', '회차번호는 0보다 크고 최대 5자리까지만 인정', '기본값: ^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$', '']) }}
   {{ macros.setting_checkbox('site_wavve_filename_contentid', '파일 이름에 ID 추가', value=arg['site_wavve_filename_contentid'], desc=('파일명에 content_id를 추가', 'KBS NEWS 24.260131.360p.K01_NEWS-8474087.1-SW.mp4')) }}
   {{ macros.setting_input_textarea('site_wavve_headers', 'HTTP 헤더', value=arg['site_wavve_headers'], row='6', desc=['지정하지 않으면 일반 탭의 기본 HTTP 헤더를 사용', '형식: JSON']) }}
+  {{ macros.setting_input_int('site_wavve_credential_ttl', 'Credential 유효 시간', desc=['크리덴셜 만료 판단 기준 시간', '설정 시간 경과 시 자동 갱신 시도', '단위: 초, 최소값: 300'], value=arg['site_wavve_credential_ttl'], min=300) }}
+  {{ macros.setting_input_int('site_wavve_credential_cooldown', 'Credential 갱신 유예 시간', desc=['로그인 실패 시 잦은 재시도를 방지하기 위한 최소 대기 시간', '단위: 초, 최소값: 300'], value=arg['site_wavve_credential_cooldown'], min=300) }}
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('tving', false) }}
