@@ -39,6 +39,11 @@
 
 {{ macros.m_tab_content_start('wavve', false) }}
   {{ macros.setting_input_textarea_and_buttons('site_wavve_credentials', 'Credentials', [['site_wavve_login_btn', 'Credential 갱신']], value=arg['site_wavve_credentials'], desc=["Credential을 포함하는 Wavve 계정 정보들", "형식: JSON", "{", '"첫째":{"id":"아이디","password":"패스워드","profile":"0"},', '"둘째":{"id":"아이디","password":"패스워드","profile":"1","proxy":"프록시를 사용할 경우 입력","download_proxy":"다운로드 용 프록시"},', '"셋째":{"id":"아이디","password":"패스워드","profile":"2","credential":"갱신시 자동 입력 혹은 직접 입력"},', '"넷째":{"id":"아이디","password":"패스워드","profile":"1","device_id":"갱신시 자동 입력, 초기화시 제거"}', "}", "HTTP 요청 에러가 적은 계정 정보를 우선 사용"], col='9', row='15', disabled=False) }}
+  {{ macros.setting_checkbox('site_wavve_credential_auto_refresh', 'Credential 자동 갱신', value=arg['site_wavve_credential_auto_refresh'], desc=None) }}
+  <div id="site_wavve_credential_auto_refresh_div" class="collapse">
+    {{ macros.setting_input_int('site_wavve_credential_ttl', 'Credential 유효 시간', desc=['크리덴셜 만료 판단 기준 시간', '설정 시간 경과 시 자동 갱신 시도', '단위: 초, 최소값: 300'], value=arg['site_wavve_credential_ttl'], min=300) }}
+    {{ macros.setting_input_int('site_wavve_credential_cooldown', 'Credential 갱신 유예 시간', desc=['로그인 실패 시 잦은 재시도를 방지하기 위한 최소 대기 시간', '단위: 초, 최소값: 300'], value=arg['site_wavve_credential_cooldown'], min=300) }}
+  </div>
   {{ macros.setting_checkbox('site_wavve_use_cache', 'Cache 사용', value=arg['site_wavve_use_cache'], desc=None) }}
   <div id="site_wavve_use_cache_div" class="collapse">
   {{ macros.setting_input_int('site_wavve_cache_expiry', 'Cache 수명', desc=['단위: 초'], value=arg['site_wavve_cache_expiry']) }}
@@ -48,8 +53,6 @@
   {{ macros.setting_input_textarea('site_wavve_patterns_episode', '회차 번호 정규식', value=arg['site_wavve_patterns_episode'], row='6', desc=['파일명으로 사용할 회차 번호를 수정하기 위한 정규식', '한 줄당 하나의 정규식을 입력하며 첫번째로 매칭되는 episode 그룹의 문자열을 회차 번호로 판단', '회차번호는 0보다 크고 최대 5자리까지만 인정', '기본값: ^(?!.*(티저|예고|특집)).*?(?P<episode>\d+)$', '']) }}
   {{ macros.setting_checkbox('site_wavve_filename_contentid', '파일 이름에 ID 추가', value=arg['site_wavve_filename_contentid'], desc=('파일명에 content_id를 추가', 'KBS NEWS 24.260131.360p.K01_NEWS-8474087.1-SW.mp4')) }}
   {{ macros.setting_input_textarea('site_wavve_headers', 'HTTP 헤더', value=arg['site_wavve_headers'], row='6', desc=['지정하지 않으면 일반 탭의 기본 HTTP 헤더를 사용', '형식: JSON']) }}
-  {{ macros.setting_input_int('site_wavve_credential_ttl', 'Credential 유효 시간', desc=['크리덴셜 만료 판단 기준 시간', '설정 시간 경과 시 자동 갱신 시도', '단위: 초, 최소값: 300'], value=arg['site_wavve_credential_ttl'], min=300) }}
-  {{ macros.setting_input_int('site_wavve_credential_cooldown', 'Credential 갱신 유예 시간', desc=['로그인 실패 시 잦은 재시도를 방지하기 위한 최소 대기 시간', '단위: 초, 최소값: 300'], value=arg['site_wavve_credential_cooldown'], min=300) }}
 {{ macros.m_tab_content_end() }}
 
 {{ macros.m_tab_content_start('tving', false) }}
@@ -125,6 +128,7 @@ $(document).ready(function(){
   use_collapse("site_wavve_use_cache");
   use_collapse("site_tving_use_cache");
   use_collapse("site_watcha_use_cache");
+  use_collapse("site_wavve_credential_auto_refresh");
 });
 
 $('#site_daum_use_proxy').change(function() {
@@ -157,6 +161,10 @@ $('#site_tving_use_cache').change(function() {
 
 $('#site_watcha_use_cache').change(function() {
   use_collapse('site_watcha_use_cache');
+});
+
+$('#site_wavve_credential_auto_refresh').change(function() {
+  use_collapse('site_wavve_credential_auto_refresh');
 });
 
 
