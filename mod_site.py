@@ -1,5 +1,8 @@
 import json
 import sqlite3
+import json
+
+import flask
 
 from .setup import *
 
@@ -19,6 +22,7 @@ class ModuleSite(PluginModuleBase):
         'site_wavve_use_cache' : 'False',
         'site_wavve_cache_expiry' : '60',
         'site_wavve_filename_contentid' : 'False',
+        'site_wavve_filename_contentid_list' : '',
         'site_wavve_credential_ttl' : '21600',
         'site_wavve_credential_cooldown' : '600',
         'site_wavve_credential_auto_refresh' : 'True',
