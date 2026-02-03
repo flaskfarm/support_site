@@ -1,8 +1,5 @@
 import json
 import sqlite3
-import json
-
-import flask
 
 from .setup import *
 
