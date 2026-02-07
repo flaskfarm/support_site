@@ -291,6 +291,7 @@ class SiteTvingTv(SiteTving):
                             entity.score = 60 - idx * 5
                         show_list.append(entity.as_dict())
                 if show_list:
+                    show_list.sort(key=lambda x: x.get("score", 0), reverse=True)
                     ret["ret"] = "success"
                     ret["data"] = show_list
                 else:
