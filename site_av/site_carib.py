@@ -220,24 +220,28 @@ class SiteCarib(SiteAvBase):
         # 나머지 메타데이터 파싱
         title_node = tree.xpath('//div[@id="moviepages"]//h1[@itemprop="name"]/text()')
         if title_node:
-            cleaned_tagline = cls.A_P(title_node[0].strip())
+            cleaned_tagline = cls.A_P(str(title_node[0]).strip())
             entity.original['tagline'] = cleaned_tagline
             entity.tagline = cls.trans(cleaned_tagline)
 
-        for actor in tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()'):
-            entity.actor.append(EntityActor(actor))
+        actor_nodes = tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()')
+        for actor in actor_nodes:
+            entity.actor.append(EntityActor(str(actor).strip()))
 
         entity.tag.append('carib')
 
+        # Genre
         genre_nodes = tree.xpath('//li[@class="movie-spec"]//span[@class="spec-content"]/a[@class="spec-item"]/text()')
         if 'genre' not in entity.original: entity.original['genre'] = []
         for item in genre_nodes:
-            entity.original['genre'].append(item)
-            entity.genre.append(cls.get_translated_tag('uncen_tags', item))
+            item_str = str(item).strip()
+            entity.original['genre'].append(item_str)
+            entity.genre.append(cls.get_translated_tag('uncen_tags', item_str))
 
+        # Plot
         plot_node = tree.xpath('//p[@itemprop="description"]/text()')
         if plot_node:
-            cleaned_plot = cls.A_P(plot_node[0])
+            cleaned_plot = cls.A_P(str(plot_node[0]))
             entity.original['plot'] = cleaned_plot
             entity.plot = cls.trans(cleaned_plot)
 

@@ -175,21 +175,27 @@ class UtilNfo(object):
         _make_nfo_movie와 유사한 구조로, 메타데이터를 YAML용 딕셔너리로 변환합니다.
         """
         try:
+            # 헬퍼: lxml 객체를 순수 문자열로 변환
+            def clean_str(val):
+                if val is None: return ''
+                return str(val).strip()
+
             # 기본 템플릿 생성
             yaml_data = {
                 'primary': True,
-                'code': info.get('code', ''),
-                'title': info.get('title', ''),
-                'original_title': info.get('originaltitle', ''),
-                'title_sort': info.get('sorttitle', ''),
-                'originally_available_at': info.get('premiered', ''),
-                'year': info.get('year'),
-                'studio': info.get('studio', ''),
-                'content_rating': info.get('mpaa', ''),
-                'tagline': info.get('tagline', ''),
-                'summary': info.get('plot', ''),
-                'genres': info.get('genre') or [], 'collections': info.get('tag') or [],
-                'countries': info.get('country') or [],
+                'code': clean_str(info.get('code', '')),
+                'title': clean_str(info.get('title', '')),
+                'original_title': clean_str(info.get('originaltitle', '')),
+                'title_sort': clean_str(info.get('sorttitle', '')),
+                'originally_available_at': clean_str(info.get('premiered', '')),
+                'year': info.get('year'), # int는 그대로
+                'studio': clean_str(info.get('studio', '')),
+                'content_rating': clean_str(info.get('mpaa', '')),
+                'tagline': clean_str(info.get('tagline', '')),
+                'summary': clean_str(info.get('plot', '')),
+                'genres': [clean_str(x) for x in (info.get('genre') or [])],
+                'collections': [clean_str(x) for x in (info.get('tag') or [])],
+                'countries': [clean_str(x) for x in (info.get('country') or [])],
                 'directors': [],
                 'roles': [],
                 'posters': [],
@@ -205,7 +211,8 @@ class UtilNfo(object):
             if ratings := info.get('ratings'):
                 if isinstance(ratings, list) and ratings:
                     try:
-                        yaml_data['rating'] = float(ratings[0]['value']) * 2 if ratings[0]['max'] == 5 else float(ratings[0]['value'])
+                        val = float(ratings[0]['value'])
+                        yaml_data['rating'] = val * 2 if ratings[0]['max'] == 5 else val
                     except: pass
             
             # 썸네일 (포스터, 랜드스케이프)
@@ -234,9 +241,9 @@ class UtilNfo(object):
             if actors := info.get('actor'):
                 for item in actors:
                     yaml_data['roles'].append({
-                        'name': item.get('name', ''),
-                        'role': item.get('originalname', ''),
-                        'photo': item.get('thumb', '')
+                        'name': clean_str(item.get('name', '')),
+                        'role': clean_str(item.get('originalname', '')),
+                        'photo': clean_str(item.get('thumb', ''))
                     })
 
             return yaml_data
