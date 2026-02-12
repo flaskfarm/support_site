@@ -1055,50 +1055,70 @@ class SiteAvBase:
                 if apply_ps_to_poster:
                     final_image_sources['poster_source'] = ps_url
 
-                # 2. (자동 탐색) 우선 후보군 탐색
-                if not final_image_sources['poster_source']:
-                    poster_candidates_simple = ([pl_url] if pl_url else []) + specific_candidates_on_page
-                    im_sm_obj = cls.imopen(ps_url)
-                    if im_sm_obj:
+                # PS 이미지 객체 생성 (전체 로직에서 공통 사용)
+                im_sm_obj = cls.imopen(ps_url)
+                
+                try:
+                    if not final_image_sources['poster_source'] and im_sm_obj:
+                        # [공통] PL 유효성 및 높이 확인 (미리 수행)
+                        pl_height = 0
+                        pl_valid = False
+                        
+                        if pl_url:
+                            try:
+                                im_pl_obj = cls.imopen(pl_url)
+                                if im_pl_obj:
+                                    pl_height = im_pl_obj.height
+                                    # PL이 PS를 포함하는지 확인 (표준 비율로 크롭 시도)
+                                    standard_aspect_ratio = 1.4225
+                                    pos = cls.has_hq_poster(im_sm_obj, im_pl_obj, aspect_ratio=standard_aspect_ratio)
+                                    if pos: pl_valid = True
+                                    im_pl_obj.close()
+                            except: pass
+
+                        # 2. (자동 탐색) 우선 후보군 탐색
+                        poster_candidates_simple = ([pl_url] if pl_url else []) + specific_candidates_on_page
+                        
                         for candidate_url in poster_candidates_simple:
-                            im_lg_obj = None # finally 블록을 위해 미리 선언
+                            im_lg_obj = None
                             try:
                                 im_lg_obj = cls.imopen(candidate_url)
-
                                 if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
-                                    logger.info(f"Found ideal poster (visually same as thumbnail): {candidate_url}")
+                                    # [검증] PL이 유효하고 더 고화질이라면, 저화질 후보 스킵
+                                    if pl_valid and pl_height > im_lg_obj.height:
+                                        # logger.debug(f"Skipping low-res candidate ({im_lg_obj.height} < {pl_height}): {candidate_url}")
+                                        continue
+
+                                    logger.debug(f"Found ideal poster (visually same as thumbnail): {candidate_url}")
                                     final_image_sources['poster_source'] = candidate_url
                                     break
                             finally:
                                 if im_lg_obj: im_lg_obj.close()
 
-                        im_sm_obj.close()
+                        # 3. (자동 탐색) 확장 후보군 탐색
+                        if not final_image_sources['poster_source']:
+                            all_candidates_advanced = list(dict.fromkeys(([pl_url] if pl_url else []) + other_arts_on_page))
+                            standard_aspect_ratio = 1.4225
 
-                # 3. (자동 탐색) 확장 후보군 탐색
-                if not final_image_sources['poster_source']:
-                    all_candidates_advanced = list(dict.fromkeys(([pl_url] if pl_url else []) + other_arts_on_page))
-                    standard_aspect_ratio = 1.4225
-
-                    im_sm_obj = cls.imopen(ps_url)
-                    if im_sm_obj:
-                        try:
                             # Phase 1: 확장 후보군에 대해 is_hq_poster로 먼저 빠르게 검사
-                            # logger.debug("Advanced Check (Phase 1): Performing fast strict check on all advanced candidates.")
                             for candidate_url in all_candidates_advanced:
                                 im_lg_obj = None
                                 try:
                                     im_lg_obj = cls.imopen(candidate_url)
-                                    # is_hq_poster (엄격한 기준)로 완벽한 매칭 찾기
                                     if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
-                                        logger.info(f"HQ Poster Found in advanced Phase 1: {candidate_url}")
+                                        # [검증] PL이 유효하고 더 고화질이라면, 저화질 후보 스킵
+                                        if pl_valid and pl_height > im_lg_obj.height:
+                                            # logger.debug(f"Skipping low-res advanced candidate ({im_lg_obj.height} < {pl_height}): {candidate_url}")
+                                            continue
+
+                                        logger.debug(f"HQ Poster Found in advanced Phase 1: {candidate_url}")
                                         final_image_sources['poster_source'] = candidate_url
-                                        break # 찾았으면 즉시 종료
+                                        break
                                 finally:
                                     if im_lg_obj: im_lg_obj.close()
 
-                            # Phase 2: Phase 1에서 못 찾았을 경우에
+                            # Phase 2: Phase 1에서 못 찾았을 경우 상세 분석
                             if not final_image_sources['poster_source']:
-                                # logger.debug("Advanced Check (Phase 2): Strict check failed. Performing detailed analysis.")
                                 for candidate_url in all_candidates_advanced:
                                     im_lg_obj = cls.imopen(candidate_url)
                                     if not im_lg_obj: continue
@@ -1137,7 +1157,7 @@ class SiteAvBase:
                                                             final_image_sources['processed_from_url'] = candidate_url
 
                                                             found_poster_for_this_candidate = True
-                                                            logger.info(f"HQ Poster Found (Letterbox Processed): Saved to {temp_filepath}")
+                                                            logger.debug(f"HQ Poster Found (Letterbox Processed): Saved to {temp_filepath}")
                                                         else:
                                                             logger.error("Failed to save the final cropped poster to a temporary file.")
                                             finally:
@@ -1148,7 +1168,6 @@ class SiteAvBase:
                                         if not found_poster_for_this_candidate:
                                             # 2순위: 1.7:1 이상 와이드 이미지 처리
                                             if aspect_ratio >= 1.7:
-                                                # 기본 비교: 원본 썸네일 사용
                                                 sm_w, sm_h = im_sm_obj.size
                                                 sm_aspect = sm_h / sm_w if sm_w > 0 else standard_aspect_ratio
                                                 with im_lg_obj.crop((w / 2, 0, w, h)) as right_half_obj:
@@ -1162,7 +1181,6 @@ class SiteAvBase:
                                                         if sub_pos:
                                                             crop_pos = f"l_{sub_pos}_{sm_aspect:.4f}"
                                                             logger.debug(f"HQ Poster Found (Wide_L): using mode {crop_pos}")
-                                                # 재시도: 썸네일 레터박스 제거 후 비교
                                                 if not crop_pos:
                                                     with im_sm_obj.crop((0, sm_h * 0.07, sm_w, sm_h * 0.93)) as cropped_sm_obj:
                                                         sm_w_new, sm_h_new = cropped_sm_obj.size
@@ -1174,32 +1192,22 @@ class SiteAvBase:
 
                                             # 3순위: 원본 이미지 자체에 대한 일반적인 CRL 비교 시도
                                             if not crop_pos:
-                                                # 표준 포스터 비율 강제 적용
                                                 single_pos = cls.has_hq_poster(im_sm_obj, im_lg_obj, aspect_ratio=standard_aspect_ratio)
                                                 if single_pos:
                                                     crop_pos = f"{single_pos}_{standard_aspect_ratio:.4f}"
                                                     logger.debug(f"HQ Poster Found (Standard): using mode {crop_pos}")
 
-                                            # 2, 3순위 최종 결과 저장
                                             if crop_pos:
-                                                logger.info(f"HQ Poster Found Matched in Advanced Phase 2: '{candidate_url}' using mode '{crop_pos}'.")
+                                                logger.debug(f"HQ Poster Found Matched in Advanced Phase 2: '{candidate_url}' using mode '{crop_pos}'.")
                                                 final_image_sources.update({'poster_source': candidate_url, 'poster_mode': f"crop_{crop_pos}"})
                                                 found_poster_for_this_candidate = True
                                     finally:
                                         if im_lg_obj: im_lg_obj.close()
 
-                                    # 이 후보에서 포스터를 찾았다면, 전체 for 루프를 탈출
                                     if found_poster_for_this_candidate:
                                         break
-
-                            # for 루프가 break 없이 모두 실행된 후
-                            else: # no-break
-                                if not final_image_sources.get('poster_source'):
-                                    logger.debug("Advanced Check: No HQ poster found in any advanced candidates.")
-
-                        finally:
-                            if im_sm_obj:
-                                im_sm_obj.close()
+                finally:
+                    if im_sm_obj: im_sm_obj.close()
 
                 # 4. (수동 설정) 모든 자동 탐색 실패 시, 강제 크롭 모드 적용
                 if not final_image_sources['poster_source']:
