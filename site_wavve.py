@@ -228,8 +228,12 @@ class SiteWavveTv(SiteWavve):
                 show.year = int(show.premiered.split('-')[0])
             #logger.warning(program_info['closedate'])
             show.status = 1
-            if program_info['tags']['list']:
-                show.genre = [program_info['tags']['list'][0]['text']]
+            if isinstance((tmp := program_info.get('genretext')), str) and (genretext := tmp.strip()):
+                show.genre.append(genretext)
+            if isinstance(tag_list := (program_info.get('tags') or {}).get('list'), list):
+                show.genre.extend(tag_text for tag in tag_list if (tag_text := tag.get('text')))
+            if isinstance(tmp := program_info.get('nation'), str) and (nation := tmp.strip()):
+                show.country.append(nation)
             for item in program_info['programactors']['list']:
                 actor = EntityActor(None)
                 actor.name = item['text']
