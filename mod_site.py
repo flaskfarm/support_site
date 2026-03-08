@@ -61,6 +61,8 @@ class ModuleSite(PluginModuleBase):
         'site_naver_login_access_token_time' : '',
         'site_common_loose_match_shows' : '',
         'site_common_headers' : '{"Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8","Accept-Language":"ko,en-US;q=0.9,en;q=0.8,de;q=0.7,zh-CN;q=0.6,zh;q=0.5,lb;q=0.4","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"}',
+        'site_tmdb_api_key' : '',
+        'site_tmdb_image_sizes' : '',
     }
 
     def __init__(self, P):
@@ -142,6 +144,7 @@ class ModuleSite(PluginModuleBase):
         flag_tving = False
         flag_naver = False
         flag_watcha = False
+        flag_tmdb = False
         for item in change_list:
             if item.startswith('site_wavve_'):
                 flag_wavve = True
@@ -153,6 +156,8 @@ class ModuleSite(PluginModuleBase):
                 flag_naver = True
             if item.startswith('site_watcha_'):
                 flag_watcha = True
+            if item.startswith('site_tmdb_'):
+                flag_tmdb = True
 
         if flag_wavve:
             self.__wavve_init()
@@ -164,6 +169,8 @@ class ModuleSite(PluginModuleBase):
             self.__naver_init()
         if flag_watcha:
             self.__watcha_init()
+        if flag_tmdb:
+            self.__tmdb_init()
         self.__util_init()
 
     def plugin_load(self):
@@ -172,6 +179,7 @@ class ModuleSite(PluginModuleBase):
         self.__tving_init()
         self.__naver_init()
         self.__watcha_init()
+        self.__tmdb_init()
         self.__util_init()
 
     def plugin_load_celery(self):
@@ -249,6 +257,13 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get_int('site_watcha_cache_expiry'),
             P.ModelSetting.get('site_watcha_headers'),
             P.ModelSetting.get('site_common_headers')
+        )
+
+    def __tmdb_init(self):
+        from .site_tmdb import SiteTmdb
+        SiteTmdb.initialize(
+            P.ModelSetting.get('site_tmdb_api_key'),
+            P.ModelSetting.get('site_tmdb_image_sizes'),
         )
 
     def __util_init(self):

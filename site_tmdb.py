@@ -1,3 +1,5 @@
+import json
+
 from support_site import MetadataServerUtil
 
 from .entity_base import (EntityActor, EntityActor2, EntityEpisode2,
@@ -9,7 +11,7 @@ from .site_util import SiteUtil
 
 try:
     import tmdbsimple
-except:
+except Exception:
     os.system("pip install tmdbsimple")
     import tmdbsimple
 tmdbsimple.API_KEY = 'f090bb54758cabf231fb605d3e3e0468'
@@ -23,11 +25,31 @@ class SiteTmdb(object):
     site_name = 'tmdb'
     site_char = 'T'
 
+    image_base_url = 'https://image.tmdb.org/t/p/'
+
     @classmethod
-    def get_poster_path(cls, path):
-        if path is None:
-            return ''
-        return 'https://image.tmdb.org/t/p/'+ 'original' + path
+    def initialize(cls, user_api_key: str, user_image_sizes: str) -> None:
+        if user_api_key:
+            tmdbsimple.API_KEY = user_api_key
+        cls.image_sizes = {
+            "poster": {"default": "original", "thumb": "w154"}, # "w92", "w154", "w185", "w342", "w500", "w780", "original"
+            "backdrop": {"default": "original", "thumb": "w300"}, # "w300", "w780", "w1280", "original"
+            "logo": {"default": "original", "thumb": "w45"}, # "w45", "w92", "w154", "w185", "w300", "w500", "original"
+            "profile": {"default": "original", "thumb": "w45"}, # "w45", "w185", "h632", "original"
+            "still": {"default": "original", "thumb": "w92"}, # "w92", "w185", "w300", "original"
+        }
+        try:
+            cls.image_sizes |= json.loads(user_image_sizes)
+        except Exception:
+            ...
+
+    @classmethod
+    def get_image_url(cls, image_path: str, category: str = 'poster', size: str = 'default') -> str:
+        if not isinstance(image_path, str):
+            return ""
+        sizes = cls.image_sizes.get(category) or cls.image_sizes['poster']
+        size = sizes.get(size) or sizes.get('default')
+        return f"{cls.image_base_url.rstrip('/')}/{size.strip('/')}/{image_path.lstrip('/')}"
 
     @classmethod
     def _process_image(cls, tmdb, data):
@@ -56,8 +78,8 @@ class SiteTmdb(object):
                     if i > ARTWORK_ITEM_LIMIT:
                         break
                     else:
-                        poster_url = 'https://image.tmdb.org/t/p/'+ 'original' + poster['file_path']
-                        thumb_url = 'https://image.tmdb.org/t/p/' + 'w154' + poster['file_path']
+                        poster_url = cls.get_image_url(poster['file_path'])
+                        thumb_url = cls.get_image_url(poster['file_path'], size='thumb')
                         data.append(EntityThumb(aspect='poster', value=poster_url, thumb=thumb_url, site='tmdb', score=poster['score']+100).as_dict())
 
             if 'backdrops' in tmdb_images_dict and tmdb_images_dict['backdrops']:
@@ -85,8 +107,8 @@ class SiteTmdb(object):
                     if i > ARTWORK_ITEM_LIMIT:
                         break
                     else:
-                        backdrop_url = 'https://image.tmdb.org/t/p/' + 'original' + backdrop['file_path']
-                        thumb_url = 'https://image.tmdb.org/t/p/' + 'w300' + backdrop['file_path']
+                        backdrop_url = cls.get_image_url(backdrop['file_path'], 'backdrop')
+                        thumb_url = cls.get_image_url(backdrop['file_path'], 'backdrop', 'thumb')
                         data.append(EntityThumb(aspect='landscape', value=backdrop_url, thumb=thumb_url, site='tmdb', score=backdrop['score']+100).as_dict())
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
@@ -141,23 +163,23 @@ class SiteTmdbTv(SiteTmdb):
                     continue
                 try:
                     kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko')
-                except:
+                except Exception:
                     kor_name = None
                 flag_find = False
                 for actor in show['actor']:
                     if actor['name'] == kor_name:
                         flag_find = True
-                        actor['thumb'] = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
+                        actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                         break
                 if flag_find == False:
                     try:
                         kor_role_name = SiteUtil.trans(tmdb_item['character'], source='en', target='ko')
-                    except:
+                    except Exception:
                         kor_role_name = None
                     for actor in show['actor']:
                         if actor['role'] == kor_role_name:
                             flag_find = True
-                            actor['thumb'] = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
+                            actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                             break
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
@@ -253,9 +275,9 @@ class SiteTmdbMovie(SiteTmdb):
                 entity.code = '%s%s%s' % (cls.module_char, cls.site_char, item['id'])
                 entity.title = item['title'].strip()
                 entity.originaltitle = item['original_title'].strip()
-                entity.image_url = cls.get_poster_path(item['poster_path'])
+                entity.image_url = cls.get_image_url(item['poster_path'])
                 try: entity.year = int(item['release_date'].split('-')[0])
-                except: entity.year = 1900
+                except Exception: entity.year = 1900
                 #if item['actor'] != '':
                 #    entity.desc += u'배우 : %s\r\n' % ', '.join(item['actor'].rstrip('|').split('|'))
                 #if item['director'] != '':
@@ -387,12 +409,12 @@ class SiteTmdbMovie(SiteTmdb):
                                 actor.name = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
                             if SiteUtil.is_include_hangul(tmdb_item['character']) == False:
                                 actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
-                        except:
+                        except Exception:
                             pass
-                    except:
+                    except Exception:
                         pass
                     if tmdb_item['profile_path'] is not None:
-                        actor.thumb = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
+                        actor.thumb = cls.get_image_url(tmdb_item['profile_path'], 'profile')
 
                     entity.actor.append(actor)
                 for tmdb_item in info['crew'][:20]:
@@ -407,7 +429,7 @@ class SiteTmdbMovie(SiteTmdb):
                             if SiteUtil.is_include_hangul(_) == False:
                                 _ = SiteUtil.trans(_, source='en', target='ko').replace(' ', '') if trans else tmdb_item['name']
                             target_list.append(_)
-                        except:
+                        except Exception:
                             target_list.append(tmdb_item['name'])
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
@@ -451,7 +473,7 @@ class SiteTmdbMovie(SiteTmdb):
 
             entity.premiered = info['release_date']
             try: entity.year = int(info['release_date'].split('-')[0])
-            except: entity.year = 1900
+            except Exception: entity.year = 1900
 
             entity.runtime = info['runtime']
             entity.tagline = info['tagline']
@@ -464,7 +486,7 @@ class SiteTmdbMovie(SiteTmdb):
             entity.extra_info['status'] = info['status']
 
             try: entity.ratings.append(EntityRatings(info['vote_average'], name='tmdb', votes=info['vote_count']))
-            except: pass
+            except Exception: pass
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -481,7 +503,7 @@ class SiteTmdbMovie(SiteTmdb):
                     continue
                 try:
                     kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko').replace(' ', '')
-                except:
+                except Exception:
                     kor_name = None
                 #kor_name = MetadataServerUtil.trans_en_to_ko(tmdb_item['name'])
                 flag_find = False
@@ -490,14 +512,14 @@ class SiteTmdbMovie(SiteTmdb):
                 for actor in show['actor']:
                     if actor['name'] == kor_name:
                         flag_find = True
-                        actor['thumb'] = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
+                        actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                         break
                 if flag_find == False:
                     kor_role_name = MetadataServerUtil.trans_en_to_ko(tmdb_item['character'])
                     for actor in show['actor']:
                         if actor['role'] == kor_role_name:
                             flag_find = True
-                            actor['thumb'] = 'https://image.tmdb.org/t/p/' + 'original' + tmdb_item['profile_path']
+                            actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                             break
                 if flag_find == False:
                     logger.debug(kor_name)
@@ -614,14 +636,14 @@ class SiteTmdbFtv(SiteTmdb):
                     entity.title = item['name']
                     entity.title = re.sub(r'\(\d{4}\)$', '', entity.title).strip()
                     entity.title_original = item['original_name']
-                    entity.image_url = cls.get_poster_path(item['poster_path'])
+                    entity.image_url = cls.get_image_url(item['poster_path'])
                     if 'first_air_date' not in item:
                         continue
                     entity.premiered = item['first_air_date']
                     try: entity.year = int(entity.premiered.split('-')[0])
-                    except: entity.year = 1900
+                    except Exception: entity.year = 1900
                     try: entity.desc = item['overview']
-                    except: pass
+                    except Exception: pass
                     entity.link = f"https://www.themoviedb.org/tv/{item['id']}"
 
                     if SiteUtil.compare(keyword, entity.title) or SiteUtil.compare(keyword, entity.title_original):
@@ -741,8 +763,8 @@ class SiteTmdbFtv(SiteTmdb):
                 #            actor.name = actor.name_ko = tmp
                 #            break
                 actor.role = tmdb_item['character']
-                if 'profile_path' in tmdb_item and tmdb_item['profile_path'] is not None:
-                    actor.image = cls.get_poster_path(tmdb_item['profile_path'])
+                if profile_path := tmdb_item.get('profile_path'):
+                    actor.image = cls.get_image_url(profile_path, 'profile')
                 entity.actor.append(actor)
 
             if crew == False:
@@ -789,9 +811,10 @@ class SiteTmdbFtv(SiteTmdb):
             info_en = tmdb.info(language='en')
 
             if 'backdrop_path' in info:
-                entity.art.append(EntityThumb(aspect='landscape', value=cls.get_poster_path(info['backdrop_path']), site=cls.site_name, score=200))
+                backdrop_url = cls.get_image_url(info['backdrop_path'], 'backdrop') if info.get('backdrop_path') else ''
+                entity.art.append(EntityThumb(aspect='landscape', value=backdrop_url, site=cls.site_name, score=200))
             if 'poster_path' in info:
-                entity.art.append(EntityThumb(aspect='poster', value=cls.get_poster_path(info['poster_path']), site=cls.site_name, score=200))
+                entity.art.append(EntityThumb(aspect='poster', value=cls.get_image_url(info['poster_path']), site=cls.site_name, score=200))
 
 
             if 'created_by' in info:
@@ -808,7 +831,7 @@ class SiteTmdbFtv(SiteTmdb):
             if 'first_air_date'  in info:
                 entity.premiered = info['first_air_date']
                 try: entity.year = int(info['first_air_date'].split('-')[0])
-                except: entity.year = 1900
+                except Exception: entity.year = 1900
             entity.title = info['name'] if 'name' in info else ''
             entity.originaltitle = info['original_name'] if 'original_name' in info else ''
             if 'overview' in info and info['overview'] != '':
@@ -848,14 +871,14 @@ class SiteTmdbFtv(SiteTmdb):
                             season_no=tmp['season_number'],
                             season_name=tmp['name'],
                             plot=tmp['overview'],
-                            poster=cls.get_poster_path(tmp['poster_path']),
+                            poster=cls.get_image_url(tmp['poster_path']),
                             epi_count=tmp['episode_count'],
                             premiered=tmp['air_date']))
 
             entity.status = info['status'] if 'status' in info else ''
 
             try: entity.ratings.append(EntityRatings(info['vote_average'], name=cls.site_name, votes=info['vote_count']))
-            except: pass
+            except Exception: pass
             entity.episode_run_time = info['episode_run_time'][0] if 'episode_run_time' in info and len(info['episode_run_time'])>0 else 0
             return
         except Exception as e:
@@ -940,12 +963,13 @@ class SiteTmdbFtv(SiteTmdb):
 
             if 'episodes' in info:
                 for idx, tmp in enumerate(info['episodes']):
+                    episode_arts = [cls.get_image_url(tmp['still_path'], 'still')] if tmp.get('still_path') else []
                     episode = EntityEpisode2(
                         cls.site_name, entity.season_no, tmp['episode_number'],
                         title=tmp['name'],
                         plot=tmp['overview'],
                         premiered=tmp['air_date'],
-                        art=[cls.get_poster_path(tmp['still_path'])] if 'still_path' in tmp and tmp['still_path'] is not None else [])
+                        art=episode_arts)
                     if episode.title.find(u'에피소드') == -1 and SiteUtil.is_include_hangul(episode.title):
                         episode.is_title_kor = True
                     else:
