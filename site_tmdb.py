@@ -14,7 +14,8 @@ try:
 except Exception:
     os.system("pip install tmdbsimple")
     import tmdbsimple
-tmdbsimple.API_KEY = 'f090bb54758cabf231fb605d3e3e0468'
+API_KEY = 'f090bb54758cabf231fb605d3e3e0468'
+tmdbsimple.API_KEY = API_KEY
 
 ARTWORK_ITEM_LIMIT = 10
 POSTER_SCORE_RATIO = .3 # How much weight to give ratings vs. vote counts when picking best posters. 0 means use only ratings.
@@ -29,8 +30,7 @@ class SiteTmdb(object):
 
     @classmethod
     def initialize(cls, user_api_key: str, user_image_sizes: str) -> None:
-        if user_api_key:
-            tmdbsimple.API_KEY = user_api_key
+        tmdbsimple.API_KEY = user_api_key if user_api_key else API_KEY
         cls.image_sizes = {
             "poster": {"default": "original", "thumb": "w154"}, # "w92", "w154", "w185", "w342", "w500", "w780", "original"
             "backdrop": {"default": "original", "thumb": "w300"}, # "w300", "w780", "w1280", "original"
