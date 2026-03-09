@@ -810,11 +810,14 @@ class SiteTmdbFtv(SiteTmdb):
             info = tmdb.info(language='ko')
             info_en = tmdb.info(language='en')
 
-            if 'backdrop_path' in info:
-                backdrop_url = cls.get_image_url(info['backdrop_path'], 'backdrop') if info.get('backdrop_path') else ''
-                entity.art.append(EntityThumb(aspect='landscape', value=backdrop_url, site=cls.site_name, score=200))
-            if 'poster_path' in info:
-                entity.art.append(EntityThumb(aspect='poster', value=cls.get_image_url(info['poster_path']), site=cls.site_name, score=200))
+            if backdrop_path := info.get('backdrop_path'):
+                backdrop_url = cls.get_image_url(backdrop_path, 'backdrop')
+                backdrop_thumb_url = cls.get_image_url(backdrop_path, 'backdrop', 'thumb')
+                entity.art.append(EntityThumb(aspect='landscape', value=backdrop_url, thumb=backdrop_thumb_url, site=cls.site_name, score=200))
+            if poster_path := info.get('poster_path'):
+                poster_url = cls.get_image_url(poster_path, 'poster')
+                poster_thumb_url = cls.get_image_url(poster_path, 'poster', 'thumb')
+                entity.art.append(EntityThumb(aspect='poster', value=poster_url, thumb=poster_thumb_url, site=cls.site_name, score=200))
 
 
             if 'created_by' in info:
