@@ -581,7 +581,10 @@ class SiteDaumTv(SiteDaum):
                 actor_or_staff.order = order_actor
                 order_actor += 1
                 actor_or_staff.role = person.get('role') or ''
-                actor_or_staff.thumb = person.get('thumb') or ''
+                thumb = person.get('thumb') or ''
+                if not thumb.startswith('http'):
+                    thumb = ''
+                actor_or_staff.thumb = thumb
                 match person.get('category'):
                     case '출연':
                         actor_or_staff.type = 'actor'
