@@ -128,7 +128,7 @@ class SiteDaumMovie(SiteDaum):
             primary_movie.link = card_title.get('link') or ""
             primary_movie.image_url = card_info.get('image') or card_info.get('thumb') or ""
             primary_movie.title_en = title_in_english or ""
-            primary_movie.desc = "\n".join((", ".join( (card_info.get('감독') or "") + (card_info.get('개요') or "") ), card_info.get('줄거리') or ""))
+            primary_movie.desc = "\n".join((", ".join((card_info.get('감독') or ()) + (card_info.get('개요') or ())), card_info.get('줄거리') or ""))
             primary_movie.score = 100
             primary_movie.originaltitle = primary_movie.title if "한국" in card_info.get('개요') or () else title_in_english or ""
         else:
