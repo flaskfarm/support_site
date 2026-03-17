@@ -413,7 +413,7 @@ class SiteDaumTv(SiteDaum):
             except Exception as e:
                 logger.warning(repr(e))
         if current_episodes:
-            #logger.debug(f"{show_title}: episodes='{current_episodes}'")
+            #logger.debug(f"{show_title}: episodes='{current_episodes}' {last_ep_url=}")
             pass
         return last_ep_no, last_ep_url
 
@@ -673,6 +673,7 @@ class SiteDaumTv(SiteDaum):
                 counter += 1
             else:
                 logger.error(f"회차 목록 조회 최대 횟수 도달: {counter=} {spid=} {last_ep_no=} {last_ep_url=}")
+            #logger.debug(f"최종 회차 목록 조회 횟수: {counter}")
         return caching(lambda: episodes, cache_key, cls.cache_expiry, cls.cache_enable)()
 
     @classmethod

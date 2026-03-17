@@ -195,9 +195,11 @@ class SiteWavveTv(SiteWavve):
 
                 if len(show['actor']) == 0:
                     for item in epi['episodeactors'].split(','):
-                        actor = EntityActor(item.strip())
-                        actor.name = item.strip()
-                        show['actor'].append(actor.as_dict())
+                        tmp = item.strip()
+                        if tmp:
+                            actor = EntityActor(tmp)
+                            actor.name = item.strip()
+                            show['actor'].append(actor.as_dict())
 
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
