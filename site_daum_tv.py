@@ -156,7 +156,10 @@ class SiteDaumTv(SiteDaum):
             try:
                 if card_tab.get('출연'):
                     people_html = cls.get_tree(card_tab.get('출연'))
-                    entity.actor = cls.parse_show_people(people_html)
+                    people = cls.parse_show_people(people_html)
+                    entity.actor = people.get('actor') or []
+                    entity.credits = people.get('writer') or []
+                    entity.director = people.get('director') or []
             except Exception:
                 logger.exception(f"인물 정보를 검색하는 도중 오류가 발생했습니다: {error_info}")
 
@@ -571,7 +574,12 @@ class SiteDaumTv(SiteDaum):
 
     @classmethod
     def parse_show_people(cls, container: HtmlElement) -> list[EntityActor]:
-        actors = []
+        data = {
+            'director': [],
+            'producer': [],
+            'writer': [],
+            'actor': [],
+        }
         if cast_containers := container.xpath(".//div[@id='tvpColl']//div[contains(@class, 'cont_cast')]"):
             people = cls.parse_people(cast_containers[0])
             order_actor = 0
@@ -585,17 +593,24 @@ class SiteDaumTv(SiteDaum):
                 if not thumb.startswith('http'):
                     thumb = ''
                 actor_or_staff.thumb = thumb
-                match person.get('category'):
-                    case '출연':
-                        actor_or_staff.type = 'actor'
-                        actors.append(actor_or_staff)
-                    case '제작':
-                        actor_or_staff.type = 'staff'
-                        actors.append(actor_or_staff)
-                    case _:
-                        actor_or_staff.type = 'staff'
-                        actors.append(actor_or_staff)
-        return actors
+                if (person.get('category') or '') == '출연':
+                    actor_or_staff.type = 'actor'
+                    data['actor'].append(actor_or_staff)
+                else:
+                    match person.get('role'):
+                        case '출연':
+                            actor_or_staff.type = 'actor'
+                            data['actor'].append(actor_or_staff)
+                        case '제작':
+                            actor_or_staff.type = 'producer'
+                            data['producer'].append(actor_or_staff)
+                        case '작가':
+                            actor_or_staff.type = 'writer'
+                            data['writer'].append(actor_or_staff)
+                        case _:
+                            actor_or_staff.type = 'director'
+                            data['director'].append(actor_or_staff)
+        return data
 
     @classmethod
     def parse_episodes(cls, container: HtmlElement, spid: str, title: str) -> dict:
