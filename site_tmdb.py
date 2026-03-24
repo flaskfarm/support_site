@@ -110,6 +110,37 @@ class SiteTmdb(object):
                         backdrop_url = cls.get_image_url(backdrop['file_path'], 'backdrop')
                         thumb_url = cls.get_image_url(backdrop['file_path'], 'backdrop', 'thumb')
                         data.append(EntityThumb(aspect='landscape', value=backdrop_url, thumb=thumb_url, site='tmdb', score=backdrop['score']+100).as_dict())
+            
+            if logos := tmdb_images_dict.get('logos'):
+                max_average = max(logo.get("vote_average") or 5 for logo in logos)
+                max_count = max(logo.get("vote_count") or 1 for logo in logos)
+                for idx, logo in enumerate(logos):
+                    try:
+                        score = (logo.get('vote_average') or 0) / max_average * POSTER_SCORE_RATIO
+                        score += (logo.get('vote_count') or 0) / max_count * (1 - POSTER_SCORE_RATIO)
+                        logos[idx]['score'] = score
+                        lang = logo.get('iso_639_1')
+                        if lang == 'xx' or lang == 'none':
+                            logos[idx]['score'] = float(logos[idx]['score']) + 2
+                        elif lang == 'ko':
+                            logos[idx]['score'] = float(logos[idx]['score']) + 3
+                        elif lang == 'en':
+                            logos[idx]['score'] = float(logos[idx]['score']) + 1
+                        else:
+                            logos[idx]['score'] = float(logos[idx]['score']) - 2
+                    except Exception as e:
+                        logger.error(str(e))
+                
+                logos = sorted(logos, key=lambda k: k.get('score') or 0, reverse=True)
+                for idx, logo in enumerate(logos):
+                    if idx > ARTWORK_ITEM_LIMIT:
+                        break
+                    try:
+                        logo_url = cls.get_image_url(logo.get('file_path'), 'logo')
+                        thumb_url = cls.get_image_url(logo.get('file_path'), 'logo', 'thumb')
+                        data.append(EntityThumb(aspect='logo', value=logo_url, thumb=thumb_url, site='tmdb', score=logo.get('score') or 0).as_dict())
+                    except Exception as e:
+                        logger.error(str(e))
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
