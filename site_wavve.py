@@ -166,6 +166,9 @@ class SiteWavveTv(SiteWavve):
             show['thumb'].append(EntityThumb(aspect='landscape', value=SiteUtil.normalize_url(program_info['image']), site=cls.site_name, score=0).as_dict())
             program_info['posterimage']= program_info['posterimage'].replace('img.pooq.co.kr/BMS/program_poster', 'image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster')
             show['thumb'].append(EntityThumb(aspect='poster', value=SiteUtil.normalize_url(program_info['posterimage']), site=cls.site_name, score=score).as_dict())
+            logo_image = program_info.get('programtitlelogoimage') or program_info.get('seasontitlelogoimage') or ''
+            if logo_image:
+                show['thumb'].append(EntityThumb(aspect='logo', value=SiteUtil.normalize_url(logo_image), site=cls.site_name, score=100).as_dict())
 
             page = 1
             epi = None
