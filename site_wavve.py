@@ -66,10 +66,17 @@ class SiteWavveTv(SiteWavve):
                     entity.title = item['title_list'][0]['text']
                     if entity.title.find('[스페셜]') != -1:
                         continue
-                    #entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + item['event_list'][1]['url'].split('=')[1]
-                    match = re.search('id=(?P<code>[^&\n]+)', item['event_list'][1]['url'])
-                    if match:
-                        entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + match.group('code')
+                    entity.code = None
+                    for event in item.get('event_list') or ():
+                        if event.get('type') != 'on-navigation':
+                            continue
+                        match = re.search(r'id=(?P<code>[^&\n]+)', event.get('url') or '')
+                        if match:
+                            entity.code = (kwargs['module_char'] if 'module_char' in kwargs else cls.module_char) + cls.site_char + match.group('code')
+                            break
+                    if not entity.code:
+                        logger.error(f"프로그램 ID를 찾지 못 했습니다: {entity.title}")
+                        continue
                     item['thumbnail'] = item['thumbnail'].replace('img.pooq.co.kr/BMS/program_poster', 'image.wavve.com/v1/thumbnails/480_720_20_80/BMS/program_poster')
                     entity.image_url = SiteUtil.normalize_url(item['thumbnail'])
                     if SiteUtil.compare_show_title(entity.title, keyword):
