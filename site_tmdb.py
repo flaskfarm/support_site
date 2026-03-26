@@ -39,9 +39,13 @@ class SiteTmdb(object):
             "still": {"default": "original", "thumb": "w92"}, # "w92", "w185", "w300", "original"
         }
         try:
-            cls.image_sizes |= json.loads(user_image_sizes)
+            user_image_sizes = json.loads(user_image_sizes)
+            for key in cls.image_sizes.keys() & user_image_sizes.keys():
+                if isinstance(user_image_sizes[key], dict):
+                    cls.image_sizes[key].update(user_image_sizes[key])
         except Exception:
             ...
+        logger.debug(f"TMDB image sizes: {cls.image_sizes}")
 
     @classmethod
     def get_image_url(cls, image_path: str, category: str = 'poster', size: str = 'default') -> str:
