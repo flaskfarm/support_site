@@ -366,7 +366,7 @@ class SiteDaumTv(SiteDaum):
                 pass
         if selected_premiered is not None and selected_episode is not None:
             cache_key = f"daum:tv:show:{show_id}:episodes:{selected_episode}:premiered"
-            caching(lambda: selected_premiered, cache_key, cls.cache_expiry, cache_enable=cls.cache_enable)()
+            caching(lambda: selected_premiered, cache_key, cls.cache_expiry, cache_enable=cls.cache_enable, force_push=True)()
             if bucket.get(selected_episode):
                 bucket[selected_episode]['daum']['premiered'] = selected_premiered
 
@@ -779,7 +779,7 @@ class SiteDaumTv(SiteDaum):
         try:
             date: datetime = cls.parse_date_text(date_text)
             premiered = date.strftime('%Y-%m-%d') if date else date_text
-            caching(lambda: premiered, f"daum:tv:show:{show_id}:episodes:{str(episode_index)}:premiered", cls.cache_expiry, cls.cache_enable)()
+            caching(lambda: premiered, f"daum:tv:show:{show_id}:episodes:{str(episode_index)}:premiered", cls.cache_expiry, cls.cache_enable, force_push=True)()
             year = date.year if date else 1900
             weekday = cls.weekdays[date.weekday()] if date else None
             title_date = date.strftime("%Y.%m.%d.") if date else date_text
