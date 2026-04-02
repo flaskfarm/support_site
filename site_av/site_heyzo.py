@@ -181,7 +181,7 @@ class SiteHeyzo(SiteAvBase):
                 if not title_match: title_match = re.search(r'<h1>(.*?)</h1>', m_html)
                 if title_match: tmp['title'] = title_match.group(1).strip()
                 
-                date_match = re.search(r'配信日：</span>\s*(\d{4}-\d{2}-\d{2})', m_html)
+                date_match = re.search(r'配信(?:日|期間)：</span>\s*(\d{4}-\d{2}-\d{2})', m_html)
                 if date_match:
                     tmp['premiered'] = date_match.group(1)
                     tmp['year'] = int(tmp['premiered'][:4])
