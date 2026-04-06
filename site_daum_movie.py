@@ -132,7 +132,7 @@ class SiteDaumMovie(SiteDaum):
             primary_movie.score = 100
             primary_movie.originaltitle = primary_movie.title if "한국" in card_info.get('개요') or () else title_in_english or ""
         else:
-            primary_movie.art.append(EntityThumb(aspect='poster', value=card_info.get('image') or '', thumb=card_info.get('thumb') or '', site=cls.site_name, score=101))
+            primary_movie.art.append(EntityThumb(aspect='poster', value=card_info.get('image') or '', thumb=card_info.get('thumb') or '', site=cls.site_name, score=100))
             primary_movie.plot = card_info.get('줄거리') or ""
             primary_movie.code_list.append(["daum_id", code[2:]])
             primary_movie.premiered = card_info.get('개봉') or ""
