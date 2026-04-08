@@ -41,7 +41,7 @@ class SiteDmm(SiteAvBase):
     def search(cls, keyword, do_trans, manual):
         ret = {}
         try:
-            data_list = cls.__search(keyword, do_trans=do_trans, manual=manual)
+            data_list = cls.__search(keyword, do_trans=do_trans, manual=manual, retry_step=0)
         except Exception as exception:
             logger.exception("SearchErr:")
             ret["ret"] = "exception"; ret["data"] = str(exception)
@@ -52,7 +52,7 @@ class SiteDmm(SiteAvBase):
 
 
     @classmethod
-    def __search(cls, keyword, do_trans, manual, is_retry: bool = False):
+    def __search(cls, keyword, do_trans, manual, retry_step: int = 0):
         # logger.debug(f"SITE_DMM: __search received dmm_parser_rules: {dmm_parser_rules}")
         #if not cls._ensure_age_verified(): return []
 
@@ -67,14 +67,8 @@ class SiteDmm(SiteAvBase):
         keyword_processed_parts_for_score = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
         keyword_processed_parts_for_score = [part for part in keyword_processed_parts_for_score if part]
 
-        # `__get_keyword_for_url`로부터 keyword와 재시도용 파트를 모두 받음
-        keyword_for_url, label_part_for_retry, num_part_for_retry = cls.__get_keyword_for_url(temp_keyword, is_retry)
-
-        if is_retry:
-            logger.debug(f"DMM Search [RETRY]: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
-        else:
-            logger.debug(f"DMM Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
-
+        keyword_for_url, label_part_for_retry, num_part_for_retry = cls.__get_keyword_for_url(temp_keyword, retry_step)
+        logger.debug(f"DMM Search [STEP {retry_step}]: original='{original_keyword}', keyword_for_url='{keyword_for_url}'")
 
         # --- 검색 URL 생성 ---
         # search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': keyword_for_url }
@@ -328,14 +322,15 @@ class SiteDmm(SiteAvBase):
                     logger.debug(f"[{cls.site_name}] Group for '{ui_code}' has no standard version. No penalties applied.")
 
         # --- 검색 결과가 없고, 아직 재시도 안했으며, 재시도용 정보가 있을 경우 ---
-        if not ret_temp_before_filtering and not is_retry and label_part_for_retry and num_part_for_retry:
-            logger.debug(f"DMM Search: No results for '{keyword_for_url}'. Retrying with 3-digit padding.")
-            return cls.__search(
-                keyword=original_keyword,
-                do_trans=do_trans,                 
-                manual=manual,
-                is_retry=True # 재시도임을 명시
-            )
+        if not ret_temp_before_filtering and label_part_for_retry and num_part_for_retry:
+            if retry_step == 0:
+                logger.debug(f"DMM Search: No results for '{keyword_for_url}'. Moving to Step 1 (3-digit padding).")
+                return cls.__search(original_keyword, do_trans, manual, retry_step=1)
+            
+            # Step 1 실패 시, 숫자가 99 이하인 경우에만 Step 2 (2-digit) 진행
+            elif retry_step == 1 and num_part_for_retry.isdigit() and int(num_part_for_retry) <= 99:
+                logger.debug(f"DMM Search: No results for '{keyword_for_url}'. Moving to Step 2 (2-digit padding).")
+                return cls.__search(original_keyword, do_trans, manual, retry_step=2)
 
         # --- 2단계: Blu-ray 필터링 ---
         # if not ret_temp_before_filtering: return []
@@ -414,33 +409,31 @@ class SiteDmm(SiteAvBase):
 
         logger.debug(f"DMM Search: Variant filtering complete. Items after: {len(final_filtered_list)}")
 
-        # --- 3단계: 최종 결과 처리 및 재시도 판단 ---
+        # --- 2차 재시도 로직 (필터 후 결과 없음 또는 저득점) ---
         should_retry = False
         if not final_filtered_list:
             should_retry = True
             logger.debug("DMM Search: No results after filtering. Preparing to retry.")
         else:
-            # 최고 점수 확인
             max_score = max(item.get("score", 0) for item in final_filtered_list)
             if max_score < 80:
                 should_retry = True
                 logger.debug(f"DMM Search: Max score is {max_score} (under 80). Preparing to retry for better results.")
 
-        # 재시도 실행 로직
-        if should_retry and not is_retry and label_part_for_retry and num_part_for_retry:
-            logger.debug(f"DMM Search: Retrying with 3-digit padding for '{original_keyword}'.")
-            return cls.__search(
-                keyword=original_keyword,
-                do_trans=do_trans, 
-                manual=manual,
-                is_retry=True # 재시도임을 명시
-            )
+        if should_retry and label_part_for_retry and num_part_for_retry:
+            if retry_step == 0:
+                logger.debug(f"DMM Search: Retrying '{original_keyword}' (Moving to Step 1).")
+                return cls.__search(original_keyword, do_trans, manual, retry_step=1)
+            elif retry_step == 1 and num_part_for_retry.isdigit() and int(num_part_for_retry) <= 99:
+                logger.debug(f"DMM Search: Retrying '{original_keyword}' (Moving to Step 2).")
+                return cls.__search(original_keyword, do_trans, manual, retry_step=2)
 
+        # 결과 반환 및 로깅
         sorted_result = sorted(final_filtered_list, key=lambda k: k.get("score", 0), reverse=True)
 
         if sorted_result:
             log_count = min(len(sorted_result), 10)
-            log_prefix = "[RETRY RESULT]" if is_retry else "[INITIAL RESULT]"
+            log_prefix = f"[STEP {retry_step} RESULT]"
             logger.debug(f"DMM Search: {log_prefix} Top {log_count} results for '{original_keyword}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
                 logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title')}'")
@@ -1172,43 +1165,50 @@ class SiteDmm(SiteAvBase):
     ################################################
     # region 전용 UTIL
 
-
     # 검색용 키워드 반환
     @classmethod
-    def __get_keyword_for_url(cls, temp_keyword, is_retry):
+    def __get_keyword_for_url(cls, temp_keyword, retry_step):
         keyword_for_url = ""
         label_part_for_retry = ""
         num_part_for_retry = ""
 
         parsed_ui_code, label_for_search, num_part = cls._parse_ui_code(temp_keyword, 'unknown')
 
-        # 파서가 유의미한 결과를 반환했는지 확인 (레이블과 숫자가 모두 있거나, 하이픈이 있는 경우)
         if (label_for_search and num_part) or '-' in parsed_ui_code:
             label_part_for_retry = label_for_search
             num_part_for_retry = num_part
 
             if num_part.isdigit():
-                padding_length = 3 if is_retry else 5
-                keyword_for_url = label_for_search.lower() + num_part.zfill(padding_length)
+                clean_num_part = num_part.lstrip('0') or '0'
+
+                if retry_step == 0:   # 1순위: VOD (5자리)
+                    padding_length = 5
+                elif retry_step == 1: # 2순위: DVD (3자리)
+                    padding_length = 3
+                else:                 # 3순위 (Step 2): 2자리 패딩
+                    padding_length = 2
+
+                keyword_for_url = label_for_search.lower() + clean_num_part.zfill(padding_length)
             else:
                 keyword_for_url = label_for_search.lower() + num_part.lower()
 
-            logger.debug(f"DMM Keyword Gen: Parsed '{temp_keyword}' -> '{parsed_ui_code}' -> Search keyword '{keyword_for_url}' (using search_label: '{label_for_search}')")
+            logger.debug(f"DMM Keyword Gen (Step {retry_step}): '{temp_keyword}' -> '{keyword_for_url}'")
             return keyword_for_url, label_part_for_retry, num_part_for_retry
 
-        # YAML 파서가 실패했을 경우, 기존의 일반 로직을 폴백으로 사용 ---
+        # --- YAML 파서 실패 시 일반 로직 폴백 ---
         logger.debug(f"DMM Keyword Gen: YAML Parsing failed for '{temp_keyword}'. Using generic fallback.")
 
         temp_parts_for_url_gen = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
         temp_parts_for_url_gen = [part for part in temp_parts_for_url_gen if part]
-
-        padding_length = 3 if is_retry else 5
 
         if len(temp_parts_for_url_gen) == 2:
             label_part_for_retry = temp_parts_for_url_gen[0]
             num_part_for_retry = temp_parts_for_url_gen[1]
 
             if num_part_for_retry.isdigit():
+                if retry_step == 0: padding_length = 5
+                elif retry_step == 1: padding_length = 3
+                else: padding_length = 2
                 keyword_for_url = label_part_for_retry.lower() + num_part_for_retry.zfill(padding_length)
             else:
                 keyword_for_url = label_part_for_retry.lower() + num_part_for_retry.lower()
@@ -1219,6 +1219,10 @@ class SiteDmm(SiteAvBase):
             if match_label_num:
                 label_part_for_retry = match_label_num.group(1)
                 num_part_for_retry = match_label_num.group(2)
+                
+                if retry_step == 0: padding_length = 5
+                elif retry_step == 1: padding_length = 3
+                else: padding_length = 2
                 keyword_for_url = label_part_for_retry.lower() + num_part_for_retry.zfill(padding_length)
             else: 
                 keyword_for_url = single_part
@@ -1226,7 +1230,6 @@ class SiteDmm(SiteAvBase):
             keyword_for_url = "".join(temp_parts_for_url_gen)
 
         return keyword_for_url, label_part_for_retry, num_part_for_retry
-
 
 
     # 기본헤더에서 Referer를 설정하여 요청 헤더를 반환하는 메서드
