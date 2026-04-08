@@ -684,7 +684,13 @@ def caching(func: Callable, key: str = None, expiry: int = None, cache_enable: b
                     # 캐시로 불러온 데이터는 key 타입이 str 이기 때문에 다시 정수로 변환 (타 플러그인에서 int로 처리할 수 있도록)
                     if episodes := deep_get(result, ('data', 'extra_info', 'episodes')):
                         for ep_num in tuple(episodes.keys()):
-                            episodes[int(ep_num)] = episodes.pop(ep_num)
+                            try:
+                                # 에피소드 번호가 실수인 경우가 있음
+                                num = float(ep_num)
+                                new_key = int(num) if num.is_integer() else num
+                                episodes[new_key] = episodes.pop(ep_num)
+                            except (ValueError, TypeError):
+                                continue
                     return result
                 else:
                     return __push_cache()
