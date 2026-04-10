@@ -360,7 +360,7 @@ class SiteJav321(SiteAvBase):
             except Exception as e_vr_check:
                 logger.error(f"[{cls.site_name}] Error during VR check: {e_vr_check}")
 
-            logger.info(f"Jav321: __info finished for {code}. UI Code: {ui_code_for_image}")
+            logger.debug(f"Jav321: __info finished for {code}. UI Code: {ui_code_for_image}")
             return entity
 
         except Exception as e_main:
