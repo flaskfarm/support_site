@@ -917,7 +917,7 @@ class SiteDmm(SiteAvBase):
             logger.error(f"DMM Info: Error during landscape fallback logic for {code}: {e_fallback}")
             logger.error(traceback.format_exc())
 
-        logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}")
+        logger.debug(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}")
         return entity
 
 

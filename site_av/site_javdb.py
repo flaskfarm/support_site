@@ -338,7 +338,7 @@ class SiteJavdb(SiteAvBase):
         except Exception as e_vr_check:
             logger.error(f"[{cls.site_name}] Error during VR check: {e_vr_check}")
 
-        logger.info(f"JavDB: __info finished for {code}. UI Code: {entity.ui_code}")
+        logger.debug(f"JavDB: __info finished for {code}. UI Code: {entity.ui_code}")
         return entity
 
 
