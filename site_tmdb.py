@@ -845,7 +845,7 @@ class SiteTmdbFtv(SiteTmdb):
                 'Producer': ([], entity.producer),
                 'Writer': ([], entity.writer),
                 'Novel': ([], entity.writer),
-                'Book': ([], entity.credits),
+                'Book': ([], entity.writer),
                 'Screenplay': ([], entity.writer)
             }
             cls._set_crews(info, mappings)
