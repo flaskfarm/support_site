@@ -153,42 +153,34 @@ class SiteTmdb(object):
     def _set_crews(cls, data: dict, mappings: dict, should_translate: bool = False) -> None:
         for item in data.get('crew') or ():
             job = item.get('job')
-            if not mappings.get(job):
-                continue
-            try:
+            if job in mappings:
                 mappings[job][0].append(item)
-            except Exception as e:
-                logger.error(str(e))
         for job in mappings:
             try:
                 mappings[job][0].sort(key=lambda x: ((x.get('popularity') or 0), -(x.get('id') or 0)))
             except Exception as e:
                 logger.error(str(e))
         max_crews = 20
-        selected_ids = set()
-        while len(selected_ids) < max_crews:
+        selected_crew_count = 0
+        while selected_crew_count < max_crews:
             should_stop = True
-            for job, (data_list, entity_list) in mappings.items():
+            for data_list, entity_list in mappings.values():
                 try:
                     if not data_list:
                         continue
-                    should_stop = False
                     item = data_list.pop()
-                    tid = item.get('id') or 0
-                    if tid in selected_ids:
-                        continue
-                    selected_ids.add(tid)
+                    should_stop = False
                     if crew_name := item.get('name'):
-                        if should_translate:
+                        if should_translate and not SiteUtil.is_include_hangul(crew_name):
                             try:
-                                if not SiteUtil.is_include_hangul(crew_name):
-                                    crew_name = SiteUtil.trans(crew_name, source='en', target='ko').replace(' ', '')
-                                    logger.info(crew_name)
+                                if translated := SiteUtil.trans(crew_name, source='en', target='ko'):
+                                    crew_name = translated.replace(' ', '')
                             except Exception as e:
                                 logger.warning(str(e))
                         entity_list.append(crew_name)
-                    if len(selected_ids) >= max_crews:
-                        break
+                        selected_crew_count += 1
+                    if selected_crew_count >= max_crews:
+                        return
                 except Exception as e:
                     logger.error(str(e))
             if should_stop:
@@ -503,6 +495,7 @@ class SiteTmdbMovie(SiteTmdb):
                     'Producer': ([], entity.producers),
                     'Writer': ([], entity.credits),
                     'Novel': ([], entity.credits),
+                    'Book': ([], entity.credits),
                     'Screenplay': ([], entity.credits)
                 }
                 cls._set_crews(info, mappings, trans)
@@ -852,6 +845,7 @@ class SiteTmdbFtv(SiteTmdb):
                 'Producer': ([], entity.producer),
                 'Writer': ([], entity.writer),
                 'Novel': ([], entity.writer),
+                'Book': ([], entity.credits),
                 'Screenplay': ([], entity.writer)
             }
             cls._set_crews(info, mappings)
