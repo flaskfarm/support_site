@@ -149,6 +149,50 @@ class SiteTmdb(object):
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
 
+    @classmethod
+    def _set_crews(cls, data: dict, mappings: dict, should_translate: bool = False) -> None:
+        for item in data.get('crew') or ():
+            job = item.get('job')
+            if not mappings.get(job):
+                continue
+            try:
+                mappings[job][0].append(item)
+            except Exception as e:
+                logger.error(str(e))
+        for job in mappings:
+            try:
+                mappings[job][0].sort(key=lambda x: ((x.get('popularity') or 0), -(x.get('id') or 0)))
+            except Exception as e:
+                logger.error(str(e))
+        max_crews = 20
+        selected_ids = set()
+        while len(selected_ids) < max_crews:
+            should_stop = True
+            for job, (data_list, entity_list) in mappings.items():
+                try:
+                    if not data_list:
+                        continue
+                    should_stop = False
+                    item = data_list.pop()
+                    tid = item.get('id') or 0
+                    if tid in selected_ids:
+                        continue
+                    selected_ids.add(tid)
+                    if crew_name := item.get('name'):
+                        if should_translate:
+                            try:
+                                if not SiteUtil.is_include_hangul(crew_name):
+                                    crew_name = SiteUtil.trans(crew_name, source='en', target='ko').replace(' ', '')
+                                    logger.info(crew_name)
+                            except Exception as e:
+                                logger.warning(str(e))
+                        entity_list.append(crew_name)
+                    if len(selected_ids) >= max_crews:
+                        break
+                except Exception as e:
+                    logger.error(str(e))
+            if should_stop:
+                break
 
 
 
@@ -452,20 +496,16 @@ class SiteTmdbMovie(SiteTmdb):
                         actor.thumb = cls.get_image_url(tmdb_item['profile_path'], 'profile')
 
                     entity.actor.append(actor)
-                for tmdb_item in info['crew'][:20]:
-                    target_list = None
-                    if tmdb_item['job'] == 'Director': target_list = entity.director
-                    elif tmdb_item['job'] == 'Executive Producer': target_list = entity.producers
-                    elif tmdb_item['job'] == 'Producer': target_list = entity.producers
-                    elif tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']: target_list = entity.credits
-                    if target_list != None:
-                        try:
-                            _ = tmdb_item['name']
-                            if SiteUtil.is_include_hangul(_) == False:
-                                _ = SiteUtil.trans(_, source='en', target='ko').replace(' ', '') if trans else tmdb_item['name']
-                            target_list.append(_)
-                        except Exception:
-                            target_list.append(tmdb_item['name'])
+                mappings = {
+                    # EntityMovie2: director, producers, credits
+                    'Director': ([], entity.director),
+                    'Executive Producer': ([], entity.producers),
+                    'Producer': ([], entity.producers),
+                    'Writer': ([], entity.credits),
+                    'Novel': ([], entity.credits),
+                    'Screenplay': ([], entity.credits)
+                }
+                cls._set_crews(info, mappings, trans)
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -805,15 +845,16 @@ class SiteTmdbFtv(SiteTmdb):
             if crew == False:
                 return
 
-            for tmdb_item in info['crew'][:20]:
-                if tmdb_item['job'] == 'Director':
-                    entity.director.append(tmdb_item['name'])
-                if tmdb_item['job'] == 'Executive Producer':
-                    entity.producer.append(tmdb_item['name'])
-                if tmdb_item['job'] == 'Producer':
-                    entity.producer.append(tmdb_item['name'])
-                if tmdb_item['job'] in ['Writer', 'Novel', 'Screenplay']:
-                    entity.writer.append(tmdb_item['name'])
+            mappings = {
+                # EntityFtv: director, producer, writer
+                'Director': ([], entity.director),
+                'Executive Producer': ([], entity.producer),
+                'Producer': ([], entity.producer),
+                'Writer': ([], entity.writer),
+                'Novel': ([], entity.writer),
+                'Screenplay': ([], entity.writer)
+            }
+            cls._set_crews(info, mappings)
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
