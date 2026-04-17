@@ -1703,7 +1703,14 @@ class SiteAvBase:
         # 모든 규칙에 실패했을 경우의 최후의 폴백
         if not rule_applied:
             logger.debug(f"UI Code Parser: No rule matched for '{processed_cid}'. Falling back.")
-            final_label_part, final_num_part = processed_cid, ""
+            
+            match_fallback = re.match(r'^([0-9a-z]+)-(\d+)$', processed_cid, re.I)
+            if match_fallback:
+                final_label_part = match_fallback.group(1)
+                final_num_part = match_fallback.group(2)
+                logger.debug(f"UI Code Parser Fallback: Hyphen split successful -> Label:'{final_label_part}', Num:'{final_num_part}'")
+            else:
+                final_label_part, final_num_part = processed_cid, ""
 
         # === 최종 값 조합 ===
         label_ui_part = final_label_part.upper().strip('-')
