@@ -49,47 +49,25 @@ except ImportError:
     os.system("pip install dateutils")
     from dateutil.parser import parse
 
-try:
-    from imagehash import dhash as hfun, phash, average_hash
-    _IMAGEHASH_AVAILABLE = True
-except ImportError:
-    _IMAGEHASH_AVAILABLE = False
-    hfun = phash = average_hash = None
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
-try:
-    import cv2
-    import numpy as np
-    _OPENCV_AVAILABLE = True
-except ImportError:
-    _OPENCV_AVAILABLE = False
-
-try:
-    import mediapipe as mp
-    from mediapipe.tasks import python
-    from mediapipe.tasks.python import vision
-    _MEDIAPIPE_AVAILABLE = True
-except ImportError:
-    _MEDIAPIPE_AVAILABLE = False
-
 # Selenium Imports
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, WebDriverException
-    is_selenium_available = True
-except ImportError:
-    is_selenium_available = False
+#try:
+#    from selenium import webdriver
+#    from selenium.webdriver.common.by import By
+#    from selenium.webdriver.support.ui import WebDriverWait
+#    from selenium.webdriver.support import expected_conditions as EC
+#    from selenium.common.exceptions import TimeoutException, WebDriverException
+#    is_selenium_available = True
+#except ImportError:
+#    is_selenium_available = False
+
+is_selenium_available = False
 
 # Stealth Import
-try:
-    from selenium_stealth import stealth
-    is_stealth_available = True
-except ImportError:
-    is_stealth_available = False
+#try:
+#    from selenium_stealth import stealth
+#    is_stealth_available = True
+#except ImportError:
+#    is_stealth_available = False
 
 
 class SiteAvBase:
@@ -983,10 +961,26 @@ class SiteAvBase:
         }
 
         # imagehash 사용 조건 확인 및 ps_url 조정
-        use_advanced_comparison = _IMAGEHASH_AVAILABLE and cls.config.get('use_imagehash', False)
+        use_advanced_comparison = False
+        is_imagehash_installed = False
+        
+        if cls.config.get('use_imagehash', False):
+            try:
+                import imagehash
+                use_advanced_comparison = True
+                is_imagehash_installed = True
+            except ImportError:
+                is_imagehash_installed = False
+        else:
+            # 설정이 꺼져 있어도 설치 여부는 확인 (로그 출력용)
+            try:
+                import imagehash
+                is_imagehash_installed = True
+            except ImportError:
+                is_imagehash_installed = False
 
         if ps_url and not use_advanced_comparison:
-            if not _IMAGEHASH_AVAILABLE:
+            if not is_imagehash_installed:
                 logger.warning("imagehash library not found. Falling back to basic poster selection.")
             else:
                 logger.debug("Imagehash is disabled by user setting. Falling back to basic poster selection.")
@@ -1586,6 +1580,11 @@ class SiteAvBase:
     def is_hq_poster(cls, im_sm_obj, im_lg_obj):
         """두 PIL Image 객체의 시각적 유사성을 판단합니다."""
         try:
+            from imagehash import dhash as hfun, phash
+        except ImportError:
+            return False
+
+        try:
             if im_sm_obj is None or im_lg_obj is None: return False
 
             ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
@@ -1605,6 +1604,11 @@ class SiteAvBase:
     @classmethod
     def has_hq_poster(cls, im_sm_obj, im_lg_obj, aspect_ratio):
         """두 PIL Image 객체를 받아 크롭 영역 일치 여부를 판단하고 크롭 위치를 반환합니다."""
+        try:
+            from imagehash import phash, average_hash
+        except ImportError:
+            return None
+
         try:
             if im_sm_obj is None or im_lg_obj is None: return None
 
@@ -2159,6 +2163,18 @@ class SiteAvBase:
     def _detect_body(cls, open_cv_image):
         if not cls.config.get('use_pose_landmarker'): return False, []
 
+        try:
+            import cv2
+            import numpy as np
+            import mediapipe as mp
+            from mediapipe.tasks import python
+            from mediapipe.tasks.python import vision
+        except ImportError as e:
+            logger.warning(f"[{cls.site_name}] Missing libraries for Pose Landmarker: {e}")
+            return False, []
+            
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
         model_path = cls.config.get('pose_landmarker_model_path')
         if not model_path or not os.path.exists(model_path):
             logger.error(f"[{cls.site_name}] Pose Model file missing: {model_path}")
@@ -2403,6 +2419,16 @@ class SiteAvBase:
 
     @classmethod
     def _detect_face(cls, open_cv_image, threshold=None, people_list=None, roi=None):
+        try:
+            import cv2
+            import numpy as np
+            import mediapipe as mp
+            from mediapipe.tasks import python
+            from mediapipe.tasks.python import vision
+        except ImportError as e:
+            logger.warning(f"[{cls.site_name}] Missing libraries for Face Landmarker: {e}")
+            return False, []
+
         model_path = cls.config.get('face_landmarker_model_path') 
         if not model_path or not os.path.exists(model_path):
             if not roi: logger.error(f"[{cls.site_name}] Face Model file missing: {model_path}")
@@ -2632,12 +2658,12 @@ class SiteAvBase:
         if not cls.config.get('use_smart_crop'):
             return False, []
 
-        if not _OPENCV_AVAILABLE:
-            logger.warning(f"[{cls.site_name}] OpenCV library not installed. Skipping Smart Crop.")
-            return False, []
-
-        if not _MEDIAPIPE_AVAILABLE:
-            logger.warning(f"[{cls.site_name}] MediaPipe library not installed. Skipping Smart Crop.")
+        try:
+            import cv2
+            import numpy as np
+            import mediapipe as mp
+        except ImportError as e:
+            logger.warning(f"[{cls.site_name}] Required libraries not installed. Skipping Smart Crop. ({e})")
             return False, []
 
         open_cv_image = np.array(pil_image)
@@ -3058,6 +3084,8 @@ class SiteAvBase:
     @staticmethod
     def _apply_clahe(image):
         try:
+            import cv2
+
             lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
