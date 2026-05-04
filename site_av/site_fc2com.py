@@ -686,6 +686,16 @@ class SiteFc2com(SiteAvBase):
                     logger.error(f"[{cls.site_name}] Smart Crop Error: {e}")
 
             entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+
+            has_image = bool(entity.thumb) or bool(entity.fanart)
+            has_valid_year = entity.year != 1900
+            has_seller = bool(entity.studio)
+            has_valid_title = entity.title and entity.title != entity.ui_code
+            
+            if not (has_image or has_valid_year or has_seller or has_valid_title):
+                logger.warning(f"[{cls.site_name}] Info validation failed: Missing essential metadata for {code_part}. Marking as not found.")
+                return None
+
             return entity
 
         return None
