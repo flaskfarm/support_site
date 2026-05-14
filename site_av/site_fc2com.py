@@ -654,7 +654,7 @@ class SiteFc2com(SiteAvBase):
         if is_data_found:
             entity.tag.append('FC2')
             
-            # PL 이미지 오리지널 URL 검증 (원격 URL인 경우에만)
+            # PL 이미지 오리지널 URL 검증
             if raw_image_urls['pl'] and raw_image_urls['pl'].startswith('http'):
                 base_pl_url = raw_image_urls['pl']
                 original_pl_url = cls._process_fc2_image_url(base_pl_url, target_size='original')
@@ -669,9 +669,9 @@ class SiteFc2com(SiteAvBase):
             if cls.config.get('use_smart_crop') and raw_image_urls['pl'] and not raw_image_urls['poster']:
                 try:
                     img_pl = None
-                    if local_pl_path_for_crop: # DB 로컬 파일
+                    if local_pl_path_for_crop: 
                         img_pl = Image.open(local_pl_path_for_crop)
-                    else: # 원격 URL
+                    else: 
                         res_pl = cls.get_response(raw_image_urls['pl'], stream=True, timeout=5)
                         if res_pl and res_pl.status_code == 200:
                             img_pl = Image.open(BytesIO(res_pl.content))
@@ -685,7 +685,29 @@ class SiteFc2com(SiteAvBase):
                 except Exception as e:
                     logger.error(f"[{cls.site_name}] Smart Crop Error: {e}")
 
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+            image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
+            if image_mode == 'image_server':
+                try:
+                    padded_num = code_part.zfill(7)
+                    sub_folder = padded_num[:3] 
+                    
+                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                    
+                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
+                    base_path_part = base_save_format.replace('{label}', entity.label).strip('/\\')
+                    
+                    final_relative_folder_path = os.path.join(base_path_part, sub_folder)
+                    
+                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
+                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
+                except Exception as e:
+                    logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+
+            try:
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+            except Exception as e:
+                logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
             has_image = bool(entity.thumb) or bool(entity.fanart)
             has_valid_year = entity.year != 1900
