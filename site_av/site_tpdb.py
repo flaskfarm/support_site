@@ -219,8 +219,6 @@ class SiteTpdb(SiteAvBase):
 
     @classmethod
     def search(cls, keyword, manual=False):
-        logger.info(f"======= Western search START - keyword:[{keyword}] manual:[{manual}] =======")
-        
         encoded_keyword = urllib.parse.quote(keyword)
         
         scenes_data = cls._call_api(f"/scenes?parse={encoded_keyword}&hash=")
