@@ -407,7 +407,7 @@ class SiteAvBase:
                             request_headers['Referer'] = 'https://www.mgstage.com/'
                     break
 
-            req = cls.session.get(url, proxies=proxies, headers=request_headers, stream=True)
+            req = cls.session.get(url, proxies=proxies, headers=request_headers, stream=True, timeout=(10, 120))
             req.raise_for_status()
 
         except requests.exceptions.RequestException as e:
