@@ -224,7 +224,11 @@ class SiteMgstage(SiteAvBase):
                 entity.original['tagline'] = original_tagline
                 entity.tagline = cls.trans(original_tagline)
 
-            plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[2]')
+            plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[contains(@class, "txt") and contains(@class, "introduction")]')
+            
+            if not plot_nodes:
+                plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[not(contains(@class, "more"))]')
+
             if plot_nodes:
                 try:
                     plot_html_raw = html.tostring(plot_nodes[0], encoding='unicode')
