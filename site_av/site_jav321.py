@@ -184,6 +184,8 @@ class SiteJav321(SiteAvBase):
         entity.original = {}
         ui_code_for_image = ""
         mgs_special_poster_filepath = None
+        trusted_ui_code_from_keyword = None
+        raw_h3_title_text = ""
 
         try:
             # === 2. 메타데이터 파싱 ===
