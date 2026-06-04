@@ -237,6 +237,10 @@ class SiteDmm(SiteAvBase):
                 if not item.score:
                     item.score = 20
 
+                is_outlet = raw_title_node.startswith('【アウトレット】')
+                dmm_dod_suffixes = ['（DOD）', '（BOD）', '(DOD)', '(BOD)']
+                is_dod = any(raw_title_node.endswith(x) for x in dmm_dod_suffixes)
+
                 # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
                     try:
@@ -288,6 +292,10 @@ class SiteDmm(SiteAvBase):
                     numeric_part_with_suffix = match.group(2)
                     if not numeric_part_with_suffix.isdigit():
                         item_dict['has_suffix'] = True # 특별판 플래그
+
+                # DOD / BOD / 아울렛 버전도 특별판 플래그 적용
+                if is_outlet or is_dod:
+                    item_dict['has_suffix'] = True
 
                 ret_temp_before_filtering.append(item_dict) # 최종적으로 수정된 딕셔너리를 리스트에 추가
             except Exception as e_inner_loop_dmm:
@@ -360,13 +368,13 @@ class SiteDmm(SiteAvBase):
 
             if content_type == 'dvd' or content_type == 'bluray':
                 is_outlet = original_title.startswith('【アウトレット】')
-                is_dod = original_title.endswith('（DOD）')
+
+                dmm_dod_suffixes = ['（DOD）', '（BOD）', '(DOD)', '(BOD)']
+                is_dod = any(original_title.endswith(x) for x in dmm_dod_suffixes)
 
                 base_title = original_title
                 if is_outlet:
                     base_title = base_title.replace('【アウトレット】', '', 1).strip()
-                if is_dod:
-                    base_title = base_title.replace('（DOD）', '').strip()
 
                 # 아이템 우선순위 값 (낮을수록 좋음)
                 # 0: 일반판, 1: DOD만, 2: 아울렛만, 3: 아울렛+DOD
@@ -403,6 +411,36 @@ class SiteDmm(SiteAvBase):
         final_filtered_list = list(title_variants_map.values())
         final_filtered_list.extend(other_content_types) # 다른 타입 아이템들 다시 합치기
 
+        dedup_map = {}
+        for item in final_filtered_list:
+            ui_code = item.get('ui_code')
+            if ui_code not in dedup_map:
+                dedup_map[ui_code] = item
+            else:
+                existing = dedup_map[ui_code]
+                existing_is_special = existing.get('has_suffix', False)
+                current_is_special = item.get('has_suffix', False)
+                
+                # 1순위 규칙: DOD/BOD/아울렛이 아닌 일반판(Amateur, Videoa 등)을 무조건 우선 채택
+                if existing_is_special and not current_is_special:
+                    dedup_map[ui_code] = item
+                elif not existing_is_special and current_is_special:
+                    pass
+                else:
+                    # 2순위 규칙: 둘 다 일반판이거나 둘 다 특별판인 경우 점수 비교
+                    if item.get('score', 0) > existing.get('score', 0):
+                        dedup_map[ui_code] = item
+                    elif item.get('score', 0) == existing.get('score', 0):
+                        # 3순위 규칙: 점수가 같을 경우 세부 카테고리 선호도 비교
+                        # 선호 순서: videoa(디지털) ➔ dvd(순정패키지) ➔ bluray ➔ amateur(스트리밍) ➔ unknown
+                        type_prio = {'videoa': 0, 'dvd': 1, 'bluray': 2, 'amateur': 3, 'unknown': 4}
+                        existing_prio = type_prio.get(existing.get('content_type', 'unknown'), 9)
+                        current_prio = type_prio.get(item.get('content_type', 'unknown'), 9)
+                        if current_prio < existing_prio:
+                            dedup_map[ui_code] = item
+
+        final_filtered_list = list(dedup_map.values())
+
         # 임시 필드 제거
         for item_final in final_filtered_list:
             item_final.pop('_variant_priority', None)
@@ -415,10 +453,16 @@ class SiteDmm(SiteAvBase):
             should_retry = True
             logger.debug("DMM Search: No results after filtering. Preparing to retry.")
         else:
-            max_score = max(item.get("score", 0) for item in final_filtered_list)
-            if max_score < 80:
+            has_any_standard = any(not item.get('has_suffix', False) for item in final_filtered_list)
+            
+            if not has_any_standard:
                 should_retry = True
-                logger.debug(f"DMM Search: Max score is {max_score} (under 80). Preparing to retry for better results.")
+                logger.debug("DMM Search: Only special/DOD versions found. Forcing retry to find standard version.")
+            else:
+                max_score = max(item.get("score", 0) for item in final_filtered_list)
+                if max_score < 80:
+                    should_retry = True
+                    logger.debug(f"DMM Search: Max score is {max_score} (under 80). Preparing to retry for better results.")
 
         if should_retry and label_part_for_retry and num_part_for_retry:
             if retry_step == 0:
