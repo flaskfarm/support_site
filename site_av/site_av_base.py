@@ -27,21 +27,6 @@ from ..trans_util import TransUtil
 from ..entity_base import EntityActor
 
 _CURL_CFFI_AVAILABLE = False
-try:
-    from curl_cffi import requests as cffi_requests
-    _CURL_CFFI_AVAILABLE = True
-except ImportError:
-    try:
-        logger.info("Installing curl_cffi...")
-        import subprocess
-        import sys
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "curl_cffi"])
-        
-        from curl_cffi import requests as cffi_requests
-        _CURL_CFFI_AVAILABLE = True
-        logger.info("curl_cffi installed successfully.")
-    except Exception as e:
-        logger.error(f"Failed to install curl_cffi: {e}")
 
 try:
     from dateutil.parser import parse
@@ -199,7 +184,22 @@ class SiteAvBase:
 
     @classmethod
     def get_response_cffi(cls, url, **kwargs):
-        """WAF 우회용 (curl_cffi 사용)"""
+        try:
+            from curl_cffi import requests as cffi_requests
+            _CURL_CFFI_AVAILABLE = True
+        except ImportError:
+            try:
+                logger.info("Installing curl_cffi...")
+                import subprocess
+                import sys
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "curl_cffi"])
+                
+                from curl_cffi import requests as cffi_requests
+                _CURL_CFFI_AVAILABLE = True
+                logger.info("curl_cffi installed successfully.")
+            except Exception as e:
+                logger.error(f"Failed to install curl_cffi: {e}")
+
         if not _CURL_CFFI_AVAILABLE:
             logger.error("curl_cffi not available.")
             return cls.get_response(url, **kwargs) # Fallback
