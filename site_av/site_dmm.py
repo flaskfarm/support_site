@@ -974,8 +974,8 @@ class SiteDmm(SiteAvBase):
         if api_data:
             try:
                 content = api_data['ppvContent']
-                package_image = content.get('packageImage', {})
-                img_urls_dict['pl'] = package_image.get('largeUrl')
+                package_image = content.get('packageImage', {}) or {}
+                img_urls_dict['pl'] = package_image.get('largeUrl') or package_image.get('mediumUrl')
                 
                 arts = []
                 if content.get('sampleImages'):
