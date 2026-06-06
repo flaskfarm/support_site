@@ -529,14 +529,18 @@ class SiteAvBase:
             # remote url
             try:
                 res = cls.get_response(img_src)
-                return Image.open(BytesIO(res.content))
+                img = Image.open(BytesIO(res.content))
+                img.load()
+                return img
             except Exception:
                 logger.exception("이미지 여는 중 예외:")
                 return None
         else:
             try:
                 # local file
-                return Image.open(img_src)
+                img = Image.open(img_src)
+                img.load()
+                return img
             except (FileNotFoundError, OSError):
                 logger.exception("이미지 여는 중 예외:")
                 return None
@@ -590,6 +594,7 @@ class SiteAvBase:
         try:
             bytes_im = BytesIO(content_bytes)
             im = Image.open(bytes_im)
+            im.load()
             imformat = im.format
 
             # Pillow가 포맷을 감지 못했거나, Content-Type이 binary였을 경우, im.format으로 재확인
@@ -706,6 +711,7 @@ class SiteAvBase:
         try:
             bytes_im = BytesIO(res.content)
             im = Image.open(bytes_im)
+            im.load()
             imformat = im.format
             if imformat is None: # Pillow가 포맷을 감지 못하는 경우 (드물지만 발생 가능)
                 P.logger.warning(f"image_proxy: Pillow could not determine format for image from URL: {image_url}. Attempting to infer from Content-Type.")
@@ -809,6 +815,7 @@ class SiteAvBase:
                 'site_name': cls.site_name,
                 'site_config': cls.config,
                 'image_mode': image_mode,
+                'content_type': getattr(entity, 'content_type', None),
                 'image_server_paths': {'target_folder': None, 'url_prefix': None},
                 'user_files_exist': {'poster': False, 'landscape': False},
                 'system_files_exist': {'poster': False, 'landscape': False, 'arts': 0},
@@ -1310,6 +1317,23 @@ class SiteAvBase:
 
             max_arts = site_config.get('max_arts', 0)
             final_image_sources['arts'] = final_fanarts[:max_arts] if max_arts > 0 else []
+
+        if (decision_data.get('site_name') == 'dmm' and 
+            decision_data.get('content_type') == 'amateur'):
+            
+            # 최종 결정된 포스터(P)와 가로 이미지(PL)가 동일한 경우 (둘 다 정사각형 패키지인 경우)
+            if (final_image_sources.get('poster_source') == final_image_sources.get('landscape_source')):
+                logger.debug("[ImageUtil] DMM Amateur: P and PL are identical. Replaced landscape with first sample image.")
+                
+                # arts[0]가 존재한다면 이를 가로 이미지(PL)로 대체
+                arts = raw_urls.get('arts', [])
+                if arts:
+                    final_image_sources['landscape_source'] = arts[0]
+                    final_image_sources['skip_landscape_download'] = False # 다운로드 강제화
+                    
+                    # 첫 번째 컷이 가로 이미지로 빠졌으므로, 팬아트 갤러리(Arts)에서 중복을 제거
+                    if arts[0] in final_image_sources['arts']:
+                        final_image_sources['arts'].remove(arts[0])
 
         return final_image_sources
 
