@@ -215,6 +215,8 @@ class ModuleSite(PluginModuleBase):
             P.ModelSetting.get_bool('site_wavve_credential_auto_refresh'),
             P.ModelSetting.get_int('site_wavve_credential_ttl'),
             P.ModelSetting.get_int('site_wavve_credential_cooldown'),
+            P.ModelSetting.get_bool('site_wavve_use_cache'),
+            P.ModelSetting.get_int('site_wavve_cache_expiry')
         )
         from .site_wavve import SiteWavve
         SiteWavve.initialize(

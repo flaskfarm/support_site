@@ -78,23 +78,11 @@ class SiteDaum(object):
 
     @classmethod
     def get_kakao_play_url(cls, url: str) -> str | None:
-        try:
-            content_id = url.split('/')[-1]
-            url = 'https://tv.kakao.com/katz/v2/ft/cliplink/{}/readyNplay?player=monet_html5&profile=HIGH&service=kakao_tv&section=channel&fields=seekUrl,abrVideoLocationList&startPosition=0&tid=&dteType=PC&continuousPlay=false&contentType=&{}'.format(content_id, int(time.time()))
-            data = requests.get(url).json()
-            return data['videoLocation']['url']
-        except Exception:
-            logger.exception(f"{url=}")
+        return
 
     @classmethod
     def get_kakao_play_url2(cls, data_id: str) -> str | None:
-        url = f'https://kakaotv.daum.net/katz/v3/ft/cliplink/{data_id}/videoLocation?service=daum_searchview&section=TVP&player=monet_html5&profile=HIGH4&dteType=PC&contentType=MP4'
-        try:
-            json_ = SiteUtil.get_response(url, proxy_url=cls._proxy_url, headers=cls.default_headers, cookies=cls._daum_cookie).json()
-            return json_['videoLocation']['url']
-        except Exception as e:
-            logger.warning(repr(e))
-            logger.warning(f'{url=}')
+        return
 
     @classmethod
     def change_date(cls, text: str) -> str:
@@ -109,18 +97,7 @@ class SiteDaum(object):
 
     @classmethod
     def get_kakao_video(cls, kakao_id: str, sort: str ='CreateTime', size: int = 20) -> list[dict]:
-        #sort : CreateTime PlayCount
-        ret = []
-        try:
-            url = 'https://tv.kakao.com/api/v1/ft/channels/{kakao_id}/videolinks?sort={sort}&fulllevels=clipLinkList%2CliveLinkList&fields=ccuCount%2CisShowCcuCount%2CthumbnailUrl%2C-user%2C-clipChapterThumbnailList%2C-tagList&size=20&page=1&_={timestamp}'.format(kakao_id=kakao_id, sort=sort, timestamp=int(time.time()))
-            data = requests.get(url).json()
-
-            for item in data['clipLinkList']:
-                ret.append(EntityExtra('Featurette', item['clip']['title'], 'kakao', item['id'], premiered=item['createTime'].split(' ')[0], thumb=item['clip']['thumbnailUrl']).as_dict())
-            return ret
-        except Exception:
-            logger.exception(f"{kakao_id=}")
-        return ret
+        return []
 
     @classmethod
     def parse_date_text(cls, date_text: str) -> datetime | None:
@@ -449,48 +426,7 @@ class SiteDaum(object):
 
     @classmethod
     def parse_clips(cls, container: HtmlElement) -> list[EntityExtra]:
-        clips = []
-        for li_tag in container.xpath(".//ul/li"):
-            try:
-                item = {}
-                if item_thumbs := li_tag.xpath('.//div[contains(@class, "item-thumb")]'):
-                    item.update(cls.parse_thumb_and_bundle(item_thumbs[0]))
-                if item.get('labels'):
-                    item['title'] = SupportString.remove_emoji(item['labels'][0]).strip()
-                    try:
-                        date = cls.parse_date_text(item['labels'][1])
-                        item['premiered'] = date.strftime('%Y-%m-%d') if date else ''
-                    except Exception:
-                        pass
-                    item['content_type'] = 'Trailer' if item['title'].find('예고') > -1 else 'Featurette'
-                '''
-                metadata 플러그인에서 data_id만 입력받아 video_url을 따로 처리중
-
-                video_url = cls.get_kakao_play_url2(data_id)
-                if not video_url:
-                    continue
-
-                영화는 data_id 속성이 없고, TV 쇼는 url이 없음
-                '''
-                if (div_tag := li_tag.find('.//div[@data-id]')) is not None and (data_id := div_tag.get('data-id')):
-                    item['data_id'] = data_id
-                elif item.get('link'):
-                    item['data_id'] = item['link'].rsplit('/')[-1]
-                if not isinstance(item.get('data_id'), str) or not item.get('data_id').isdigit():
-                    logger.warning(f"영상 ID가 숫자가 아닙니다: '{item.get('data_id')}'")
-                    continue
-                if item:
-                    clips.append(EntityExtra(
-                        item['content_type'] or 'Clip',
-                        item['title'] or '',
-                        'kakao',
-                        item['data_id'] or item['link'] or '',
-                        premiered=item['premiered'] or '',
-                        thumb=item['image'] or item['thumb'] or ''
-                    ))
-            except Exception:
-                logger.exception(f"Failed to parse a clip...")
-        return clips
+        return []
 
     @classmethod
     def refine_keyword(cls, keyword: str) -> str:
