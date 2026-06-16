@@ -463,25 +463,25 @@ class SiteAvBase:
 
         cls.config.update({
             # 공통 설정 (항상 jav_censored 값을 사용)
-            "image_mode": db.get(f'{common_config_prefix}_image_mode'),
-            "trans_option": db.get(f'{common_config_prefix}_trans_option'),
+            "image_mode": db.get(f'{common_config_prefix}_image_mode') or "ff_proxy",
+            "trans_option": db.get(f'{common_config_prefix}_trans_option') or "using",
             "use_extras": db.get_bool(f'{common_config_prefix}_use_extras'),
             "max_arts": db.get_int(f'{common_config_prefix}_art_count'),
             "use_imagehash": db.get_bool(f'{common_config_prefix}_use_imagehash'),
-            "selenium_url": db.get(f'{common_config_prefix}_selenium_url'),
-            "selenium_driver_type": db.get(f'{common_config_prefix}_selenium_driver_type'),
-            "flaresolverr_url": db.get(f'{common_config_prefix}_flaresolverr_url'),
+            "selenium_url": db.get(f'{common_config_prefix}_selenium_url') or "",
+            "selenium_driver_type": db.get(f'{common_config_prefix}_selenium_driver_type') or "chrome",
+            "flaresolverr_url": db.get(f'{common_config_prefix}_flaresolverr_url') or "",
 
             # 이미지 서버 관련 공통 설정
-            "image_server_local_path": db.get(f'{common_config_prefix}_image_server_local_path'),
-            "image_server_url": db.get(f'{common_config_prefix}_image_server_url'),
+            "image_server_local_path": db.get(f'{common_config_prefix}_image_server_local_path') or "",
+            "image_server_url": db.get(f'{common_config_prefix}_image_server_url') or "",
             "image_server_rewrite": db.get_bool(f'{common_config_prefix}_image_server_rewrite'),
-            "censored_image_format": db.get('jav_censored_image_server_save_format'),
-            "uncensored_image_format": db.get('jav_uncensored_image_server_save_format'),
+            "censored_image_format": db.get('jav_censored_image_server_save_format') or "",
+            "uncensored_image_format": db.get('jav_uncensored_image_server_save_format') or "",
 
             # 사이트별 설정 (각 모듈 타입에 맞는 값을 사용)
             "use_proxy": db.get_bool(use_proxy_key),
-            "proxy_url": db.get(proxy_url_key),
+            "proxy_url": db.get(proxy_url_key) or "",
 
             # 파싱 규칙 설정
             "generic_parser_rules": parsing_rules.get('generic_rules', []),
