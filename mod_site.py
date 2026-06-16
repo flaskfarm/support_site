@@ -73,19 +73,28 @@ class ModuleSite(PluginModuleBase):
         if command == 'tving_login':
             from . import SupportTving
             login_ret = SupportTving.do_login(arg1, arg2, arg3)
-            if login_ret == None:
+            if login_ret is None:
                 ret['ret'] = 'warning'
-                ret['msg'] = f"로그인에 실패하였습니다."
+                ret['msg'] = "로그인 실패!"
+            elif login_ret.get('code') != '0000' or not login_ret.get('token'):
+                ret['ret'] = 'warning'
+                msg = login_ret.get('detailMessage') or login_ret.get('message') or login_ret.get('code')
+                ret['msg'] = str(msg).replace('\n', '<br>') if msg else "로그인 실패!"
             else:
-                if login_ret['status_code'] == 200:
-                    ret['token'] = login_ret['token']
-                    ret['msg'] = "토큰값을 가져왔습니다.<br>저장버튼을 눌러야 값을 저장합니다."
-                else:
-                    ret['ret'] = 'warning'
-                    ret['msg'] = f"로그인에 실패하였습니다.<br>응답코드: {login_ret['status_code']}"
+                ret['token'] = login_ret.get('token')
+                ret['deviceid'] = login_ret.get('deviceid')
+                P.ModelSetting.set('site_tving_id', arg1)
+                P.ModelSetting.set('site_tving_pw', arg2)
+                P.ModelSetting.set('site_tving_login_type', arg3)
+                if ret['token']:
+                    P.ModelSetting.set('site_tving_token', ret['token'])
+                if ret['deviceid'] and not P.ModelSetting.get('site_tving_deviceid'):
+                    P.ModelSetting.set('site_tving_deviceid', ret['deviceid'])
+                self.__tving_init()
+                ret['msg'] = "로그인 성공!<br>인증 정보를 저장했습니다"
         elif command == 'tving_deviceid':
             from . import SupportTving
-            device_list = SupportTving.get_device_list(token=arg1)
+            device_list = SupportTving.get_device_list()
             if device_list is None:
                 ret['ret'] = False
             else:

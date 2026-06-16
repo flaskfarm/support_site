@@ -62,9 +62,9 @@
 {{ macros.m_tab_content_start('tving', false) }}
   {{ macros.setting_radio_with_value('site_tving_login_type', '로그인 타입', [['cjone', 'CJONE'], ['tving', 'TVING']], value=arg['site_tving_login_type']) }}
   {{ macros.setting_input_text('site_tving_id', 'ID', value=arg['site_tving_id'], col='3') }}
-  {{ macros.setting_input_text_and_buttons('site_tving_pw', '암호', [['site_tving_login_btn', '토큰 가져오기']], value=arg['site_tving_pw'], col='6') }}
-  {{ macros.setting_input_text_and_buttons('site_tving_token', '토큰', [['site_tving_deviceid_btn', 'DeviceID 목록 가져오기']], value=arg['site_tving_token'], col='8', desc=['계정 정보대신 이 값을 사용합니다.', '이 값을 수동으로 넣는 경우 계정정보를 입력할 필요가 없습니다.', '_tving_token=XXXXXX 형식']) }}
-  {{ macros.setting_input_text('site_tving_deviceid', 'Device ID', value=arg['site_tving_deviceid'], col='3', desc=['model이 PC인 항목의 uuid 값 입력']) }}
+  {{ macros.setting_input_text_and_buttons('site_tving_pw', '암호', [['site_tving_login_btn', '로그인 및 인증 정보 가져오기']], value=arg['site_tving_pw'], col='6', type='password') }}
+  {{ macros.setting_input_textarea('site_tving_token', '인증 정보', value=arg['site_tving_token'], row='5', desc=['로그인 성공 시 자동 입력 및 저장됩니다.', '형식: JSON token bundle']) }}
+  {{ macros.setting_input_text_and_buttons('site_tving_deviceid', 'Device ID', [['site_tving_deviceid_btn', '기기 목록']], value=arg['site_tving_deviceid'], col='6', desc=['로그인 성공 시 비어 있으면 자동 입력 및 저장됩니다.', '기기 목록에서 사용할 항목의 uuid 값을 선택하세요.']) }}
   {{ macros.setting_checkbox('site_tving_use_proxy', 'Proxy 사용', value=arg['site_tving_use_proxy'], desc=None) }}
   <div id="site_tving_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_tving_proxy_url', 'Proxy URL', value=arg['site_tving_proxy_url'], desc=None) }}
@@ -185,14 +185,17 @@ $('#site_wavve_filename_contentid').change(function() {
 $("body").on('click', '#site_tving_login_btn', function(e) {
   e.preventDefault();
   globalSendCommand('tving_login', $('#site_tving_id').val(), $('#site_tving_pw').val(), $('input[name="site_tving_login_type"]:checked').val(), function(ret){
-    if (ret['ret'] == 'success')
+    if (ret['ret'] == 'success') {
       $("#site_tving_token").val(ret['token']);
+      if ($('#site_tving_deviceid').val() == '' && ret['deviceid'])
+        $("#site_tving_deviceid").val(ret['deviceid']);
+    }
   });
 });
 
 $("body").on('click', '#site_tving_deviceid_btn', function(e) {
   e.preventDefault();
-  globalSendCommand('tving_deviceid', $('#site_tving_token').val(), null, null, function(ret){
+  globalSendCommand('tving_deviceid', null, null, null, function(ret){
   });
 });
 
