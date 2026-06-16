@@ -343,7 +343,7 @@ class SiteAvdbs(SiteAvBase):
         cls.config.update({
             "use_local_db": db.get_bool("jav_censored_avdbs_use_local_db"),
             "local_db_path": db.get("jav_censored_avdbs_local_db_path"),
-            "image_url_prefix": db.get("jav_actor_img_url_prefix").rstrip('/'),
+            "image_url_prefix": (db.get("jav_actor_img_url_prefix") or "").rstrip('/'),
             "use_web_search": db.get_bool("jav_censored_avdbs_use_web_search"),
         })
 
