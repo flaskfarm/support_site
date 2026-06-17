@@ -115,7 +115,7 @@ class SiteJavdb(SiteAvBase):
                         item.image_url = cls.make_image_url(item.image_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else: 
-                    item.title_ko = cls.trans(item.title)
+                    item.title_ko = cls.trans_by_llm(item.title)
 
                 item_dict = item.as_dict()
                 item_dict['is_priority_label_site'] = False 
@@ -143,11 +143,11 @@ class SiteJavdb(SiteAvBase):
     # region INFO
     
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
             if entity_result_val_final:
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -162,7 +162,7 @@ class SiteJavdb(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{SITE_BASE_URL}/v/{original_code_for_url}"
         
@@ -227,7 +227,7 @@ class SiteJavdb(SiteAvBase):
 
         if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
             entity.original['tagline'] = cls.A_P(actual_raw_title_text)
-            entity.tagline = cls.trans(cls.A_P(actual_raw_title_text))
+            entity.tagline = cls.trans_by_llm(cls.A_P(actual_raw_title_text))
         else: 
             entity.tagline = entity.ui_code
 

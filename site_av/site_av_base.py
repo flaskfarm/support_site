@@ -54,6 +54,31 @@ is_selenium_available = False
 #except ImportError:
 #    is_stealth_available = False
 
+def fix_broken_korean_bytes(text):
+    import re
+    # 연속된 <0xXX> 패턴 추출
+    pattern = re.compile(r'(?:<0x[0-9A-Fa-f]{2}>)+')
+
+    def replace_match(match):
+        hex_string = match.group(0)
+        hex_values = re.findall(r'0x([0-9A-Fa-f]{2})', hex_string)
+        byte_data = bytes([int(h, 16) for h in hex_values])
+        try: 
+            return byte_data.decode('utf-8')
+        except UnicodeDecodeError:
+            return byte_data.decode('utf-8', errors='replace')
+        except Exception as e:
+            from ..setup import logger
+            logger.warning(f"Byte fix parsing error for chunk '{hex_string}': {e}")
+            return hex_string
+
+    try:
+        fixed_text = pattern.sub(replace_match, text)
+        return fixed_text
+    except Exception as e_main:
+        from ..setup import logger
+        logger.error(f"Critical error in fix_broken_korean_bytes: {e_main}")
+        return text
 
 class SiteAvBase:
     site_name = None
@@ -333,6 +358,79 @@ class SiteAvBase:
                 #logger.error(traceback.format_exc())
                 return TransUtil.trans_web2(text, source=source, target=target).strip()
 
+    @classmethod
+    def trans_by_llm(cls, text):
+        """Ollama AI를 이용한 번역 엔진. 에러 시 기본 trans()로 자동 폴백"""
+        text = text.strip()
+        if not text: return text
+        
+        if not cls.config:
+            logger.warning(f"[{cls.site_name}] cls.config is None. Falling back to default translator.")
+            return cls.trans(text)
+
+        if not cls.config.get('use_ollama'):
+            return cls.trans(text)
+
+        payload = {
+            "model": cls.config.get('ollama_model', 'gemma2:27b'),
+            "messages": [
+                {"role": "system", "content": cls.config.get('ollama_system_prompt', '')},
+                {"role": "user", "content": text}
+            ],
+            "stream": False,
+            "options": {
+                "temperature": cls.config.get('ollama_temp', 0.2),
+                "top_p": cls.config.get('ollama_top_p', 0.95),
+                "top_k": cls.config.get('ollama_top_k', 40),
+                "repeat_penalty": cls.config.get('ollama_repeat_penalty', 1.15),
+                "num_ctx": cls.config.get('ollama_num_ctx', 2048),
+            }
+        }
+
+        api_url = cls.config.get('ollama_url', 'http://ollama:11434/api/chat')
+
+        try:
+            logger.debug(f"[{cls.site_name}] [Ollama] Sending request. Original text length: {len(text)}. Target: {text[:30]}...")
+            
+            # API 통신
+            response = requests.post(api_url, json=payload, timeout=60) 
+            
+            if response.status_code != 200:
+                logger.error(f"[{cls.site_name}] [Ollama] HTTP Error: {response.status_code}. Response: {response.text[:200]}")
+                response.raise_for_status()
+                
+            result_json = response.json()
+            raw_output = result_json.get("message", {}).get("content", "").strip()
+            
+            # 1. AI 응답이 아예 비어있는 경우 (침묵/환각)
+            if not raw_output:
+                logger.warning(f"[{cls.site_name}] [Ollama] AI returned an empty string. Falling back to default translator.")
+                return cls.trans(text)
+
+            logger.debug(f"[{cls.site_name}] [Ollama] Raw output received. Length: {len(raw_output)}.")
+
+            # 2. 바이트 복원 로직 적용
+            fixed_output = fix_broken_korean_bytes(raw_output)
+            
+            # 3. 복원 후 텍스트가 날아갔는지 최종 확인
+            if not fixed_output.strip():
+                logger.error(f"[{cls.site_name}] [Ollama] Output became empty after byte fix! Raw was: {raw_output[:50]}... Falling back to default.")
+                return cls.trans(text)
+
+            # 정상 성공
+            logger.debug(f"[{cls.site_name}] [Ollama] Translation Success. Result preview: {fixed_output[:30]}...")
+            return fixed_output
+
+        except requests.exceptions.Timeout:
+            logger.error(f"[{cls.site_name}] [Ollama] Timeout (60s). Server overloaded or downloading model. Falling back.")
+            return cls.trans(text)
+        except requests.exceptions.ConnectionError:
+            logger.error(f"[{cls.site_name}] [Ollama] Connection Refused at {api_url}. Is Ollama running? Falling back.")
+            return cls.trans(text)
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] [Ollama] Unexpected Error: {e}. Falling back to default.")
+            logger.error(traceback.format_exc())
+            return cls.trans(text)
 
     # endregion 
     ################################################
@@ -508,6 +606,16 @@ class SiteAvBase:
 
             "smart_crop_face_weight_min": float(image_settings.get('smart_crop_face_weight_min', 0.3)),
             "smart_crop_face_weight_max": float(image_settings.get('smart_crop_face_weight_max', 0.8)),
+
+            "use_ollama": db.get_bool(f'{common_config_prefix}_use_ollama'),
+            "ollama_url": db.get(f'{common_config_prefix}_ollama_url'),
+            "ollama_model": db.get(f'{common_config_prefix}_ollama_model'),
+            "ollama_temp": float(db.get(f'{common_config_prefix}_ollama_temp') or 0.2),
+            "ollama_top_p": float(db.get(f'{common_config_prefix}_ollama_top_p') or 0.95),
+            "ollama_top_k": int(db.get(f'{common_config_prefix}_ollama_top_k') or 40),
+            "ollama_repeat_penalty": float(db.get(f'{common_config_prefix}_ollama_repeat_penalty') or 1.15),
+            "ollama_num_ctx": int(db.get(f'{common_config_prefix}_ollama_num_ctx') or 2048),
+            "ollama_system_prompt": db.get(f'{common_config_prefix}_ollama_system_prompt'),
         })
         # censored_rules_count = len(cls.config.get('censored_parser_rules', {}).get('custom_rules', []))
         # uncensored_rules_count = len(cls.config.get('uncensored_parser_rules', {}).get('custom_rules', []))

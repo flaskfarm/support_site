@@ -178,11 +178,11 @@ class SiteMgstage(SiteAvBase):
     # region INFO
     
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
             if entity_result_val_final: 
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -197,7 +197,7 @@ class SiteMgstage(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         cached_data = cls._ps_url_cache.get(code, {}) 
         ps_url_from_search_cache = cached_data.get('ps')
 
@@ -222,22 +222,35 @@ class SiteMgstage(SiteAvBase):
                 for ptn in PTN_TEXT_SUB: h1_text_raw = ptn.sub("", h1_text_raw)
                 original_tagline = cls.A_P(h1_text_raw.strip())
                 entity.original['tagline'] = original_tagline
-                entity.tagline = cls.trans(original_tagline)
+                if skip_trans:
+                    entity.tagline = original_tagline
+                else:
+                    entity.tagline = cls.trans_by_llm(original_tagline)
 
-            plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[contains(@class, "txt") and contains(@class, "introduction")]')
-            
-            if not plot_nodes:
-                plot_nodes = tree.xpath('//*[@id="introduction"]/dd/p[not(contains(@class, "more"))]')
-
-            if plot_nodes:
-                try:
-                    plot_html_raw = html.tostring(plot_nodes[0], encoding='unicode')
+            try:
+                dd_nodes = tree.xpath('//*[@id="introduction"]/dd')
+                if dd_nodes:
+                    dd_node = dd_nodes[0]
+                    
+                    for more_node in dd_node.xpath('.//p[contains(@class, "more")]'):
+                        more_node.getparent().remove(more_node)
+                    
+                    plot_html_raw = html.tostring(dd_node, encoding='unicode')
                     cleaned_plot = cls.A_P(plot_html_raw)
+                    
                     if cleaned_plot:
+                        for ptn in PTN_TEXT_SUB:
+                            cleaned_plot = ptn.sub("", cleaned_plot)
+                        
+                        cleaned_plot = cleaned_plot.strip()
+                        
                         entity.original['plot'] = cleaned_plot
-                        entity.plot = cls.trans(cleaned_plot)
-                except Exception as e_plot:
-                    logger.error(f"MGStage: Failed to parse plot for {code}: {e_plot}")
+                        if skip_trans:
+                            entity.plot = cleaned_plot
+                        else:
+                            entity.plot = cls.trans_by_llm(cleaned_plot)
+            except Exception as e_plot:
+                logger.error(f"MGStage: Failed to parse plot for {code}: {e_plot}")
 
             info_table_xpath = '//div[@class="detail_data"]//tr'
             tr_nodes = tree.xpath(info_table_xpath)

@@ -115,11 +115,11 @@ class SiteJavbus(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
             if entity_result_val_final:
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -134,7 +134,7 @@ class SiteJavbus(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         try:
             # === 1. 페이지 로딩 및 기본 Entity 생성 ===
             original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
@@ -185,7 +185,10 @@ class SiteJavbus(SiteAvBase):
                     original_tagline = cleaned_h3_text
 
             entity.original['tagline'] = original_tagline
-            entity.tagline = cls.trans(original_tagline)
+            if skip_trans:
+                entity.tagline = original_tagline
+            else:
+                entity.tagline = cls.trans_by_llm(original_tagline)
 
             if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
                 entity.plot = entity.tagline

@@ -80,14 +80,14 @@ class SitePaco(SiteAvBase):
                 item.score = 90
 
             if manual:
-                item.title_ko = item.title
+                item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 try:
                     if cls.config.get('use_proxy') and item.image_url:
                         item.image_url = cls.make_image_url(item.image_url)
                 except Exception as e_img:
                     logger.error(f"[{cls.site_name}] Image processing error in manual search: {e_img}")
             else:
-                item.title_ko = cls.trans(item.title)
+                item.title_ko = item.title
 
             ret['data'].append(item.as_dict())
             ret['ret'] = 'success'
@@ -159,7 +159,7 @@ class SitePaco(SiteAvBase):
         raw_title = json_data.get('Title', '')
         if raw_title:
             entity.original['tagline'] = cls.A_P(raw_title)
-            entity.tagline = cls.trans(entity.original['tagline'])
+            entity.tagline = cls.trans_by_llm(entity.original['tagline'])
 
         if json_data.get('Series'):
             entity.original['series'] = json_data['Series']
@@ -169,7 +169,7 @@ class SitePaco(SiteAvBase):
         
         if json_data.get('Desc'):
             entity.original['plot'] = json_data['Desc']
-            entity.plot = cls.trans(json_data['Desc'])
+            entity.plot = cls.trans_by_llm(entity.original['plot'])
 
         if json_data.get('Duration'):
             entity.runtime = int(json_data['Duration']) // 60
@@ -356,7 +356,9 @@ class SitePaco(SiteAvBase):
                     if not trailer_url: trailer_url = sample_files[-1].get('URL')
                     if trailer_url:
                         video_url = cls.make_video_url(trailer_url)
-                        if video_url: entity.extras.append(EntityExtra('trailer', entity.title, 'mp4', video_url))
+                        if video_url:
+                            trailer_title = entity.tagline if entity.tagline else entity.ui_code
+                            entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', trailer_url))
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Trailer processing error: {e}")
 

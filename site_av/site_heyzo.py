@@ -78,8 +78,11 @@ class SiteHeyzo(SiteAvBase):
 
             if manual:
                 item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
-                if cls.config.get('use_proxy') and item.image_url:
-                    item.image_url = cls.make_image_url(item.image_url)
+                try:
+                    if cls.config.get('use_proxy') and item.image_url:
+                        item.image_url = cls.make_image_url(item.image_url)
+                except Exception as e_img:
+                    logger.error(f"[{cls.site_name}] Image processing error in manual search: {e_img}")
             else:
                 item.title_ko = item.title
 
@@ -232,7 +235,7 @@ class SiteHeyzo(SiteAvBase):
         entity.label = "HEYZO"
 
         entity.original['tagline'] = tmp.get('title', '')
-        entity.tagline = cls.trans(tmp.get('title', ''))
+        entity.tagline = cls.trans_by_llm(tmp.get('title', ''))
         entity.premiered = tmp.get('premiered')
         entity.year = tmp.get('year')
         
@@ -344,7 +347,7 @@ class SiteHeyzo(SiteAvBase):
         raw_plot = tmp.get('plot', '')
         if raw_plot:
             entity.original['plot'] = raw_plot
-            entity.plot = cls.trans(raw_plot)
+            entity.plot = cls.trans_by_llm(raw_plot)
         else:
             entity.plot = ''
 
