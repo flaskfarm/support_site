@@ -243,12 +243,11 @@ class SiteDmm(SiteAvBase):
 
                 # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
-                    try:
-                        if cls.config['use_proxy']:
-                            item.image_url = cls.make_image_url(item.image_url)
-                    except Exception as e_img: 
-                        logger.error(f"DMM Search: ImgProcErr (manual):{e_img}")
-                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + type_prefix + item.title
+                    if cls.config.get('use_proxy') and item.image_url:
+                        item.image_url = cls.make_image_url(item.image_url)
+                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+                else:
+                    item.title_ko = cls.trans(item.title)
 
                 # 6. EntityAVSearch 객체를 dict로 변환
                 item_dict = item.as_dict()
@@ -480,7 +479,7 @@ class SiteDmm(SiteAvBase):
             log_prefix = f"[STEP {retry_step} RESULT]"
             logger.debug(f"DMM Search: {log_prefix} Top {log_count} results for '{original_keyword}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
-                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title')}'")
+                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
 
         return sorted_result
 
@@ -492,11 +491,11 @@ class SiteDmm(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
             if entity_result_val_final: 
                 ret["ret"] = "success"; 
                 ret["data"] = entity_result_val_final
@@ -511,7 +510,7 @@ class SiteDmm(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
 
         cached_data = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = None # kwargs.get('ps_url')
@@ -686,13 +685,19 @@ class SiteDmm(SiteAvBase):
                 if title_val: 
                     original_tagline = cls.A_P(title_val)
                     entity.original['tagline'] = original_tagline
-                    entity.tagline = cls.trans(original_tagline)
+                    if skip_trans:
+                        entity.tagline = original_tagline
+                    else:
+                        entity.tagline = cls.trans_by_llm(original_tagline)
 
                 plot_val = content.get('description')
                 if plot_val: 
                     original_plot = cls.A_P(plot_val)
                     entity.original['plot'] = original_plot
-                    entity.plot = cls.trans(original_plot)
+                    if skip_trans:
+                        entity.plot = original_plot
+                    else:
+                        entity.plot = cls.trans_by_llm(original_plot)
 
                 premiered_val = content.get('deliveryStartDate')
                 if premiered_val and isinstance(premiered_val, str):
@@ -778,7 +783,7 @@ class SiteDmm(SiteAvBase):
                     title_text_raw = title_node_dvd[0].text_content().strip()
                     original_tagline_dvd = cls.A_P(title_text_raw)
                     entity.original['tagline'] = original_tagline_dvd
-                    entity.tagline = cls.trans(original_tagline_dvd)
+                    entity.tagline = cls.trans_by_llm(original_tagline_dvd)
                 info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
                 table_rows_dvd = tree.xpath(info_table_xpath_dvd)
                 premiered_shouhin_dvd, premiered_hatsubai_dvd, premiered_haishin_dvd = None, None, None   
@@ -890,7 +895,7 @@ class SiteDmm(SiteAvBase):
                     if plot_text_raw: 
                         original_plot_dvd = cls.A_P(plot_text_raw)
                         entity.original['plot'] = original_plot_dvd
-                        entity.plot = cls.trans(original_plot_dvd)
+                        entity.plot = cls.trans_by_llm(original_plot_dvd)
                 else: 
                     logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
 
@@ -910,8 +915,16 @@ class SiteDmm(SiteAvBase):
                 if parsed_label and parsed_label not in entity.tag:
                     entity.tag.append(parsed_label)
 
-            if not entity.tagline and entity.title: entity.tagline = entity.title
-            if not entity.plot and entity.tagline: entity.plot = entity.tagline
+            if not entity.tagline and entity.title: 
+                fallback_tagline = entity.title
+                if skip_trans:
+                    entity.tagline = fallback_tagline
+                else:
+                    entity.tagline = cls.trans_by_llm(fallback_tagline)
+
+            if not entity.plot and entity.tagline: 
+                entity.plot = entity.tagline 
+
         except Exception as e_meta:
             logger.exception(f"DMM Meta parsing error for {code}: {e_meta}")
             return None

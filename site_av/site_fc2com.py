@@ -544,7 +544,7 @@ class SiteFc2com(SiteAvBase):
                 
                 final_title = raw_title_candidate or entity.ui_code
                 cleaned_text = cls.A_P(final_title)
-                entity.original['tagline'] = cleaned_text; entity.tagline = cls.trans(cleaned_text)
+                entity.original['tagline'] = cleaned_text; entity.tagline = cls.trans_by_llm(cleaned_text)
 
                 # 2. Plot
                 plot_text = head_meta.get('description') or head_meta.get('og:description')
@@ -558,10 +558,10 @@ class SiteFc2com(SiteAvBase):
                     plot_text = re.sub(r'^FC2-PPV-\d+\s*', '', plot_text, flags=re.IGNORECASE).strip()
 
                     entity.original['plot'] = cls.A_P(plot_text)
-                    entity.plot = cls.trans(entity.original['plot'])
+                    entity.plot = cls.trans_by_llm(entity.original['plot'])
                 elif not entity.plot:
                     entity.original['plot'] = entity.original['tagline']
-                    entity.plot = entity.tagline
+                    entity.plot = cls.trans_by_llm(entity.tagline)
 
                 # 3. Date
                 date_xpath = '//p[contains(text(), "Sale Day") or contains(text(), "販売日")]/text()'

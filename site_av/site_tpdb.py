@@ -446,7 +446,7 @@ class SiteTpdb(SiteAvBase):
         plot_text = item_data.get('description', '')
         if plot_text:
             entity.original['plot'] = cls.A_P(str(plot_text))
-            entity.plot = cls.trans(entity.original['plot'], source='en', target='ko')
+            entity.plot = cls.trans_by_llm(entity.original['plot'])
 
         # 배우 필터링
         females, males = [], []

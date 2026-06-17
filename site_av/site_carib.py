@@ -52,10 +52,14 @@ class SiteCarib(SiteAvBase):
 
             item.image_url = f'https://www.caribbeancom.com/moviepages/{code}/images/l_l.jpg'
             if manual:
-                item.title_ko = item.title
-                item.image_url = cls.make_image_url(item.image_url)
+                item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+                try:
+                    if cls.config.get('use_proxy') and item.image_url:
+                        item.image_url = cls.make_image_url(item.image_url)
+                except Exception as e_img:
+                    logger.error(f"Image processing error in manual search: {e_img}")
             else:
-                item.title_ko = cls.trans(item.title)
+                item.title_ko = item.title
 
             try: 
                 item.year = int("20" + code[4:6])
@@ -222,7 +226,7 @@ class SiteCarib(SiteAvBase):
         if title_node:
             cleaned_tagline = cls.A_P(str(title_node[0]).strip())
             entity.original['tagline'] = cleaned_tagline
-            entity.tagline = cls.trans(cleaned_tagline)
+            entity.tagline = cls.trans_by_llm(cleaned_tagline)
 
         actor_nodes = tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()')
         for actor in actor_nodes:
@@ -243,7 +247,7 @@ class SiteCarib(SiteAvBase):
         if plot_node:
             cleaned_plot = cls.A_P(str(plot_node[0]))
             entity.original['plot'] = cleaned_plot
-            entity.plot = cls.trans(cleaned_plot)
+            entity.plot = cls.trans_by_llm(cleaned_plot)
 
         entity.studio = 'Caribbeancom'
         entity.original['studio'] = 'Caribbeancom'

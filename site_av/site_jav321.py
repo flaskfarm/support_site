@@ -146,11 +146,11 @@ class SiteJav321(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
             if entity_result_val_final:
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -165,7 +165,7 @@ class SiteJav321(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
         url_pid = code[2:]
         url = f"{SITE_BASE_URL}/video/{url_pid}"
         tree = None
@@ -215,7 +215,10 @@ class SiteJav321(SiteAvBase):
                 if plot_full_text:
                     cleaned_plot = cls.A_P(cls._clean_value(plot_full_text))
                     entity.original['plot'] = cleaned_plot
-                    entity.plot = cls.trans(cleaned_plot)
+                    if skip_trans:
+                        entity.plot = cleaned_plot
+                    else:
+                        entity.plot = cls.trans_by_llm(cleaned_plot)
 
             info_container_node_list = tree.xpath('//div[contains(@class, "panel-body")]//div[contains(@class, "col-md-9")]')
             if info_container_node_list:
@@ -316,7 +319,10 @@ class SiteJav321(SiteAvBase):
                     tagline_candidate_text = raw_h3_title_text[len(entity.ui_code):].strip()
                 cleaned_tagline = cls.A_P(cls._clean_value(tagline_candidate_text))
                 entity.original['tagline'] = cleaned_tagline
-                entity.tagline = cls.trans(cleaned_tagline)
+                if skip_trans:
+                    entity.tagline = cleaned_tagline
+                else:
+                    entity.tagline = cls.trans_by_llm(cleaned_tagline)
 
             if not entity.tagline and entity.title: entity.tagline = entity.title
             if not entity.plot and entity.tagline: entity.plot = entity.tagline 
