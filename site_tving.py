@@ -261,35 +261,26 @@ class SiteTvingTv(SiteTving):
             search_list = cls.search_api(keyword)
             if search_list:
                 show_list = []
+                counter = 0
                 for band in search_list:
                     if not isinstance(band, dict):
                         continue
 
-                    if '시리즈' not in (band.get("bandName") or ""):
-                        continue
+                    code = band.get('code')
+                    title = band.get('title')
 
-                    items = band.get("items") or []
-                    for idx, item in enumerate(items):
-                        if not isinstance(item, dict):
-                            continue
-
-                        program_code = item.get("code")
-                        title = item.get("title") or ""
-
-                        if not program_code or not title:
-                            continue
-
+                    if code and title:
                         entity = EntitySearchItemTv(cls.site_name)
-                        entity.code = (kwargs.get("module_char") if "module_char" in kwargs else cls.module_char) + cls.site_char + program_code
+                        entity.code = (kwargs.get("module_char") if "module_char" in kwargs else cls.module_char) + cls.site_char + code
                         entity.title = title
-                        entity.image_url = item.get("imageUrl") or ""
-                        entity.studio = ""
-                        entity.genre = ""
+                        entity.image_url = band.get('imageUrl') or ""
                         if SiteUtil.compare_show_title(entity.title, keyword):
                             entity.score = 100
                         else:
-                            entity.score = 60 - idx * 5
+                            entity.score = 95 - counter * 5
+                            counter += 1
                         show_list.append(entity.as_dict())
+
                 if show_list:
                     show_list.sort(key=lambda x: x.get("score", 0), reverse=True)
                     ret["ret"] = "success"
