@@ -548,7 +548,7 @@ class SiteTpdb(SiteAvBase):
                 logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
 
         # Base 클래스의 공통 이미지 처리
-        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
 
         # 병합된 Landscape 이미지 로컬/서버 적용
         if merged_landscape_path:

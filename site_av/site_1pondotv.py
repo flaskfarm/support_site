@@ -309,7 +309,7 @@ class Site1PondoTv(SiteAvBase):
                 'pl': landscape_url,
                 'arts': arts_urls,
             }
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 

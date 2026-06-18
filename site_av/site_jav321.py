@@ -146,11 +146,11 @@ class SiteJav321(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
+    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
+            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans, is_validating=is_validating, is_rescued=is_rescued).as_dict()
             if entity_result_val_final:
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
@@ -165,7 +165,7 @@ class SiteJav321(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False):
+    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
         url_pid = code[2:]
         url = f"{SITE_BASE_URL}/video/{url_pid}"
         tree = None
@@ -332,7 +332,7 @@ class SiteJav321(SiteAvBase):
 
             try:
                 raw_image_urls = cls.__img_urls(tree)
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache)
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, is_validating=is_validating, is_rescued=is_rescued)
 
             except Exception as e:
                 logger.exception(f"Jav321: Error during image processing delegation for {code}: {e}")
@@ -539,13 +539,12 @@ class SiteJav321(SiteAvBase):
         if raw_url.startswith("//"):
             raw_url = "https:" + raw_url
         
-        # <<-- START: 중복 슬래시 보존 로직 -->>
+        # 중복 슬래시 보존
         # requests나 urlparse를 사용하면 //가 /로 합쳐지므로, 단순 문자열 처리로만 구성한다.
         # 예: http://.../path//subpath -> http://.../path//subpath (유지)
         # 예: http://...//path/subpath -> http://...//path/subpath (유지)
         # 이미 올바른 형식이므로 특별한 처리가 필요 없음.
         # 단, pics.dmm.co.jp/digital... 형태의 URL이 //를 필요로 한다면 명시적 처리가 필요.
-        # 로그를 보면 PL URL에 //가 있으므로, 해당 패턴에 대해서만 보장해준다.
         if 'pics.dmm.co.jp/digital/video' in raw_url:
             # http(s)://pics.dmm.co.jp/digital/video -> http(s)://pics.dmm.co.jp//digital/video
             processed_url = raw_url.replace(
@@ -556,7 +555,6 @@ class SiteJav321(SiteAvBase):
             processed_url = processed_url.replace('//digital//video', '//digital/video')
         else:
             processed_url = raw_url
-        # <<-- END: 중복 슬래시 보존 로직 -->>
 
         return processed_url
 
