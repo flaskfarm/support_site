@@ -62,9 +62,9 @@
 {{ macros.m_tab_content_start('tving', false) }}
   {{ macros.setting_radio_with_value('site_tving_login_type', '로그인 타입', [['cjone', 'CJONE'], ['tving', 'TVING']], value=arg['site_tving_login_type']) }}
   {{ macros.setting_input_text('site_tving_id', 'ID', value=arg['site_tving_id'], col='3') }}
-  {{ macros.setting_input_text_and_buttons('site_tving_pw', '암호', [['site_tving_login_btn', '로그인 및 인증 정보 가져오기']], value=arg['site_tving_pw'], col='6', type='password') }}
-  {{ macros.setting_input_textarea('site_tving_token', '인증 정보', value=arg['site_tving_token'], row='5', desc=['로그인 성공 시 자동 입력 및 저장됩니다.', '형식: JSON token bundle']) }}
-  {{ macros.setting_input_text_and_buttons('site_tving_deviceid', 'Device ID', [['site_tving_deviceid_btn', '기기 목록']], value=arg['site_tving_deviceid'], col='6', desc=['로그인 성공 시 비어 있으면 자동 입력 및 저장됩니다.', '기기 목록에서 사용할 항목의 uuid 값을 선택하세요.']) }}
+  {{ macros.setting_input_text_and_buttons('site_tving_pw', '암호', [['site_tving_login_btn', '로그인 및 인증 정보 저장']], value=arg['site_tving_pw'], col='6', type='password') }}
+  {{ macros.setting_input_textarea('site_tving_token', '인증 정보', value=arg['site_tving_token'], row='7', desc=['로그인 성공 시 자동 입력 및 저장됩니다.', '저장된 인증 정보로 이후 요청을 처리합니다.', '형식: JSON token bundle'], disabled=True) }}
+  {{ macros.setting_input_text_and_buttons('site_tving_deviceid', 'Device ID', [['site_tving_deviceid_btn', '기기 목록']], value=arg['site_tving_deviceid'], col='6', desc=['자동 관리 값입니다. 문제가 있을 때만 수정하세요.', '로그인 성공 시 비어 있으면 자동 입력 및 저장됩니다.']) }}
   {{ macros.setting_checkbox('site_tving_use_proxy', 'Proxy 사용', value=arg['site_tving_use_proxy'], desc=None) }}
   <div id="site_tving_use_proxy_div" class="collapse">
     {{ macros.setting_input_text('site_tving_proxy_url', 'Proxy URL', value=arg['site_tving_proxy_url'], desc=None) }}
