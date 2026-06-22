@@ -2148,21 +2148,38 @@ class SiteAvBase:
         try:
             import html
 
-            # 1. <br> 태그를 줄바꿈으로 변환
+            # 1. <br> 태그를 줄바꿈(\n)으로 변환
             text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=re.I)
 
-            # 2. 나머지 모든 HTML 태그 제거
-            text = re.sub(r'</?\s?[^>]+>', '', text)
+            # 2. 스크립트(<script>)와 스타일(<style>) 태그는 그 안의 내용물까지 통째로 삭제
+            text = re.sub(r'<\s*script[^>]*>.*?<\s*/\s*script\s*>', '', text, flags=re.I | re.DOTALL)
+            text = re.sub(r'<\s*style[^>]*>.*?<\s*/\s*style\s*>', '', text, flags=re.I | re.DOTALL)
 
-            # 3. HTML 엔티티 변환
+            # 3. HTML 엔티티(&lt;, &gt;, &amp;, &nbsp; 등)를 일반 문자로 1차 변환
             text = html.unescape(text)
 
-            # 4. 여러 줄바꿈을 2개로 제한하고 양쪽 끝 공백 제거
+            # 4. HTML 태그 제거
+            # 4-1. 커스텀 태그 강제 삭제 (FC2 비디오 플레이어 등)
+            text = re.sub(r'</?\s*FC2_VideoPlayer[^>]*>', '', text, flags=re.I)
+            text = re.sub(r'</?\s*fc2-video-player[^>]*>', '', text, flags=re.I)
+
+            # 4-2. 표준 HTML 태그만 골라서 껍데기 삭제 (내용 보존)
+            # </?       : 시작 태그(<)나 종료 태그(</)로 시작
+            # [a-zA-Z]+ : 반드시 영문 알파벳으로 시작해야 함
+            # [1-6]?    : h1 ~ h6 처리
+            # (?:>|\s[^>]*>) : 바로 닫히거나(>), 공백 뒤에 속성값이 붙고 닫히는 경우(\s[^>]*>)
+            html_tag_pattern = r'</?[a-zA-Z]+[1-6]?(?:>|\s[^>]*>)'
+            text = re.sub(html_tag_pattern, '', text)
+
+            # 5. 한 번 더 엔티티 디코딩 (이중 인코딩 방어)
+            text = html.unescape(text)
+
+            # 6. 여러 줄바꿈을 2개로 제한하고 양쪽 끝 공백 제거
             text = re.sub(r'(\s*\n\s*){3,}', '\n\n', text).strip()
 
             return text
-        except Exception:
-            # 실패 시 원본 텍스트 반환
+        except Exception as e:
+            logger.debug(f"A_P parsing error: {e}")
             return text
 
 
