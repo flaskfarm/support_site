@@ -5,7 +5,6 @@ from datetime import datetime
 from http.cookies import SimpleCookie
 from typing import Sequence
 
-import requests
 from lxml.html import HtmlElement
 
 from support.base.string import SupportString
@@ -46,7 +45,7 @@ class SiteDaum(object):
             cls._proxy_url = None
         cls.cache_enable = cache_enable
         cls.cache_expiry = cache_expiry
-        cls.default_headers = get_default_headers(headers, common_headers)
+        cls.default_headers = get_default_headers(headers)
 
     @classmethod
     def get_tree(cls, url: str) -> HtmlElement:
