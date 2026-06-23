@@ -274,6 +274,104 @@ class SiteTmdbTv(SiteTmdb):
 
             if apply_actor_image:
                 cls.process_actor_image(tmdb, show)
+
+            # episodes
+            try:
+                target_season_no = None
+                seasons = tmdb_dict.get('seasons', [])
+
+                # air_date match
+                if show.get('premiered'):
+                    for s in seasons:
+                        if s.get('air_date') == show['premiered'] and s.get('season_number', 0) > 0:
+                            target_season_no = s['season_number']
+                            break
+
+                # year match
+                if target_season_no is None and show.get('premiered'):
+                    show_year = show['premiered'].split('-')[0]
+                    for s in seasons:
+                        if s.get('air_date') and s['air_date'].split('-')[0] == show_year and s.get('season_number', 0) > 0:
+                            target_season_no = s['season_number']
+                            break
+
+                # show['season'] match
+                if target_season_no is None:
+                    show_season = show.get('season', 1)
+                    for s in seasons:
+                        if s.get('season_number') == show_season:
+                            target_season_no = show_season
+                            break
+
+                # single season
+                if target_season_no is None:
+                    valid_seasons = [s for s in seasons if s.get('season_number', 0) > 0]
+                    if len(valid_seasons) == 1:
+                        target_season_no = valid_seasons[0]['season_number']
+
+                if target_season_no is None:
+                    target_season_no = 1
+
+                logger.debug(f"TMDB: matching season={target_season_no} for show={show.get('title')}")
+
+                tmdb_season = tmdbsimple.TV_Seasons(tmdb_id, target_season_no)
+                try:
+                    info_ko = tmdb_season.info(language='ko')
+                except Exception:
+                    info_ko = {}
+                try:
+                    info_en = tmdb_season.info(language='en')
+                except Exception:
+                    info_en = {}
+
+                if 'episodes' in info_ko:
+                    if 'extra_info' not in show:
+                        show['extra_info'] = {}
+                    if 'episodes' not in show['extra_info']:
+                        show['extra_info']['episodes'] = {}
+
+                    en_episodes = {e['episode_number']: e for e in info_en.get('episodes', []) if 'episode_number' in e}
+
+                    for tmp in info_ko['episodes']:
+                        epi_num = tmp.get('episode_number')
+                        if epi_num is None:
+                            continue
+
+                        title_text = tmp.get('name') or ''
+                        plot_text = tmp.get('overview') or ''
+
+                        en_epi = en_episodes.get(epi_num, {})
+
+                        # fallback to English title
+                        if (not title_text or title_text.find(u'에피소드') != -1 or not SiteUtil.is_include_hangul(title_text)) and en_epi.get('name'):
+                            title_text = en_epi['name']
+
+                        # fallback to English plot
+                        if (not plot_text or not SiteUtil.is_include_hangul(plot_text)) and en_epi.get('overview'):
+                            plot_text = en_epi['overview']
+
+                        still_path = tmp.get('still_path')
+                        episode_still = cls.get_image_url(still_path, 'still') if still_path else ''
+                        episode_thumb = cls.get_image_url(still_path, 'still', size='thumb') if still_path else ''
+                        premiered = tmp.get('air_date') or ''
+
+                        if epi_num not in show['extra_info']['episodes']:
+                            show['extra_info']['episodes'][epi_num] = {}
+
+                        show['extra_info']['episodes'][epi_num][cls.site_name] = {
+                            'code': f"{cls.module_char}{cls.site_char}{tmdb_id}_{target_season_no}_{epi_num}",
+                            'value': episode_still,
+                            'thumb': episode_thumb,
+                            'plot': plot_text,
+                            'premiered': premiered,
+                            'title': title_text,
+                        }
+            except Exception:
+                try:
+                    show_code = show.get('code')
+                except Exception:
+                    show_code = None
+                logger.exception(f"에피소드 적용 중 오류: {tmdb_id=} code={show_code}")
             return True
         except Exception as e:
             logger.error(f"Exception:{str(e)}")

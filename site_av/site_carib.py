@@ -217,7 +217,7 @@ class SiteCarib(SiteAvBase):
                 'arts': arts_urls
             }
             # process_image_data 내부에서 poster_url이 가로형(PL)이면 자동으로 크롭 수행
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None)
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 

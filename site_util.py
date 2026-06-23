@@ -4,32 +4,29 @@ import functools
 import urllib.parse
 from typing import Any, Callable, Sequence
 
-import requests
-from tool import ToolUtil
 import lxml.html
 
+from tool import ToolUtil
 from .setup import *
+
+from curl_cffi import requests
+from curl_cffi.requests import BrowserType
+
+
+default_headers: dict | None = None
 
 
 class SiteUtil(object):
 
-    session = requests.Session()
-
-    default_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-        'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language' : 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-    }
-    loose_match_shows = []
+    session: requests.Session | None = None
+    loose_match_shows: tuple | None = None
 
     @classmethod
-    def initialize(cls, headers: str = None, loose_match_shows: str = None) -> None:
-        cls.session = requests.Session()
+    def initialize(cls, common_headers: str = None, loose_match_shows: str = None) -> None:
+        cls.session = requests.Session(impersonate=_get_latest_chrome())
         logger.debug('Request session has been initialized.')
-        try:
-            cls.default_headers = json.loads(headers)
-        except Exception:
-            logger.warning('기본 헤더 값을 확인하세요.')
+        global default_headers
+        default_headers = _get_default_headers(common_headers)
         cls.loose_match_shows = tuple(show for show in re.split(r'[\s,|]+', loose_match_shows or '') if show)
 
     @classmethod
@@ -50,7 +47,7 @@ class SiteUtil(object):
         if proxy_url is not None and proxy_url != '':
             proxies = {"http"  : proxy_url, "https" : proxy_url}
         if headers is None:
-            headers = cls.default_headers
+            headers = default_headers
         if post_data is None:
             if verify == None:
                 res = cls.session.get(url, headers=headers, proxies=proxies, cookies=cookies, timeout=timeout)
@@ -86,7 +83,8 @@ class SiteUtil(object):
             ret = ret.format(ddns=F.SystemModelSetting.get('ddns'))
         elif image_mode == '5':  #로컬에 포스터를 만들고
             from PIL import Image
-            im = Image.open(requests.get(image_url, stream=True).raw)
+            from io import BytesIO
+            im = Image.open(BytesIO(requests.get(image_url).content))
             width, height = im.size
             filename = 'proxy_%s.jpg' % str(time.time())
             filepath = os.path.join(F.config['path_data'], 'tmp', filename)
@@ -312,7 +310,8 @@ class SiteUtil(object):
     @classmethod
     def process_image_book(cls, url):
         from PIL import Image
-        im = Image.open(requests.get(url, stream=True).raw)
+        from io import BytesIO
+        im = Image.open(BytesIO(requests.get(url).content))
         width, height = im.size
         filename = 'proxy_%s.jpg' % str(time.time())
         filepath = os.path.join(F.config['path_data'], 'tmp', filename)
@@ -735,24 +734,75 @@ def score_to_stars(score: float, max_score: float = 10.0, stars: int = 5) -> str
     return "★" * full + "☆" * half
 
 
-def get_default_headers(user_headers: str, common_headers: str) -> dict:
-    load_headers = user_headers if user_headers else common_headers
-    try:
-        if load_headers.strip():
-            return json.loads(load_headers)
-        raise Exception(f'헤더 값이 없습니다.')
-    except Exception:
-        logger.warning(f'헤더 값을 확인하세요: {load_headers}')
-    return {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-        'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language' : 'ko,en-US;q=0.9,en;q=0.8,de;q=0.7,zh-CN;q=0.6,zh;q=0.5,lb;q=0.4',
-    }
-
-
 def deep_get(obj: dict, keys: Sequence) -> Any:
     for key in keys:
         if not isinstance(obj, dict):
             return None
         obj = obj.get(key)
     return obj
+
+
+def get_default_headers(user_headers: str) -> dict:
+    headers = default_headers.copy()
+    try:
+        if user_headers.strip():
+            parsed_user_headers = {
+                key.lower() if isinstance(key, str) else key: value
+                for key, value in json.loads(user_headers).items()
+            }
+            headers.update(parsed_user_headers)
+    except Exception:
+        logger.warning(f'헤더 값을 확인하세요: {user_headers}')
+    return headers
+
+
+def _get_latest_chrome() -> str:
+    pattern = re.compile(r"chrome(\d+)$")
+    matches = []
+    default_version = "chrome124"
+    try:
+        for browser in BrowserType:
+            match = pattern.match(
+                str(browser.value) if hasattr(browser, "value") else str(browser)
+            )
+            if match:
+                matches.append((browser.value, int(match.group(1))))
+        if matches:
+            return sorted(matches, key=lambda x: x[1], reverse=True)[0][0]
+    except Exception:
+        logger.exception(f"오류로 인해 다음 크롬 버전을 사용: {default_version}")
+    return default_version
+
+
+def _get_default_headers(default: dict | None = None) -> dict:
+    data = {}
+    with requests.Session(impersonate=_get_latest_chrome()) as session:
+        response = None
+        header_url = "https://postman-echo.com/headers"
+        try:
+            logger.debug(f"헤더값을 가져오는 중: {header_url}")
+            session.headers.update({"accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"})
+            response = session.get(header_url, timeout=5.0)
+            data = response.json()
+        except Exception:
+            logger.exception("기본 헤더값을 가져오는 중 오류 발생")
+            if response:
+                logger.error(f"{response.status_code} {response.text=}")
+
+    headers = data.get("headers") or {}
+    headers.pop("host", None)
+    headers.pop("accept-encoding", None)
+    for key in list(headers.keys()):
+        if isinstance(key, str) and key.startswith("x-"):
+            headers.pop(key, None)
+    if not headers:
+        logger.warning("파싱된 헤더값이 없습니다.")
+    logger.debug(f"raw headers={headers}")
+    if isinstance(default, dict):
+        headers.update(default)
+    headers = {
+        key.lower() if isinstance(key, str) else key: value
+        for key, value in headers.items()
+    }
+    logger.debug(f"default headers={headers}")
+    return headers

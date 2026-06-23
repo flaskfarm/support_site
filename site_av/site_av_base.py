@@ -20,7 +20,7 @@ from requests.adapters import HTTPAdapter
 
 # FF
 from support import SupportDiscord
-from ..setup import P, F, logger, path_data
+from ..setup import *
 from ..site_util_av import SiteUtilAv
 from ..entity_base import EntityThumb
 from ..trans_util import TransUtil
@@ -98,6 +98,9 @@ class SiteAvBase:
     _cf_cookies = {}
     _cf_cookie_timestamp = 0
     CF_COOKIE_EXPIRY = 3600
+
+    from threading import Lock
+    _ollama_lock = Lock()
 
     ################################################
     # region 기본적인 것들
@@ -392,14 +395,17 @@ class SiteAvBase:
         try:
             logger.debug(f"[{cls.site_name}] [Ollama] Sending request. Original text length: {len(text)}. Target: {text[:30]}...")
             
-            # API 통신
-            response = requests.post(api_url, json=payload, timeout=60) 
-            
-            if response.status_code != 200:
-                logger.error(f"[{cls.site_name}] [Ollama] HTTP Error: {response.status_code}. Response: {response.text[:200]}")
-                response.raise_for_status()
+            with cls._ollama_lock:
+                # logger.debug(f"[{cls.site_name}] [Ollama] Lock Acquired! Sending request. Length: {len(text)}. Target: {text[:30]}...")
                 
-            result_json = response.json()
+                response = requests.post(api_url, json=payload, timeout=120) 
+                
+                if response.status_code != 200:
+                    logger.error(f"[{cls.site_name}] [Ollama] HTTP Error: {response.status_code}. Response: {response.text[:200]}")
+                    response.raise_for_status()
+                    
+                result_json = response.json()
+
             raw_output = result_json.get("message", {}).get("content", "").strip()
             
             # 1. AI 응답이 아예 비어있는 경우 (침묵/환각)
@@ -633,24 +639,41 @@ class SiteAvBase:
     def imopen(cls, img_src):
         if isinstance(img_src, Image.Image):
             return img_src
+            
         if img_src.startswith("http"):
             # remote url
             try:
-                res = cls.get_response(img_src)
+                # 1. 헤더만 먼저 확인해서 HTML 등 엉뚱한 타입인지 빠르게 거를 수도 있음 (옵션)
+                res = cls.get_response(img_src, timeout=10)
+                if not res or res.status_code != 200:
+                    logger.debug(f"[{cls.site_name}] imopen failed: Status {res.status_code if res else 'None'} for {img_src}")
+                    return None
+                    
+                content_type = res.headers.get('Content-Type', '').lower()
+                if not content_type.startswith('image/') and content_type != 'binary/octet-stream':
+                    logger.debug(f"[{cls.site_name}] imopen failed: Invalid Content-Type '{content_type}' for {img_src}")
+                    return None
+
                 img = Image.open(BytesIO(res.content))
-                img.load()
+                img.load() # 강제 로드
                 return img
-            except Exception:
-                logger.exception("이미지 여는 중 예외:")
+                
+            except UnidentifiedImageError:
+                # 데이터는 받았으나 이미지 형식이 아닌 경우 (조용히 Warning만 출력)
+                logger.warning(f"[{cls.site_name}] imopen: Not a valid image file. URL: {img_src}")
+                return None
+            except Exception as e:
+                # 그 외의 심각한 예외
+                logger.error(f"[{cls.site_name}] imopen exception for {img_src}: {e}")
                 return None
         else:
             try:
                 # local file
                 img = Image.open(img_src)
-                img.load()
+                img.load() 
                 return img
-            except (FileNotFoundError, OSError):
-                logger.exception("이미지 여는 중 예외:")
+            except (FileNotFoundError, OSError, UnidentifiedImageError) as e:
+                logger.warning(f"[{cls.site_name}] imopen local file failed: {img_src} ({e})")
                 return None
 
 
@@ -910,7 +933,17 @@ class SiteAvBase:
 
 
     @classmethod
-    def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache):
+    def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache, is_validating=False, is_rescued=False):
+        if is_validating:
+            # logger.debug(f"[{cls.site_name}] Validation mode active. Returning raw CDN URLs.")
+            # 파서가 넘겨준 ps(썸네일)를 poster로 임시 매핑
+            if raw_image_urls.get('ps'): 
+                entity.thumb.append(EntityThumb(aspect="poster", value=raw_image_urls['ps']))
+            # pl(가로원본) 매핑
+            if raw_image_urls.get('pl'): 
+                entity.thumb.append(EntityThumb(aspect="landscape", value=raw_image_urls['pl']))
+            return entity
+
         image_mode = cls.config.get('image_mode')
         temp_filepath_to_clean = None
 
@@ -990,8 +1023,28 @@ class SiteAvBase:
                         url_prefix = f"{url_base.rstrip('/')}/{sub_path}"
 
                 if target_folder and url_prefix:
-                    # 최종 결정된 경로를 decision_data에 할당
                     decision_data['image_server_paths'] = {'target_folder': target_folder, 'url_prefix': url_prefix}
+
+                    if is_rescued and image_mode == 'image_server':
+                        logger.debug(f"[{cls.site_name}] Image Rescued flag is ON. Skipping download and scanning local folder directly.")
+                        code_lower = entity.ui_code.lower()
+                        
+                        if os.path.exists(target_folder):
+                            if decision_data['user_files_exist']['poster']:
+                                entity.thumb.append(EntityThumb(aspect="poster", value=f"{url_prefix}/{decision_data['user_files_exist']['poster']}"))
+                            elif os.path.exists(os.path.join(target_folder, f"{code_lower}_p.jpg")):
+                                entity.thumb.append(EntityThumb(aspect="poster", value=f"{url_prefix}/{code_lower}_p.jpg"))
+                                
+                            if decision_data['user_files_exist']['landscape']:
+                                entity.thumb.append(EntityThumb(aspect="landscape", value=f"{url_prefix}/{decision_data['user_files_exist']['landscape']}"))
+                            elif os.path.exists(os.path.join(target_folder, f"{code_lower}_pl.jpg")):
+                                entity.thumb.append(EntityThumb(aspect="landscape", value=f"{url_prefix}/{code_lower}_pl.jpg"))
+                            
+                            arts = [f for f in sorted(os.listdir(target_folder)) if f.startswith(f"{code_lower}_art_")]
+                            for art in arts:
+                                entity.fanart.append(f"{url_prefix}/{art}")
+                                
+                        return entity
 
                     # 사용자 및 시스템 파일 존재 여부 확인
                     code_lower = entity.ui_code.lower()
@@ -2095,21 +2148,38 @@ class SiteAvBase:
         try:
             import html
 
-            # 1. <br> 태그를 줄바꿈으로 변환
+            # 1. <br> 태그를 줄바꿈(\n)으로 변환
             text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=re.I)
 
-            # 2. 나머지 모든 HTML 태그 제거
-            text = re.sub(r'</?\s?[^>]+>', '', text)
+            # 2. 스크립트(<script>)와 스타일(<style>) 태그는 그 안의 내용물까지 통째로 삭제
+            text = re.sub(r'<\s*script[^>]*>.*?<\s*/\s*script\s*>', '', text, flags=re.I | re.DOTALL)
+            text = re.sub(r'<\s*style[^>]*>.*?<\s*/\s*style\s*>', '', text, flags=re.I | re.DOTALL)
 
-            # 3. HTML 엔티티 변환
+            # 3. HTML 엔티티(&lt;, &gt;, &amp;, &nbsp; 등)를 일반 문자로 1차 변환
             text = html.unescape(text)
 
-            # 4. 여러 줄바꿈을 2개로 제한하고 양쪽 끝 공백 제거
+            # 4. HTML 태그 제거
+            # 4-1. 커스텀 태그 강제 삭제 (FC2 비디오 플레이어 등)
+            text = re.sub(r'</?\s*FC2_VideoPlayer[^>]*>', '', text, flags=re.I)
+            text = re.sub(r'</?\s*fc2-video-player[^>]*>', '', text, flags=re.I)
+
+            # 4-2. 표준 HTML 태그만 골라서 껍데기 삭제 (내용 보존)
+            # </?       : 시작 태그(<)나 종료 태그(</)로 시작
+            # [a-zA-Z]+ : 반드시 영문 알파벳으로 시작해야 함
+            # [1-6]?    : h1 ~ h6 처리
+            # (?:>|\s[^>]*>) : 바로 닫히거나(>), 공백 뒤에 속성값이 붙고 닫히는 경우(\s[^>]*>)
+            html_tag_pattern = r'</?[a-zA-Z]+[1-6]?(?:>|\s[^>]*>)'
+            text = re.sub(html_tag_pattern, '', text)
+
+            # 5. 한 번 더 엔티티 디코딩 (이중 인코딩 방어)
+            text = html.unescape(text)
+
+            # 6. 여러 줄바꿈을 2개로 제한하고 양쪽 끝 공백 제거
             text = re.sub(r'(\s*\n\s*){3,}', '\n\n', text).strip()
 
             return text
-        except Exception:
-            # 실패 시 원본 텍스트 반환
+        except Exception as e:
+            logger.debug(f"A_P parsing error: {e}")
             return text
 
 
@@ -2285,6 +2355,56 @@ class SiteAvBase:
             return "#"
         else:
             return "#"
+
+
+    @classmethod
+    def is_placeholder_image(cls, target_pil_obj):
+        """
+        주어진 이미지가 DMM 등의 'Now Printing' 같은 가짜 플레이스홀더 이미지인지 판별합니다.
+        support_site/files/now_printing.jpg와 해시를 비교합니다.
+        """
+        try:
+            import imagehash
+        except ImportError:
+            return False
+
+        if not target_pil_obj:
+            return False
+
+        try:
+            placeholder_dir = os.path.join(PLUGIN_ROOT, 'files', 'placeholders')
+            
+            # 폴더가 없으면 생성 (최초 1회)
+            if not os.path.exists(placeholder_dir):
+                os.makedirs(placeholder_dir, exist_ok=True)
+                # logger.debug(f"[{cls.site_name}] Placeholder directory created at {placeholder_dir}")
+                return False
+
+            # 타겟 이미지의 해시값 미리 계산
+            target_hash = imagehash.phash(target_pil_obj)
+
+            # files/placeholders 폴더 내의 모든 샘플 이미지와 대조
+            for filename in os.listdir(placeholder_dir):
+                if not filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                    continue
+                    
+                sample_path = os.path.join(placeholder_dir, filename)
+                try:
+                    with Image.open(sample_path) as sample_img:
+                        sample_hash = imagehash.phash(sample_img)
+                        
+                        # 해시 차이가 5 이하(거의 동일)면 플레이스홀더로 간주
+                        if target_hash - sample_hash <= 5:
+                            logger.debug(f"[{cls.site_name}] Target image matches placeholder sample '{filename}'. Marking as fake image.")
+                            return True
+                except Exception as e_sample:
+                    logger.warning(f"[{cls.site_name}] Failed to process placeholder sample '{filename}': {e_sample}")
+
+            return False
+            
+        except Exception as e:
+            logger.error(f"[{cls.site_name}] Error during placeholder check: {e}")
+            return False
 
 
     # =========================================================================

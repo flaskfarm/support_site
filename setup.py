@@ -24,6 +24,7 @@ setting = {
 }
 
 P = create_plugin_instance(setting)
+PLUGIN_ROOT = os.path.dirname(__file__)
 
 try:
     from .mod_site import ModuleSite
