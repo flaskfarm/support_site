@@ -791,6 +791,7 @@ def _get_default_headers(default: dict | None = None) -> dict:
 
     headers = data.get("headers") or {}
     headers.pop("host", None)
+    headers.pop("accept-encoding", None)
     for key in list(headers.keys()):
         if isinstance(key, str) and key.startswith("x-"):
             headers.pop(key, None)
