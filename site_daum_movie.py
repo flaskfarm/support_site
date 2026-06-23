@@ -249,7 +249,7 @@ class SiteDaumMovie(SiteDaum):
         """
         additionals = []
         for item_thumb_tag in html.xpath(".//ul/li//div[@class='item-thumb']"):
-            code = title = thumb = year = link = None
+            code = title = thumb = year = link = image = None
             data = cls.parse_thumb_and_bundle(item_thumb_tag)
             if not data or not (query := data.get('query')):
                 continue
@@ -264,7 +264,12 @@ class SiteDaumMovie(SiteDaum):
                     query['w'] = 'cin'
                     link = cls.get_request_url(query=query)
                 if data.get('thumb'):
-                    thumb = data.get('thumb')
+                    thumb = data.get('thumb') or ""
+                    if thumb.startswith("http"):
+                        img_query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(thumb).query))
+                        image = img_query.get('fname')
+                    else:
+                        thumb = ""
                 for text in data.get('labels') or ():
                     if text.isdigit():
                         year = int(text)
@@ -272,7 +277,7 @@ class SiteDaumMovie(SiteDaum):
                 additional = EntitySearchItemMovie(cls.site_name)
                 additional.code = code
                 additional.title = title
-                additional.image_url = thumb or ""
+                additional.image_url = image if image else thumb
                 additional.year = year or 1900
                 additional.link = link or ""
                 additional.desc = "Daum 영화 검색"

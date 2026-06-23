@@ -408,20 +408,48 @@ class SiteDaum(object):
 
     @classmethod
     def score_search_results(cls, results: list[dict], keyword: str, year: int) -> None:
-        for idx, sr in enumerate(results):
+        score_config = {
+            'exact_match': {'base': 100, 'deduction': 1},
+            'close_match': {'base': 95, 'deduction': 1},
+            'title_match_only': {'base': 90, 'deduction': 1},
+            'title_mismatch': {'base': 85, 'deduction': 1},
+        }
+        match_counts = {
+            'exact_match': 0,
+            'close_match': 0,
+            'title_match_only': 0,
+            'title_mismatch': 0,
+        }
+        try:
+            target_year = int(year) if year else 0
+        except (ValueError, TypeError):
+            target_year = 0
+
+        for sr in results:
             if not SiteUtil.compare(keyword.lower(), sr['title'].lower()):
-                sr['score'] = max(80 - idx, 0)
-                continue
-            if not year or year <= 1900 or not sr.get('year') or sr['year'] <= 1900:
-                sr['score'] = max(89 - idx, 0)
-                continue
-            discrepancy = abs(sr['year'] - year)
-            if discrepancy == 0:
-                sr['score'] = max(105 - idx, 0)
-            elif discrepancy < 2:
-                sr['score'] = max(100 - idx, 0)
+                level = 'title_mismatch'
             else:
-                sr['score'] = max(95 - idx, 0)
+                try:
+                    sr_year = int(sr.get('year')) if sr.get('year') else 0
+                except (ValueError, TypeError):
+                    sr_year = 0
+
+                if target_year <= 1900 or sr_year <= 1900:
+                    level = 'title_match_only'
+                else:
+                    discrepancy = abs(sr_year - target_year)
+                    if discrepancy == 0:
+                        level = 'exact_match'
+                    elif discrepancy < 2:
+                        level = 'close_match'
+                    else:
+                        level = 'title_match_only'
+
+            config = score_config[level]
+            count = match_counts[level]
+            sr['score'] = max(config['base'] - (count * config['deduction']), 0)
+            match_counts[level] += 1
+            logger.debug(f"Score: {sr['score']} for title='{sr.get('title')}' year={sr.get('year')}")
 
     @classmethod
     def parse_clips(cls, container: HtmlElement) -> list[EntityExtra]:
