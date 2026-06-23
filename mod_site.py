@@ -83,8 +83,6 @@ class ModuleSite(PluginModuleBase):
             else:
                 ret['token'] = login_ret.get('token')
                 ret['deviceid'] = login_ret.get('deviceid')
-                P.ModelSetting.set('site_tving_id', arg1)
-                P.ModelSetting.set('site_tving_pw', arg2)
                 P.ModelSetting.set('site_tving_login_type', arg3)
                 if ret['token']:
                     P.ModelSetting.set('site_tving_token', ret['token'])
