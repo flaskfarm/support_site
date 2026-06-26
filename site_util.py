@@ -30,19 +30,19 @@ class SiteUtil(object):
         cls.loose_match_shows = tuple(show for show in re.split(r'[\s,|]+', loose_match_shows or '') if show)
 
     @classmethod
-    def get_tree(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=None):
+    def get_tree(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=30.0):
         text = cls.get_text(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify, timeout=timeout)
         if text is None:
             return
         return lxml.html.fromstring(text)
 
     @classmethod
-    def get_text(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=None):
+    def get_text(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=30.0):
         res = cls.get_response(url, proxy_url=proxy_url, headers=headers, post_data=post_data, cookies=cookies, verify=verify, timeout=timeout)
         return res.text
 
     @classmethod
-    def get_response(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=None):
+    def get_response(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=30.0):
         proxies = None
         if proxy_url is not None and proxy_url != '':
             proxies = {"http"  : proxy_url, "https" : proxy_url}
