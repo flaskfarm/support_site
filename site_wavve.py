@@ -201,7 +201,8 @@ class SiteWavveTv(SiteWavve):
                     break
             # 방송정보에 없는 데이터 에피소드에서 빼서 입력
             if epi:
-                show['mpaa'] = mpaa_map.get(epi.get('targetage')) or mpaa_map['0']
+                if not show.get('mpaa'):
+                    show['mpaa'] = mpaa_map.get(epi.get('targetage')) or mpaa_map['0']
 
                 if len(show['actor']) == 0:
                     for item in epi['episodeactors'].split(','):
@@ -246,6 +247,8 @@ class SiteWavveTv(SiteWavve):
                 show.genre.extend(tag_text for tag in tag_list if (tag_text := tag.get('text')))
             if isinstance(tmp := program_info.get('nation'), str) and (nation := tmp.strip()):
                 show.country.append(nation)
+            if isinstance(tmp := program_info.get('targetage'), str) and (targetage := tmp.strip()):
+                show.mpaa = mpaa_map.get(targetage)
             for item in program_info['programactors']['list']:
                 actor = EntityActor(None)
                 actor.name = item['text']
