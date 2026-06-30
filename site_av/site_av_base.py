@@ -415,10 +415,31 @@ class SiteAvBase:
 
             logger.debug(f"[{cls.site_name}] [Ollama] Raw output received. Length: {len(raw_output)}.")
 
-            # 2. 바이트 복원 로직 적용
+            # 2. 깨진 바이트 복원
             fixed_output = fix_broken_korean_bytes(raw_output)
             
-            # 3. 복원 후 텍스트가 날아갔는지 최종 확인
+            # 3. LLM 환각(수식/마크다운 찌꺼기) 치유
+            replacements = {
+                r'$\rightarrow$': '→',
+                r'$\leftarrow$': '←',
+                r'$\leftrightarrow$': '↔',
+                r'$\Rightarrow$': '⇒',
+                r'$\Leftarrow$': '⇐',
+                r'\rightarrow': '→',
+                r'\leftarrow': '←',
+                r'\Rightarrow': '⇒',
+                r'\Leftarrow': '⇐',
+                # 추가적으로 발생할 수 있는 마크다운 찌꺼기 방어
+                r'\*': '*',
+                r'\#': '#',
+                r'\_': '_'
+            }
+            
+            for bad_str, good_str in replacements.items():
+                if bad_str in fixed_output:
+                    fixed_output = fixed_output.replace(bad_str, good_str)
+
+            # 4. 복원 후 텍스트가 날아갔는지 최종 확인
             if not fixed_output.strip():
                 logger.error(f"[{cls.site_name}] [Ollama] Output became empty after byte fix! Raw was: {raw_output[:50]}... Falling back to default.")
                 return cls.trans(text)
