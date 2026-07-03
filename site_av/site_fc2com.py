@@ -718,6 +718,13 @@ class SiteFc2com(SiteAvBase):
                 logger.warning(f"[{cls.site_name}] Info validation failed: Missing essential metadata for {code_part}. Marking as not found.")
                 return None
 
+            used_model = getattr(cls, '_last_used_llm_model', None)
+            if used_model:
+                entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
+                cls._last_used_llm_model = None
+            else:
+                entity.extra_info['ai_translator'] = "Default (FF)"
+
             return entity
 
         return None

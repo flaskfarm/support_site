@@ -366,5 +366,12 @@ class SitePaco(SiteAvBase):
             try: entity.ratings.append(EntityRatings(float(json_data['AvgRating']), max=5, name=cls.site_name))
             except: pass
 
+        used_model = getattr(cls, '_last_used_llm_model', None)
+        if used_model:
+            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
+            cls._last_used_llm_model = None
+        else:
+            entity.extra_info['ai_translator'] = "Default (FF)"
+
         return entity
 

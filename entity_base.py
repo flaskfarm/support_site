@@ -162,8 +162,9 @@ class EntityMovie(object):
         """
         self.top250 = None
         self.outline = None
-
         """
+        self.extra_info = {}
+
 
     def __repr__(self):
         tmp = 'site : %s\n' % self.site
@@ -198,7 +199,8 @@ class EntityMovie(object):
             'tag' : self.tag,
             'tagline' : self.tagline,
             'extras' :  [x.as_dict() for x in self.extras] if self.extras is not None else None,
-            'mpaa' : self.mpaa
+            'mpaa' : self.mpaa,
+            'extra_info' : self.extra_info
         }
 
 

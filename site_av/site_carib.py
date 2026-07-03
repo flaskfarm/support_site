@@ -262,4 +262,11 @@ class SiteCarib(SiteAvBase):
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Trailer processing error: {e}")
 
+        used_model = getattr(cls, '_last_used_llm_model', None)
+        if used_model:
+            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
+            cls._last_used_llm_model = None
+        else:
+            entity.extra_info['ai_translator'] = "Default (FF)"
+
         return entity
