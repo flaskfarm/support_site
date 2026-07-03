@@ -974,6 +974,13 @@ class SiteDmm(SiteAvBase):
             logger.error(f"DMM Info: Error during landscape fallback logic for {code}: {e_fallback}")
             logger.error(traceback.format_exc())
 
+        used_model = getattr(cls, '_last_used_llm_model', None)
+        if used_model:
+            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
+            cls._last_used_llm_model = None
+        else:
+            entity.extra_info['ai_translator'] = "Default (FF)"
+
         logger.debug(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}")
         return entity
 

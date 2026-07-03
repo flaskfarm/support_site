@@ -587,4 +587,12 @@ class SiteTpdb(SiteAvBase):
                     entity.extras.append(EntityExtra("trailer", entity.title, "mp4", trailer_url))
             except Exception as e_trailer:
                 logger.error(f"[{cls.site_name}] Error adding trailer: {e_trailer}")
+
+        used_model = getattr(cls, '_last_used_llm_model', None)
+        if used_model:
+            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
+            cls._last_used_llm_model = None
+        else:
+            entity.extra_info['ai_translator'] = "Default (FF)"
+
         return entity

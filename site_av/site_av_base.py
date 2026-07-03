@@ -446,6 +446,8 @@ class SiteAvBase:
 
             # 정상 성공
             logger.debug(f"[{cls.site_name}] [Ollama] Translation Success. Result preview: {fixed_output[:30]}...")
+
+            cls._last_used_llm_model = payload["model"]
             return fixed_output
 
         except requests.exceptions.Timeout:

@@ -313,6 +313,13 @@ class SiteJavbus(SiteAvBase):
             except Exception as e_vr_check:
                 logger.error(f"[{cls.site_name}] Error during VR check: {e_vr_check}")
 
+            used_model = getattr(cls, '_last_used_llm_model', None)
+            if used_model:
+                entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
+                cls._last_used_llm_model = None
+            else:
+                entity.extra_info['ai_translator'] = "Default (FF)"
+
             logger.debug(f"JavBus: __info finished for {code}. UI Code: {entity.ui_code}")
             return entity
 
