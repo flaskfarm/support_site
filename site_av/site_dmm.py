@@ -453,10 +453,14 @@ class SiteDmm(SiteAvBase):
             logger.debug("DMM Search: No results after filtering. Preparing to retry.")
         else:
             has_any_standard = any(not item.get('has_suffix', False) for item in final_filtered_list)
+            has_digital = any(item.get('content_type') in ['videoa', 'amateur'] for item in final_filtered_list)
             
             if not has_any_standard:
                 should_retry = True
                 logger.debug("DMM Search: Only special/DOD versions found. Forcing retry to find standard version.")
+            elif not has_digital:
+                should_retry = True
+                logger.debug("DMM Search: No digital version (videoa/amateur) found. Forcing retry to check shorter padding.")
             else:
                 max_score = max(item.get("score", 0) for item in final_filtered_list)
                 if max_score < 80:
@@ -464,12 +468,39 @@ class SiteDmm(SiteAvBase):
                     logger.debug(f"DMM Search: Max score is {max_score} (under 80). Preparing to retry for better results.")
 
         if should_retry and label_part_for_retry and num_part_for_retry:
+            next_results = []
             if retry_step == 0:
                 logger.debug(f"DMM Search: Retrying '{original_keyword}' (Moving to Step 1).")
-                return cls.__search(original_keyword, do_trans, manual, retry_step=1)
+                next_results = cls.__search(original_keyword, do_trans, manual, retry_step=1)
             elif retry_step == 1 and num_part_for_retry.isdigit() and int(num_part_for_retry) <= 99:
                 logger.debug(f"DMM Search: Retrying '{original_keyword}' (Moving to Step 2).")
-                return cls.__search(original_keyword, do_trans, manual, retry_step=2)
+                next_results = cls.__search(original_keyword, do_trans, manual, retry_step=2)
+
+            if next_results:
+                final_filtered_list.extend(next_results)
+                
+                # 병합된 리스트를 대상으로 DMM 내부 중복 제거 엔진 한 번 더 가동
+                merged_dedup_map = {}
+                for item in final_filtered_list:
+                    ui_code = item.get('ui_code')
+                    if ui_code not in merged_dedup_map:
+                        merged_dedup_map[ui_code] = item
+                    else:
+                        existing = merged_dedup_map[ui_code]
+                        existing_is_special = existing.get('has_suffix', False)
+                        current_is_special = item.get('has_suffix', False)
+                        
+                        if existing_is_special and not current_is_special: merged_dedup_map[ui_code] = item
+                        elif not existing_is_special and current_is_special: pass
+                        else:
+                            if item.get('score', 0) > existing.get('score', 0): merged_dedup_map[ui_code] = item
+                            elif item.get('score', 0) == existing.get('score', 0):
+                                type_prio = {'videoa': 0, 'dvd': 1, 'bluray': 2, 'amateur': 3, 'unknown': 4}
+                                existing_prio = type_prio.get(existing.get('content_type', 'unknown'), 9)
+                                current_prio = type_prio.get(item.get('content_type', 'unknown'), 9)
+                                if current_prio < existing_prio: merged_dedup_map[ui_code] = item
+                
+                final_filtered_list = list(merged_dedup_map.values())
 
         # 결과 반환 및 로깅
         sorted_result = sorted(final_filtered_list, key=lambda k: k.get("score", 0), reverse=True)
@@ -479,7 +510,7 @@ class SiteDmm(SiteAvBase):
             log_prefix = f"[STEP {retry_step} RESULT]"
             logger.debug(f"DMM Search: {log_prefix} Top {log_count} results for '{original_keyword}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
-                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
+                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title')}'")
 
         return sorted_result
 
