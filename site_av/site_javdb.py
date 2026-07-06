@@ -325,16 +325,24 @@ class SiteJavdb(SiteAvBase):
                 logger.exception(f"JavDB Info: Shiroutoname error: {e_shirouto}")
 
         try:
-            title_to_check = entity.original.get('tagline', entity.tagline or "")
+            if getattr(entity, 'genre', None) is None:
+                entity.genre = []
+            if 'genre' not in entity.original or entity.original['genre'] is None:
+                entity.original['genre'] = []
+
+            title_to_check = str(entity.original.get('tagline') or getattr(entity, 'tagline', '') or "")
+            
             if re.search(r'[\[【]\s*VR\s*[\]】]', title_to_check, re.IGNORECASE):
-                logger.debug(f"[{cls.site_name}] VR keyword detected in title. Setting content_type to 'vr'.")
+                entity.content_type = 'vr'
+                
                 vr_genre_original = "VR"
-                if vr_genre_original not in entity.original.get('genre', []):
-                    if 'genre' not in entity.original: entity.original['genre'] = []
+                if vr_genre_original not in entity.original['genre']:
                     entity.original['genre'].append(vr_genre_original)
+                    
                 vr_genre_translated = "VR"
                 if vr_genre_translated not in entity.genre:
                     entity.genre.append(vr_genre_translated)
+                    
         except Exception as e_vr_check:
             logger.error(f"[{cls.site_name}] Error during VR check: {e_vr_check}")
 
