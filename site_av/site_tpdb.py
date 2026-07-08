@@ -384,7 +384,7 @@ class SiteTpdb(SiteAvBase):
             return {'ret': 'exception', 'data': str(e)}
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
         if len(code) < 5 or code[3] != '_':
             logger.error(f"[{cls.site_name}] Invalid code format: {code}")
             return None
@@ -445,8 +445,12 @@ class SiteTpdb(SiteAvBase):
 
         plot_text = item_data.get('description', '')
         if plot_text:
-            entity.original['plot'] = cls.A_P(str(plot_text))
-            entity.plot = cls.trans_by_llm(entity.original['plot'])
+            cleaned_plot = cls.A_P(str(plot_text))
+            entity.original['plot'] = cleaned_plot
+            if skip_trans:
+                entity.plot = cleaned_plot
+            else:
+                entity.plot = cls.trans_by_llm(entity.original['plot'])
 
         # 배우 필터링
         females, males = [], []

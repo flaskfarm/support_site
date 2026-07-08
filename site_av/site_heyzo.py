@@ -118,7 +118,7 @@ class SiteHeyzo(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
         code_part = code[2:]
         tmp = {}
         json_data = None
@@ -234,8 +234,13 @@ class SiteHeyzo(SiteAvBase):
         entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code.upper()
         entity.label = "HEYZO"
 
-        entity.original['tagline'] = tmp.get('title', '')
-        entity.tagline = cls.trans_by_llm(tmp.get('title', ''))
+        cleaned_title = tmp.get('title', '')
+        entity.original['title'] = cleaned_title
+        entity.original['tagline'] = cleaned_title
+        if skip_trans:
+            entity.tagline = cleaned_title
+        else:
+            entity.tagline = cls.trans_by_llm(cleaned_title)
         entity.premiered = tmp.get('premiered')
         entity.year = tmp.get('year')
         
@@ -347,7 +352,10 @@ class SiteHeyzo(SiteAvBase):
         raw_plot = tmp.get('plot', '')
         if raw_plot:
             entity.original['plot'] = raw_plot
-            entity.plot = cls.trans_by_llm(raw_plot)
+            if skip_trans:
+                entity.plot = raw_plot
+            else:
+                entity.plot = cls.trans_by_llm(raw_plot)
         else:
             entity.plot = ''
 

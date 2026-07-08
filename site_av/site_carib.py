@@ -104,7 +104,7 @@ class SiteCarib(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
         code_part = code[2:]
         tree = None
 
@@ -226,7 +226,10 @@ class SiteCarib(SiteAvBase):
         if title_node:
             cleaned_tagline = cls.A_P(str(title_node[0]).strip())
             entity.original['tagline'] = cleaned_tagline
-            entity.tagline = cls.trans_by_llm(cleaned_tagline)
+            if skip_trans:
+                entity.tagline = cleaned_tagline
+            else:
+                entity.tagline = cls.trans_by_llm(cleaned_tagline)
 
         actor_nodes = tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()')
         for actor in actor_nodes:
@@ -247,7 +250,10 @@ class SiteCarib(SiteAvBase):
         if plot_node:
             cleaned_plot = cls.A_P(str(plot_node[0]))
             entity.original['plot'] = cleaned_plot
-            entity.plot = cls.trans_by_llm(cleaned_plot)
+            if skip_trans:
+                entity.plot = cleaned_plot
+            else:
+                entity.plot = cls.trans_by_llm(cleaned_plot)
 
         entity.studio = 'Caribbeancom'
         entity.original['studio'] = 'Caribbeancom'
