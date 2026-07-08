@@ -105,7 +105,7 @@ class Site10Musume(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False):
+    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
         code_part = code[2:]
         json_data = None
 
@@ -308,7 +308,10 @@ class Site10Musume(SiteAvBase):
         raw_tagline = json_data.get('Title', '')
         original_tagline = cls.A_P(raw_tagline)
         entity.original['tagline'] = original_tagline
-        entity.tagline = cls.trans_by_llm(original_tagline)
+        if skip_trans:
+            entity.tagline = original_tagline
+        else:
+            entity.tagline = cls.trans_by_llm(original_tagline)
 
         actresses = json_data.get('ActressesJa', [])
         if isinstance(actresses, list):
@@ -332,7 +335,10 @@ class Site10Musume(SiteAvBase):
         raw_plot = json_data.get('Desc', '')
         original_plot = cls.A_P(raw_plot)
         entity.original['plot'] = original_plot
-        entity.plot = cls.trans_by_llm(original_plot)
+        if skip_trans:
+            entity.plot = original_plot
+        else:
+            entity.plot = cls.trans_by_llm(original_plot)
 
         entity.studio = '10Musume'
         entity.original['studio'] = '10Musume'
