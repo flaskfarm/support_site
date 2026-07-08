@@ -444,7 +444,7 @@ class SiteFc2com(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False):
+    def info(cls, code, fp_meta_mode=False, skip_trans=False):
         # 가용 소스 확인
         has_official = cls.config.get('use_fc2_com') and cls.config.get('selenium_url')
         has_web = cls.config.get('use_javten_web')
@@ -454,7 +454,7 @@ class SiteFc2com(SiteAvBase):
             return {'ret': 'error', 'data': 'No data source available/enabled.'}
 
         try:
-            entity = cls.__info(code, fp_meta_mode)
+            entity = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans)
             return {'ret': 'success', 'data': entity.as_dict()} if entity else {'ret': 'error'}
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Info Exception: {e}")
