@@ -102,11 +102,11 @@ class SitePaco(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False):
+    def info(cls, code, fp_meta_mode=False, skip_trans=False):
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode).as_dict()
+            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
             if entity_result_val_final:
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
