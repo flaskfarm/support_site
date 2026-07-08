@@ -114,8 +114,8 @@ class SiteJavdb(SiteAvBase):
                     if cls.config.get('use_proxy'):
                         item.image_url = cls.make_image_url(item.image_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
-                else: 
-                    item.title_ko = cls.trans_by_llm(item.title)
+                else:
+                    item.title_ko = cls.trans(item.title)
 
                 item_dict = item.as_dict()
                 item_dict['is_priority_label_site'] = False 
@@ -226,8 +226,12 @@ class SiteJavdb(SiteAvBase):
                     actual_raw_title_text = current_title_node[0].strip()
 
         if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
-            entity.original['tagline'] = cls.A_P(actual_raw_title_text)
-            entity.tagline = cls.trans_by_llm(cls.A_P(actual_raw_title_text))
+            cleaned_tagline = cls.A_P(actual_raw_title_text)
+            entity.original['tagline'] = cleaned_tagline
+            if skip_trans:
+                entity.tagline = cleaned_tagline
+            else:
+                entity.tagline = cls.trans_by_llm(cleaned_tagline)
         else: 
             entity.tagline = entity.ui_code
 
