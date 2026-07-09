@@ -647,9 +647,8 @@ class SiteTmdbMovie(SiteTmdb):
     def info_videos(cls, tmdb, entity):
         try:
             info = tmdb.videos(language='ko-KR', include_video_language='ko,en,null')
-            logger.debug(info)
 
-            def normalize_type(video_type):
+          def normalize_type(video_type):
                 if video_type == 'Teaser':
                     return 'Trailer'
                 elif video_type == 'Clip':
