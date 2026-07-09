@@ -22,6 +22,19 @@ POSTER_SCORE_RATIO = .3 # How much weight to give ratings vs. vote counts when p
 BACKDROP_SCORE_RATIO = .3
 
 
+def _stash_tmdb_extra(entity, key, value):
+    """TMDB 원본 구조화 데이터를 extra_info['tmdb']에 보존한다.
+    additive 채널 — 기존 소비자(Plex 에이전트/Kodi 규격 필드)에 영향 없음."""
+    try:
+        if not value:
+            return
+        if not isinstance(getattr(entity, 'extra_info', None), dict):
+            return
+        entity.extra_info.setdefault('tmdb', {})[key] = value
+    except Exception:
+        pass
+
+
 class SiteTmdb(object):
     site_name = 'tmdb'
     site_char = 'T'
@@ -54,6 +67,123 @@ class SiteTmdb(object):
         sizes = cls.image_sizes.get(category) or cls.image_sizes['poster']
         size = sizes.get(size) or sizes.get('default')
         return f"{cls.image_base_url.rstrip('/')}/{size.strip('/')}/{image_path.lstrip('/')}"
+
+    @classmethod
+    def get_video_urls(cls, item):
+        """
+        TMDB videos 결과를 내 서버용 URL 구조로 변환.
+        - external_url: YouTube/Vimeo 등 원본 서비스 URL
+        - tmdb_url: TMDB 웹의 video play 페이지 주소
+        """
+        site = item.get('site') or ''
+        key = item.get('key') or ''
+
+        external_url = ''
+        if site == 'YouTube' and key:
+            external_url = f'https://www.youtube.com/watch?v={key}'
+        elif site == 'Vimeo' and key:
+            external_url = f'https://vimeo.com/{key}'
+
+        tmdb_url = f'https://www.themoviedb.org/video/play?key={key}' if key else ''
+
+        return external_url, tmdb_url
+
+    @classmethod
+    def normalize_video_type(cls, video_type):
+        if video_type == 'Teaser':
+            return 'Trailer'
+        if video_type == 'Clip':
+            return 'Short'
+        if video_type == 'Behind the Scenes':
+            return 'BehindTheScenes'
+        return video_type
+
+    @classmethod
+    def fetch_videos(cls, tmdb):
+        """
+        tmdbsimple 버전 차이를 감안해서 fallback.
+        """
+        for kwargs in (
+            {'language': 'ko-KR', 'include_video_language': 'ko,en,null'},
+            {'language': 'ko-KR'},
+            {'language': 'ko'},
+            {},
+        ):
+            try:
+                return tmdb.videos(**kwargs)
+            except TypeError:
+                continue
+            except Exception as e:
+                logger.warning(f'TMDB videos fetch failed: kwargs={kwargs}, error={str(e)}')
+                continue
+        return {'results': []}
+
+    @classmethod
+    def info_trailers(cls, tmdb, entity):
+        """
+        use_trailer=True일 때만 호출.
+        Plex용으로는 사용하지 않음
+        """
+        try:
+            info = cls.fetch_videos(tmdb)
+            results = info.get('results') or []
+            trailers = []
+
+            for item in results:
+                try:
+                    key = item.get('key') or ''
+                    site = item.get('site') or ''
+                    if not key:
+                        continue
+
+                    video_type = cls.normalize_video_type(item.get('type'))
+
+                    if video_type not in ['Trailer', 'Featurette', 'Short', 'BehindTheScenes']:
+                        continue
+
+                    external_url, tmdb_url = cls.get_video_urls(item)
+
+                    trailers.append({
+                        'source': 'tmdb',
+                        'provider': site.lower(),
+                        'key': key,
+                        'external_url': external_url,
+                        'tmdb_url': tmdb_url,
+                        'url': external_url or tmdb_url,
+                        'title': item.get('name') or '',
+                        'type': video_type,
+                        'language': item.get('iso_639_1') or '',
+                        'country': item.get('iso_3166_1') or '',
+                        'official': bool(item.get('official')),
+                        'size': item.get('size'),
+                        'published_at': item.get('published_at') or '',
+                        'tmdb_video_id': item.get('id') or '',
+                    })
+                except Exception as e:
+                    logger.warning(f'TMDB video parse failed: {str(e)}')
+
+            def score(t):
+                return (
+                    1 if t.get('type') == 'Trailer' else 0,
+                    1 if t.get('language') == 'ko' else 0,
+                    1 if t.get('official') else 0,
+                    1 if t.get('provider') == 'youtube' else 0,
+                    1 if t.get('country') == 'KR' else 0,
+                    t.get('size') or 0,
+                    t.get('published_at') or '',
+                )
+
+            trailers = sorted(trailers, key=score, reverse=True)
+
+            _stash_tmdb_extra(entity, 'videos', results)
+            _stash_tmdb_extra(entity, 'trailers', trailers)
+
+            if trailers:
+                logger.debug(f'TMDB trailers found: {len(trailers)}')
+
+        except Exception as e:
+            logger.error(f"Exception:{str(e)}")
+            logger.error(traceback.format_exc())
 
     @classmethod
     def _process_image(cls, tmdb, data):
@@ -422,7 +552,7 @@ class SiteTmdbMovie(SiteTmdb):
             ret['info'] = tmdb.info(language='ko')
             ret['image'] = tmdb.images()
             ret['credits'] = tmdb.credits(language='ko')
-            #ret['video'] = tmdb.videos()
+            ret['video'] = cls.fetch_videos(tmdb)
             ret['releases'] = tmdb.releases()
 
             return ret
@@ -486,7 +616,7 @@ class SiteTmdbMovie(SiteTmdb):
 
 
     @classmethod
-    def info(cls, code):
+    def info(cls, code, use_trailer=False):
         try:
             ret = {}
             entity = EntityMovie2(cls.site_name, code)
@@ -494,7 +624,8 @@ class SiteTmdbMovie(SiteTmdb):
             entity.code_list.append(['tmdb_id', code[2:]])
             cls.info_basic(tmdb, entity)
             cls.info_actor(tmdb, entity)
-            #cls.info_videos(tmdb, entity)
+            if use_trailer:
+                cls.info_videos(tmdb, entity)
             cls.info_releases(tmdb, entity)
 
             entity = entity.as_dict()
@@ -515,33 +646,82 @@ class SiteTmdbMovie(SiteTmdb):
     @classmethod
     def info_videos(cls, tmdb, entity):
         try:
-            info = tmdb.videos()
-            for tmdb_item in info['results']:
-                if tmdb_item['site'] == 'YouTube':
-                    extra = EntityExtra2()
-                    if tmdb_item['type'] == 'Teaser':
-                        tmdb_item['type'] = 'Trailer'
-                    elif tmdb_item['type'] == 'Clip':
-                        tmdb_item['type'] = 'Short'
-                    elif tmdb_item['type'] == 'Behind the Scenes':
-                        tmdb_item['type'] = 'BehindTheScenes'
+            info = tmdb.videos(language='ko-KR', include_video_language='ko,en,null')
+            logger.debug(info)
 
-                    if tmdb_item['type'] not in ['Trailer', 'Featurette', 'Short', 'BehindTheScenes']:
-                        logger.debug(u'소스 확인 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
-                        logger.debug(tmdb_item['type'])
-                        continue
+            def normalize_type(video_type):
+                if video_type == 'Teaser':
+                    return 'Trailer'
+                elif video_type == 'Clip':
+                    return 'Short'
+                elif video_type == 'Behind the Scenes':
+                    return 'BehindTheScenes'
+                return video_type
 
-                    extra.content_type = tmdb_item['type']
-                    extra.mode = 'youtube'
-                    extra.content_url = tmdb_item['key']
-                    extra.thumb = ''
-                    extra.title = tmdb_item['name']
-                    extra.premiered = ''
-                    entity.extras.append(extra)
+            def video_score(item):
+                video_type = normalize_type(item.get('type'))
+                name = item.get('name') or ''
+                lang = item.get('iso_639_1') or ''
+                country = item.get('iso_3166_1') or ''
+
+                return (
+                    1 if video_type == 'Trailer' else 0,
+                    1 if lang == 'ko' else 0,
+                    1 if country == 'KR' else 0,
+                    1 if item.get('official') else 0,
+                    1 if '메인' in name else 0,
+                    item.get('size') or 0,
+                    item.get('published_at') or '',
+                )
+
+            results = info.get('results') or []
+            results = sorted(results, key=video_score, reverse=True)
+
+            for tmdb_item in results:
+                # 기존 로직처럼 YouTube만 사용
+                if tmdb_item.get('site') != 'YouTube':
+                    continue
+
+                key = tmdb_item.get('key')
+                if not key:
+                    continue
+
+                video_type = normalize_type(tmdb_item.get('type'))
+
+                if video_type not in ['Trailer', 'Featurette', 'Short', 'BehindTheScenes']:
+                    logger.debug(u'소스 확인 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
+                    logger.debug(tmdb_item.get('type'))
+                    continue
+
+                lang = tmdb_item.get('iso_639_1') or ''
+                country = tmdb_item.get('iso_3166_1') or ''
+                size = tmdb_item.get('size') or ''
+                official = bool(tmdb_item.get('official'))
+                title = tmdb_item.get('name') or ''
+
+                meta_parts = []
+                if lang or country:
+                    meta_parts.append('/'.join([x for x in [lang, country] if x]))
+                if size:
+                    meta_parts.append(f'{size}p')
+                if official:
+                    meta_parts.append('official')
+
+                if meta_parts:
+                    title = f"[{' | '.join(meta_parts)}] {title}"
+
+                extra = EntityExtra2()
+                extra.content_type = video_type
+                extra.mode = 'youtube'
+                extra.content_url = key      # 중요: 기존처럼 URL이 아니라 key 그대로 유지
+                extra.thumb = ''
+                extra.title = title
+                extra.premiered = ''
+                entity.extras.append(extra)
+
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
-
 
 
     @classmethod
@@ -571,6 +751,8 @@ class SiteTmdbMovie(SiteTmdb):
 
                     actor = EntityActor('', site=cls.site_name)
                     actor.name = name
+                    actor.tmdb_id = tmdb_item['id']
+                    actor.originalname = tmdb_item.get('original_name') or ''
                     actor.role = tmdb_item['character']
                     try:
                         try:
@@ -597,6 +779,13 @@ class SiteTmdbMovie(SiteTmdb):
                     'Screenplay': ([], entity.credits)
                 }
                 cls._set_crews(info, mappings, trans)
+                _stash_tmdb_extra(entity, 'crews', [
+                    {'id': c.get('id'), 'name': c.get('name'), 'original_name': c.get('original_name'),
+                     'department': c.get('department'), 'job': c.get('job'),
+                     'profile_path': c.get('profile_path'), 'credit_id': c.get('credit_id')}
+                    for c in (info.get('crew') or [])
+                    if c.get('job') in ('Director', 'Producer', 'Executive Producer', 'Writer', 'Screenplay', 'Novel', 'Book')
+                ])
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -626,6 +815,17 @@ class SiteTmdbMovie(SiteTmdb):
 
             if len(info['production_companies']) > 0:
                 entity.studio = info['production_companies'][0]['name']
+
+            _stash_tmdb_extra(entity, 'companies', [
+                {'id': c.get('id'), 'name': c.get('name'), 'origin_country': c.get('origin_country'),
+                 'logo_path': c.get('logo_path')}
+                for c in (info.get('production_companies') or []) if c.get('name')
+            ])
+            _stash_tmdb_extra(entity, 'countries', [
+                c.get('iso_3166_1')
+                for c in ((info.get('production_countries') or info_en.get('production_countries')) or [])
+                if c.get('iso_3166_1')
+            ])
 
             #for tmp in info['production_countries']:
             #    entity.country.append(tmp['name'])
@@ -697,6 +897,10 @@ class SiteTmdbMovie(SiteTmdb):
     def info_releases(cls, tmdb, entity):
         try:
             info = tmdb.releases()
+            _stash_tmdb_extra(entity, 'release_dates', [
+                {'country': item.get('iso_3166_1'), 'certification': item.get('certification')}
+                for item in (info.get('countries') or []) if item.get('certification')
+            ])
             datas = []
             for item in info['countries']:
                 if item['certification'] == '':
@@ -851,7 +1055,7 @@ class SiteTmdbFtv(SiteTmdb):
             ret['content_ratings'] = tmdb.content_ratings(language='ko')
             ret['credits'] = tmdb.credits(language='ko')
             ret['image'] = tmdb.images()
-            ret['video'] = tmdb.videos()
+            ret['video'] = cls.fetch_videos(tmdb)
             ret['external_ids'] = tmdb.external_ids()
             return ret
         except Exception as e:
@@ -860,7 +1064,7 @@ class SiteTmdbFtv(SiteTmdb):
 
 
     @classmethod
-    def info(cls, code):
+    def info(cls, code, use_trailer=False):
         try:
             ret = {}
             entity = EntityFtv(cls.site_name, code)
@@ -869,7 +1073,8 @@ class SiteTmdbFtv(SiteTmdb):
             cls.info_basic(tmdb, entity)
             cls.info_content_ratings(tmdb, entity)
             cls.info_credits(tmdb, entity)
-
+            if use_trailer:
+                cls.info_trailers(tmdb, entity)
             for season in entity.seasons:
                 season_no = season.season_no
                 season = tmdbsimple.TV_Seasons(code[2:], season_no)
@@ -917,9 +1122,11 @@ class SiteTmdbFtv(SiteTmdb):
                 if is_exist:
                     continue
 
-                actor.order = tmdb_item['order']
-                actor.name_original = tmdb_item['name']
-                actor.name = tmdb_item['name']
+                actor.tmdb_id = tmdb_item.get('id')
+                actor.order = tmdb_item.get('order', 0)
+                actor.tmdb_credit_id = tmdb_item.get('credit_id') or ''
+                actor.name = tmdb_item.get('name') or ''
+                actor.name_original = tmdb_item.get('original_name') or actor.name
                 #if SiteUtil.is_include_hangul(actor.name_original):
                 #    actor.name = actor.name_ko = actor.name_original
                 #else:
@@ -928,7 +1135,7 @@ class SiteTmdbFtv(SiteTmdb):
                 #        if SiteUtil.is_include_hangul(tmp):
                 #            actor.name = actor.name_ko = tmp
                 #            break
-                actor.role = tmdb_item['character']
+                actor.role = tmdb_item.get('character') or ''
                 if profile_path := tmdb_item.get('profile_path'):
                     actor.image = cls.get_image_url(profile_path, 'profile')
                 entity.actor.append(actor)
@@ -947,6 +1154,13 @@ class SiteTmdbFtv(SiteTmdb):
                 'Screenplay': ([], entity.writer)
             }
             cls._set_crews(info, mappings)
+            _stash_tmdb_extra(entity, 'crews', [
+                {'id': c.get('id'), 'name': c.get('name'), 'original_name': c.get('original_name'),
+                 'department': c.get('department'), 'job': c.get('job'),
+                 'profile_path': c.get('profile_path'), 'credit_id': c.get('credit_id')}
+                for c in (info.get('crew') or [])
+                if c.get('job') in ('Director', 'Producer', 'Executive Producer', 'Writer', 'Screenplay', 'Novel', 'Book')
+            ])
         except Exception as e:
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
@@ -956,6 +1170,10 @@ class SiteTmdbFtv(SiteTmdb):
     def info_content_ratings(cls, tmdb, entity):
         try:
             info = tmdb.content_ratings(language='ko')
+            _stash_tmdb_extra(entity, 'content_ratings', [
+                {'country': item.get('iso_3166_1'), 'rating': item.get('rating')}
+                for item in (info.get('results') or []) if item.get('rating')
+            ])
             order = [u'한국', u'미국', u'영국', u'일본', u'중국']
             ret = ['', '', '', '', '']
             for item in info['results']:
@@ -1018,6 +1236,16 @@ class SiteTmdbFtv(SiteTmdb):
             if 'networks' in info and len(info['networks']) > 0:
                 entity.studio = info['networks'][0]['name']
 
+            _stash_tmdb_extra(entity, 'type', info.get('type'))
+            _stash_tmdb_extra(entity, 'companies', [
+                {'id': c.get('id'), 'name': c.get('name'), 'origin_country': c.get('origin_country'),
+                 'logo_path': c.get('logo_path')}
+                for c in (info.get('production_companies') or []) if c.get('name')
+            ])
+            _stash_tmdb_extra(entity, 'countries', [
+                c for c in ((info.get('origin_country') or info_en.get('origin_country')) or []) if c
+            ])
+
             # 2021-05-21
             #if 'production_countries' in info:
             #    for tmp in info['production_countries']:
@@ -1072,7 +1300,7 @@ class SiteTmdbFtv(SiteTmdb):
             ret['info'] = tmdb.info(language='ko')
             ret['credits'] = tmdb.credits(language='ko')
             ret['image'] = tmdb.images()
-            ret['video'] = tmdb.videos()
+            ret['video'] = cls.fetch_videos(tmdb)
             ret['external_ids'] = tmdb.external_ids()
             return ret
         except Exception as e:
