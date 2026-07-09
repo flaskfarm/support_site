@@ -72,6 +72,7 @@ class EntityActor(object):
         self.originalname = name
         self.site = site
         self.type = ''
+        self.tmdb_id = ''
         # 2021-12-07 충사
         self.name_original = name
 
@@ -86,6 +87,7 @@ class EntityActor(object):
             'name2' : self.name2,
             'type' : self.type,
             'name_original' : self.name_original,
+            'tmdb_id' : self.tmdb_id,
         }
 
 
@@ -778,8 +780,13 @@ class EntityActor2(object):
         self.name_en = name_en
         self.name_ko = name_ko
         self.tmdb_id = ''
+        self.tmdb_credit_id = ''
         self.is_kor_name = False
         self.order = 0
+        self.role_en = ''
+        self.role_source = ''
+        self.image_source = ''
+        self.tvdb = None
 
     def as_dict(self):
         return {
@@ -791,8 +798,12 @@ class EntityActor2(object):
             'role' : self.role,
             'image' : self.image,
             'tmdb_id' : self.tmdb_id,
+            'tmdb_credit_id': self.tmdb_credit_id,
             'order' : self.order,
-
+            'role_en': self.role_en,
+            'role_source': self.role_source,
+            'image_source': self.image_source,
+            'tvdb': self.tvdb,
         }
 
 
