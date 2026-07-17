@@ -57,6 +57,10 @@ class SiteJav321(SiteAvBase):
             logger.debug(f"Jav321 Search: No direct match or multiple results for keyword '{keyword_for_url}'. Final URL: {res.url}")
             return []
 
+        if not res.text or not res.text.strip():
+            logger.debug(f"Jav321 Search: Empty HTML response for keyword '{keyword_for_url}'. Assuming no match.")
+            return []
+
         ret = []
         try:
             item = EntityAVSearch(cls.site_name)
