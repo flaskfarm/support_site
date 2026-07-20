@@ -73,6 +73,7 @@ class EntityActor(object):
         self.site = site
         self.type = ''
         self.tmdb_id = ''
+        self.ppkey = ''
         # 2021-12-07 충사
         self.name_original = name
 
@@ -88,6 +89,7 @@ class EntityActor(object):
             'type' : self.type,
             'name_original' : self.name_original,
             'tmdb_id' : self.tmdb_id,
+            'ppkey' : self.ppkey,
         }
 
 
