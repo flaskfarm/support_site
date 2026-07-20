@@ -340,15 +340,42 @@ class SiteDaum(object):
         def __get_person_data(thumb: HtmlElement) -> dict:
             person = {}
             thumb_data = cls.parse_thumb_and_bundle(thumb)
+
             if labels := thumb_data.get('labels'):
                 person['name'] = labels[0]
+
                 if len(labels) > 1:
                     person['role'] = re.sub(r'\s역$', '', labels[1])
+
                 person['labels'] = labels
+
             if thumb_data.get('thumb'):
-                person['thumb'] = thumb_data.get('image') or thumb_data.get('thumb')
+                person['thumb'] = (
+                    thumb_data.get('image')
+                    or thumb_data.get('thumb')
+                )
+
             if thumb_data.get('link'):
                 person['link'] = thumb_data.get('link')
+
+            bundle_div = thumb.getnext()
+
+            if bundle_div is not None:
+                profile_hrefs = bundle_div.xpath(
+                    ".//a[contains(@href, 'ppkey=')]/@href"
+                )
+
+                for href in profile_hrefs:
+                    query = dict(
+                        urllib.parse.parse_qsl(
+                            urllib.parse.urlsplit(href).query
+                        )
+                    )
+
+                    if ppkey := query.get('ppkey'):
+                        person['ppkey'] = str(ppkey)
+                        break
+
             return person
 
         # movie
