@@ -573,7 +573,7 @@ class SiteDaumTv(SiteDaum):
         return []
 
     @classmethod
-    def parse_show_people(cls, container: HtmlElement) -> list[EntityActor]:
+    def parse_show_people(cls, container: HtmlElement) -> dict[str, list[EntityActor]]:
         data = {
             'director': [],
             'producer': [],
@@ -589,6 +589,7 @@ class SiteDaumTv(SiteDaum):
                 actor_or_staff.order = order_actor
                 order_actor += 1
                 actor_or_staff.role = person.get('role') or ''
+                actor_or_staff.ppkey = str(person.get('ppkey') or '')
                 thumb = person.get('thumb') or ''
                 if not thumb.startswith('http'):
                     thumb = ''
