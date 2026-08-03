@@ -367,12 +367,60 @@ class SiteAvBase:
         text = text.strip()
         if not text: return text
         
+        # --- 문맥 보존형 스마트 쪼개기(Chunking) 번역 헬퍼 ---
+        # 구글 웹 번역기 등의 길이 제한(약 1000~1500자)을 회피하기 위해
+        # 문장(줄바꿈) 단위로 안전하게 쪼개어 번역한 뒤 다시 조립
+        def safe_fallback_trans(target_text):
+            MAX_CHUNK_SIZE = 1000
+            if len(target_text) <= MAX_CHUNK_SIZE:
+                return cls.trans(target_text)
+            
+            logger.debug(f"[{cls.site_name}] Text is too long ({len(target_text)} chars) for default translator. Smart chunking...")
+            
+            # 1. 줄바꿈(\n)을 기준으로 문장을 분리
+            paragraphs = target_text.split('\n')
+            chunks = []
+            current_chunk = ""
+            
+            # 2. 문단이 끊기지 않도록 청크(Chunk)를 조립
+            for p in paragraphs:
+                # 단일 문단이 1000자를 넘는 극단적인 엣지 케이스 방어
+                if len(p) > MAX_CHUNK_SIZE:
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                        current_chunk = ""
+
+                    for i in range(0, len(p), MAX_CHUNK_SIZE):
+                        chunks.append(p[i:i+MAX_CHUNK_SIZE])
+                    continue
+                
+                # 현재 문단을 추가했을 때 제한을 넘으면, 이전까지의 덩어리를 확정
+                if len(current_chunk) + len(p) + 1 > MAX_CHUNK_SIZE:
+                    chunks.append(current_chunk)
+                    current_chunk = p
+                else:
+                    if current_chunk:
+                        current_chunk += "\n" + p
+                    else:
+                        current_chunk = p
+                        
+            if current_chunk:
+                chunks.append(current_chunk)
+                
+            # 3. 쪼개진 청크들을 각각 번역하고 다시 줄바꿈으로 이어 붙임
+            translated_chunks = []
+            for idx, chunk in enumerate(chunks):
+                # logger.debug(f"  -> Translating chunk {idx+1}/{len(chunks)} (Length: {len(chunk)})")
+                translated_chunks.append(cls.trans(chunk))
+                
+            return "\n".join(translated_chunks)
+        
         if not cls.config:
             logger.warning(f"[{cls.site_name}] cls.config is None. Falling back to default translator.")
-            return cls.trans(text)
+            return safe_fallback_trans(text)
 
         if not cls.config.get('use_ollama'):
-            return cls.trans(text)
+            return safe_fallback_trans(text)
 
         payload = {
             "model": cls.config.get('ollama_model', 'gemma2:27b'),
@@ -407,13 +455,17 @@ class SiteAvBase:
                 result_json = response.json()
 
             raw_output = result_json.get("message", {}).get("content", "").strip()
+            eval_count = result_json.get("eval_count", 0)                # 모델이 생성한 출력 토큰 수
+            prompt_eval_count = result_json.get("prompt_eval_count", 0)  # 모델이 읽은 입력 토큰 수
+            done_reason = result_json.get("done_reason", "unknown")      # 모델이 생성을 멈춘 이유
             
             # 1. AI 응답이 아예 비어있는 경우 (침묵/환각)
             if not raw_output:
-                logger.warning(f"[{cls.site_name}] [Ollama] AI returned an empty string. Falling back to default translator.")
-                return cls.trans(text)
+                logger.warning(f"[{cls.site_name}] [Ollama] AI returned an empty string!")
+                logger.warning(f"  -> Debug Info | Input Tokens: {prompt_eval_count}, Output Tokens: {eval_count}, Stop Reason: '{done_reason}'")
+                return safe_fallback_trans(text)
 
-            logger.debug(f"[{cls.site_name}] [Ollama] Raw output received. Length: {len(raw_output)}.")
+            logger.debug(f"[{cls.site_name}] [Ollama] Raw output received (Tokens: {eval_count}). Length: {len(raw_output)}.")
 
             # 2. 깨진 바이트 복원
             fixed_output = fix_broken_korean_bytes(raw_output)
@@ -442,7 +494,7 @@ class SiteAvBase:
             # 4. 복원 후 텍스트가 날아갔는지 최종 확인
             if not fixed_output.strip():
                 logger.error(f"[{cls.site_name}] [Ollama] Output became empty after byte fix! Raw was: {raw_output[:50]}... Falling back to default.")
-                return cls.trans(text)
+                return safe_fallback_trans(text)
 
             # 정상 성공
             logger.debug(f"[{cls.site_name}] [Ollama] Translation Success. Result preview: {fixed_output[:30]}...")
@@ -451,7 +503,7 @@ class SiteAvBase:
             return fixed_output
 
         except requests.exceptions.Timeout:
-            logger.error(f"[{cls.site_name}] [Ollama] Timeout (60s). Server overloaded or downloading model. Falling back.")
+            logger.error(f"[{cls.site_name}] [Ollama] Timeout (120s). Server overloaded or downloading model. Falling back.")
             return cls.trans(text)
         except requests.exceptions.ConnectionError:
             logger.error(f"[{cls.site_name}] [Ollama] Connection Refused at {api_url}. Is Ollama running? Falling back.")
