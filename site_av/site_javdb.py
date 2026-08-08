@@ -47,10 +47,17 @@ class SiteJavdb(SiteAvBase):
         search_url = f"{SITE_BASE_URL}/search?q={search_keyword_for_url}&f=all"
         logger.debug(f"JavDB Search: original='{original_keyword}', parsed_kw='{kw_ui_code}', url='{search_url}'")
 
-        tree = cls.get_tree(search_url)
+        tree = None
+        use_fs = cls.MetadataSetting.get_bool(f"jav_censored_{cls.site_name}_use_flaresolverr")
+        
+        if use_fs:
+            logger.debug(f"[{cls.site_name}] FlareSolverr is enabled. Using FlareSolverr for Search.")
+            tree, _ = cls._get_page_content_flaresolverr(search_url)
+        else:
+            tree = cls.get_tree(search_url)
 
         if tree is None:
-            logger.warning(f"JavDB Search: Failed to get content for '{original_keyword}' (curl_cffi failed).")
+            logger.error(f"[{cls.site_name}] Search failed to get HTML tree for: {search_url}")
             return []
 
         item_list_xpath_expression = '//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]//div[contains(@class, "item")]/a[contains(@class, "box")]'
@@ -169,10 +176,17 @@ class SiteJavdb(SiteAvBase):
         original_keyword = keyword
 
         logger.debug(f"JavDB Info: Accessing URL: {detail_url}")
-        tree = cls.get_tree(detail_url)
+        tree = None
+        use_fs = cls.MetadataSetting.get_bool(f"jav_censored_{cls.site_name}_use_flaresolverr")
+        
+        if use_fs:
+            logger.debug(f"[{cls.site_name}] FlareSolverr is enabled. Using FlareSolverr for Info.")
+            tree, _ = cls._get_page_content_flaresolverr(detail_url)
+        else:
+            tree = cls.get_tree(detail_url)
 
         if tree is None:
-            logger.warning(f"JavDB Info: Failed to get detail page for {code} (curl_cffi failed).")
+            logger.error(f"[{cls.site_name}] Info failed to get HTML tree for: {detail_url}")
             return None
 
         entity = EntityMovie(cls.site_name, code)

@@ -251,6 +251,13 @@ class SiteAvBase:
 
         request_headers = kwargs.pop("headers", cls.default_headers.copy() if cls.default_headers else cls.base_default_headers.copy())
 
+        # FlareSolverr가 뚫어놓은 쿠키가 있다면 cffi 요청에 강제 주입
+        if getattr(cls, '_cf_cookies', None) and (time.time() - getattr(cls, '_cf_cookie_timestamp', 0) < getattr(cls, 'CF_COOKIE_EXPIRY', 3600)):
+            current_cookies = kwargs.get('cookies', {})
+            current_cookies.update(cls._cf_cookies)
+            kwargs['cookies'] = current_cookies
+            logger.debug(f"[{cls.site_name}] Injected CF clearance cookies into request.")
+
         # 스위치 모듈 로직
         for domain, expert_module in CONTEXT_SWITCH_RULES.items():
             if domain in url:
@@ -3428,9 +3435,81 @@ class SiteAvBase:
 
 
     # ---------------------------------------------------------
-    # region Selenium & FlareSolverr Common Methods (Legacy)
+    # region FlareSolverr Common Methods
     # ---------------------------------------------------------
 
+    @classmethod
+    def _get_page_content_flaresolverr(cls, url, validator=None):
+        """
+        FlareSolverr를 사용하여 페이지 내용을 가져옵니다.
+        """
+        flaresolverr_url = cls.config.get('flaresolverr_url', '').rstrip('/')
+        if not flaresolverr_url: 
+            logger.error(f"[{cls.site_name}] FlareSolverr URL is not configured!")
+            return None, None
+        
+        api_url = f"{flaresolverr_url}/v1"
+        payload = {
+            "cmd": "request.get",
+            "url": url,
+            "maxTimeout": 60000,
+        }
+        
+        # 사이트에 프록시가 설정되어 있으면 FlareSolverr에게도 프록시를 태우게 지시
+        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
+            payload["proxy"] = {"url": cls.config['proxy_url']}
+
+        for attempt in range(3):
+            # 기존 통과 쿠키가 있다면 재사용
+            if getattr(cls, '_cf_cookies', None) and (time.time() - getattr(cls, '_cf_cookie_timestamp', 0) < getattr(cls, 'CF_COOKIE_EXPIRY', 3600)):
+                cookies_payload = []
+                for k, v in cls._cf_cookies.items():
+                    cookies_payload.append({
+                        "name": k, 
+                        "value": v,
+                        "domain": urlparse(url).hostname,
+                        "path": "/"
+                    })
+                payload["cookies"] = cookies_payload
+
+            try:
+                logger.debug(f"[{cls.site_name}] Requesting FlareSolverr (Attempt {attempt+1}): {url}")
+                res = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=65)
+                
+                if res.status_code == 200:
+                    data = res.json()
+                    if data.get('status') == 'ok':
+                        html_source = data['solution']['response']
+                        tree = html.fromstring(html_source)
+                        
+                        # 뚫어낸 세션 쿠키 갱신
+                        if 'cookies' in data['solution']:
+                            new_cookies = {c['name']: c['value'] for c in data['solution']['cookies']}
+                            cls._cf_cookies.update(new_cookies)
+                            cls._cf_cookie_timestamp = time.time()
+
+                        if validator:
+                            if validator(tree): return tree, html_source
+                            else:
+                                logger.debug(f"[{cls.site_name}] FlareSolverr Success but validation failed. Retrying...")
+                                time.sleep(2)
+                                continue
+                        return tree, html_source
+                    else:
+                        logger.warning(f"[{cls.site_name}] FlareSolverr returned error status: {data.get('message', data)}")
+                else:
+                    logger.warning(f"[{cls.site_name}] FlareSolverr HTTP Error: {res.status_code}")
+            except Exception as e:
+                logger.error(f"[{cls.site_name}] FlareSolverr Connection Error: {e}")
+            
+            time.sleep(2)
+        
+        return None, None
+
+
+    # ---------------------------------------------------------
+    # region Selenium Common Methods (Legacy)
+    # ---------------------------------------------------------
 
     @classmethod
     def get_tree_cs(cls, url, **kwargs):
@@ -3719,82 +3798,7 @@ class SiteAvBase:
 
         return html.fromstring(driver.page_source), driver.page_source
 
-
-    @classmethod
-    def _get_page_content_flaresolverr(cls, url, validator=None):
-        """
-        FlareSolverr를 사용하여 페이지 내용을 가져옵니다.
-        쿠키 재사용 및 재시도 로직이 포함되어 있습니다.
-        """
-        flaresolverr_url = cls.config.get('flaresolverr_url', '').rstrip('/')
-        if not flaresolverr_url: return None, None
-        
-        api_url = f"{flaresolverr_url}/v1"
-        payload = {
-            "cmd": "request.get",
-            "url": url,
-            "maxTimeout": 60000,
-        }
-        
-        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
-            payload["proxy"] = {"url": cls.config['proxy_url']}
-
-        # 재시도 루프 (최대 3회)
-        for attempt in range(3):
-            # 쿠키 재사용 로직
-            if cls._cf_cookies and (time.time() - cls._cf_cookie_timestamp < cls.CF_COOKIE_EXPIRY):
-                cookies_payload = []
-                for k, v in cls._cf_cookies.items():
-                    cookie_dict = {
-                        "name": k, 
-                        "value": v,
-                        "domain": urlparse(url).hostname,
-                        "path": "/"
-                    }
-                    cookies_payload.append(cookie_dict)
-                payload["cookies"] = cookies_payload
-
-            try:
-                # logger.debug(f"[{cls.site_name}] Requesting FlareSolverr (Attempt {attempt+1}): {url}")
-                res = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=65)
-                
-                if res.status_code == 200:
-                    data = res.json()
-                    if data.get('status') == 'ok':
-                        html_source = data['solution']['response']
-                        tree = html.fromstring(html_source)
-                        
-                        # 쿠키 갱신
-                        if 'cookies' in data['solution']:
-                            new_cookies = {}
-                            for c in data['solution']['cookies']:
-                                new_cookies[c['name']] = c['value']
-                            cls._cf_cookies.update(new_cookies)
-                            cls._cf_cookie_timestamp = time.time()
-
-                        # 결과 검증 (Validator)
-                        if validator:
-                            if validator(tree):
-                                return tree, html_source
-                            else:
-                                logger.debug(f"[{cls.site_name}] FlareSolverr success but validation failed. Retrying...")
-                                time.sleep(2)
-                                continue
-                        else:
-                            return tree, html_source
-                    else:
-                        logger.warning(f"[{cls.site_name}] FlareSolverr error: {data}")
-                else:
-                    logger.warning(f"[{cls.site_name}] FlareSolverr HTTP Error: {res.status_code}")
-            except Exception as e:
-                logger.error(f"[{cls.site_name}] FlareSolverr Connection Error: {e}")
-            
-            # 실패 시 잠시 대기 후 재시도
-            time.sleep(2)
-        
-        return None, None
-
     # ---------------------------------------------------------
-    # endregion Selenium & FlareSolverr Common Methods
+    # endregion Selenium Common Methods (Legacy)
     # ---------------------------------------------------------
 
