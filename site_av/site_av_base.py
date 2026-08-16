@@ -355,18 +355,23 @@ class SiteAvBase:
         text = text.strip()
         if not text:
             return text
-        if cls.config['trans_option'] == 'not_using':
+        if cls.config and cls.config.get('trans_option') == 'not_using':
             return text
-        elif cls.config['trans_option'] == 'using':
+
+        if getattr(cls, 'site_name', '') == 'tpdb' or getattr(cls, 'module_char', '') == 'W':
+            source = "en"
+
+        if cls.config and cls.config.get('trans_option') == 'using':
             return TransUtil.trans(text, source=source, target=target).strip()
-        elif cls.config['trans_option'] == 'using_plugin':
+        elif cls.config and cls.config.get('trans_option') == 'using_plugin':
             try:
                 from trans import SupportTrans
                 return SupportTrans.translate(text, source=source, target=target).strip()
             except Exception as e:
                 logger.error(f"trans plugin error: {str(e)}")
-                #logger.error(traceback.format_exc())
                 return TransUtil.trans_web2(text, source=source, target=target).strip()
+        else:
+            return TransUtil.trans(text, source=source, target=target).strip()
 
     @classmethod
     def trans_by_llm(cls, text):
@@ -2093,53 +2098,66 @@ class SiteAvBase:
     @classmethod
     def __shiroutoname_info(cls, keyword):
         url = "https://shiroutoname.com/"
-        tree = cls.get_tree(url, params={"s": keyword}, timeout=30)
+        
+        # 타임아웃 및 서버 응답 방어
+        try:
+            tree = cls.get_tree(url, params={"s": keyword}, timeout=30)
+            if tree is None:
+                logger.debug(f"[{cls.site_name}] Shiroutoname skipped (Timeout or No Response) for: {keyword}")
+                return []
+        except Exception as e_req:
+            logger.debug(f"[{cls.site_name}] Shiroutoname request exception: {e_req}")
+            return []
 
         results = []
-        for article in tree.xpath("//section//article"):
-            title = article.xpath("./h2")[0].text_content()
-            title = title[title.find("【") + 1 : title.rfind("】")]
+        try:
+            for article in tree.xpath("//section//article"):
+                title = article.xpath("./h2")[0].text_content()
+                title = title[title.find("【") + 1 : title.rfind("】")]
 
-            link = article.xpath(".//a/@href")[0]
-            thumb_url = article.xpath(".//a/img/@data-src")[0]
-            title_alt = article.xpath(".//a/img/@alt")[0]
-            assert title == title_alt  # 다르면?
+                link = article.xpath(".//a/@href")[0]
+                thumb_url = article.xpath(".//a/img/@data-src")[0]
+                title_alt = article.xpath(".//a/img/@alt")[0]
+                
+                if title != title_alt:
+                    logger.debug(f"[{cls.site_name}] Shiroutoname mismatch detected. Skipping unreliable data: '{title}' != '{title_alt}'")
+                    continue 
 
-            result = {"title": title, "link": link, "thumb_url": thumb_url}
+                result = {"title": title, "link": link, "thumb_url": thumb_url}
 
-            for div in article.xpath("./div/div"):
-                kv = div.xpath("./div")
-                if len(kv) != 2:
-                    continue
-                key, value = [x.text_content().strip() for x in kv]
-                if not key.endswith("："):
-                    continue
+                for div in article.xpath("./div/div"):
+                    kv = div.xpath("./div")
+                    if len(kv) != 2:
+                        continue
+                    key, value = [x.text_content().strip() for x in kv]
+                    if not key.endswith("："):
+                        continue
 
-                if key.startswith("品番"):
-                    result["code"] = value
-                    another_link = kv[1].xpath("./a/@href")[0]
-                    assert link == another_link  # 다르면?
-                elif key.startswith("素人名"):
-                    result["name"] = value
-                elif key.startswith("配信日"):
-                    result["premiered"] = value
-                    # format - YYYY/MM/DD
-                elif key.startswith("シリーズ"):
-                    result["series"] = value
-                else:
-                    logger.warning("UNKNOWN: %s=%s", key, value)
+                    if key.startswith("品番"):
+                        result["code"] = value
+                        another_link = kv[1].xpath("./a/@href")[0]
+                    elif key.startswith("素人名"):
+                        result["name"] = value
+                    elif key.startswith("配信日"):
+                        result["premiered"] = value
+                    elif key.startswith("シリーズ"):
+                        result["series"] = value
 
-            a_class = "mlink" if "mgstage.com" in link else "flink"
-            actors = []
-            for a_tag in article.xpath(f'./div/div/a[@class="{a_class}"]'):
-                actors.append(
-                    {
-                        "name": a_tag.text_content().strip(),
-                        "href": a_tag.xpath("./@href")[0],
-                    }
-                )
-            result["actors"] = actors
-            results.append(result)
+                a_class = "mlink" if "mgstage.com" in link else "flink"
+                actors = []
+                for a_tag in article.xpath(f'./div/div/a[@class="{a_class}"]'):
+                    actors.append(
+                        {
+                            "name": a_tag.text_content().strip(),
+                            "href": a_tag.xpath("./@href")[0],
+                        }
+                    )
+                result["actors"] = actors
+                results.append(result)
+                
+        except Exception as e_parse:
+            logger.debug(f"[{cls.site_name}] Shiroutoname parsing error: {e_parse}")
+            
         return results
 
 
