@@ -18,6 +18,24 @@ class SiteJavdb(SiteAvBase):
     default_headers.update({"Referer": SITE_BASE_URL + "/"})
 
 
+    @classmethod
+    def _check_ip_block(cls, tree):
+        """JavDB의 IP 차단 페이지(비정상 행위 감지) 여부를 확인합니다."""
+        if tree is None:
+            return False
+        try:
+            # 1. 텍스트 전체에서 차단 키워드 검사
+            text_content = tree.text_content()
+            if "基於你的異常行為" in text_content or "管理員禁止了你的訪問" in text_content:
+                return True
+            # 2. 특정 차단 알림 태그 검사
+            if tree.xpath('//*[contains(text(), "基於你的異常行為") or contains(text(), "管理員禁止了你的訪問")]'):
+                return True
+        except Exception as e:
+            logger.debug(f"[{cls.site_name}] _check_ip_block error: {e}")
+        return False
+
+
     ################################################
     # region SEARCH
 
@@ -58,6 +76,10 @@ class SiteJavdb(SiteAvBase):
 
         if tree is None:
             logger.error(f"[{cls.site_name}] Search failed to get HTML tree for: {search_url}")
+            return []
+
+        if cls._check_ip_block(tree):
+            logger.error(f"[{cls.site_name}] ⚠️ IP 차단 감지! '基於你的異常行為，管理員禁止了你的訪問' (Search: {kw_ui_code})")
             return []
 
         item_list_xpath_expression = '//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]//div[contains(@class, "item")]/a[contains(@class, "box")]'
@@ -187,6 +209,10 @@ class SiteJavdb(SiteAvBase):
 
         if tree is None:
             logger.error(f"[{cls.site_name}] Info failed to get HTML tree for: {detail_url}")
+            return None
+
+        if cls._check_ip_block(tree):
+            logger.error(f"[{cls.site_name}] ⚠️ IP 차단 감지! '基於你的異常行為，管理員禁止了你的訪問' (Info: {code})")
             return None
 
         entity = EntityMovie(cls.site_name, code)
