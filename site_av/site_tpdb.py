@@ -22,11 +22,10 @@ class SiteTpdb(SiteAvBase):
     
     @classmethod
     def set_config(cls, db):
-        # 1. Base 클래스의 공통 설정(이미지 임계값, 캐시, 스마트크롭 Threshold 등)을 먼저 로드합니다.
-        # 이 부분이 없으면 스마트크롭 시 NoneType 에러가 발생합니다.
+        # 1. Base 클래스의 공통 설정(이미지 임계값, 캐시, 스마트크롭 Threshold 등)을 먼저 로드
         super().set_config(db)
         
-        # 2. Western 모듈의 설정으로 덮어씁니다.
+        # 2. Western 모듈의 설정으로 덮어씀
         prefix = 'western'
         cls.config.update({
             "tpdb_api_token": db.get(f"{prefix}_{cls.site_name}_api_token"),
@@ -41,8 +40,7 @@ class SiteTpdb(SiteAvBase):
             "image_server_local_path": db.get(f"{prefix}_image_server_local_path"),
             "image_server_url": db.get(f"{prefix}_image_server_url"),
             "image_server_rewrite": db.get_bool(f"{prefix}_image_server_rewrite"),
-            "uncensored_image_format": db.get(f"{prefix}_image_server_save_format"),
-            "censored_image_format": db.get(f"{prefix}_image_server_save_format"),   
+            "western_image_format": db.get(f"{prefix}_image_server_save_format") or "/western/{studio}",   
 
             # Western 전용 Smart Crop 토글 (모델 경로 등은 super().set_config에서 이미 로드됨)
             "use_smart_crop": db.get_bool("western_use_smart_crop"),

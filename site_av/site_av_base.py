@@ -634,26 +634,28 @@ class SiteAvBase:
             cls.session = cls.get_session()
 
         cls.MetadataSetting = db
+        cls.config = {}
 
-        # 모듈 종류(Censored/Uncensored)에 따라 설정 키 접두사를 결정
-        module_type = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
+        # 모듈 종류에 따라 설정 키 접두사를 결정
+        if cls.module_char == 'C':
+            module_type = 'jav_censored'
+        elif cls.module_char == 'W':
+            module_type = 'western'
+        else:
+            module_type = 'jav_uncensored'
 
         # 공통 설정은 항상 jav_censored의 것을 따르도록 강제
         common_config_prefix = 'jav_censored'
 
-        use_proxy_key = f"{module_type}_{cls.site_name}_use_proxy"
-        proxy_url_key = f"{module_type}_{cls.site_name}_proxy_url"
-
-        # config 딕셔너리 구성
-        if getattr(cls, 'config', None) is None:
-            cls.config = {}
+        use_proxy_key = f"{module_type}_{cls.site_name}_use_proxy" if cls.module_char != 'W' else f"western_use_proxy"
+        proxy_url_key = f"{module_type}_{cls.site_name}_proxy_url" if cls.module_char != 'W' else f"western_proxy_url"
 
         parsing_rules = cls._yaml_settings.get('jav_parsing_rules', {})
         image_settings = cls._yaml_settings.get('jav_image_settings', {})
         misc_settings = cls._yaml_settings.get('jav_misc_settings', {})
 
         cls.config.update({
-            # 공통 설정 (항상 jav_censored 값을 사용)
+            # 공통 설정
             "image_mode": db.get(f'{common_config_prefix}_image_mode') or "ff_proxy",
             "trans_option": db.get(f'{common_config_prefix}_trans_option') or "using",
             "use_extras": db.get_bool(f'{common_config_prefix}_use_extras'),
@@ -669,6 +671,7 @@ class SiteAvBase:
             "image_server_rewrite": db.get_bool(f'{common_config_prefix}_image_server_rewrite'),
             "censored_image_format": db.get('jav_censored_image_server_save_format') or "",
             "uncensored_image_format": db.get('jav_uncensored_image_server_save_format') or "",
+            "western_image_format": db.get('western_image_server_save_format') or "/western/{studio}",
 
             # 사이트별 설정 (각 모듈 타입에 맞는 값을 사용)
             "use_proxy": db.get_bool(use_proxy_key),
@@ -727,10 +730,31 @@ class SiteAvBase:
         if isinstance(img_src, Image.Image):
             return img_src
             
+        if not img_src or not isinstance(img_src, str):
+            return None
+
+        # 이미지 서버 URL인 경우 인터넷(HTTP)을 타지 않고 로컬 디스크에서 즉시 로드
+        local_root = cls.config.get('image_server_local_path') if cls.config else None
+        if local_root and os.path.exists(local_root) and ('/images/' in img_src or '/jav/' in img_src or '/western/' in img_src):
+            parsed = urlparse(img_src)
+            path_part = parsed.path
+            for prefix in ['/images', '/image']:
+                if path_part.startswith(prefix):
+                    path_part = path_part[len(prefix):]
+            
+            disk_path = os.path.join(local_root, path_part.lstrip('/\\'))
+            if os.path.exists(disk_path):
+                try:
+                    img = Image.open(disk_path)
+                    img.load()
+                    # logger.debug(f"[{cls.site_name}] imopen 로컬 디스크 직결 로드 성공: {disk_path}")
+                    return img
+                except Exception as e_local:
+                    logger.debug(f"[{cls.site_name}] imopen local file load error: {disk_path} ({e_local})")
+
+        # 순수 원격 원본 URL (DMM, JavBus 등)일 때만 네트워크 요청 수행
         if img_src.startswith("http"):
-            # remote url
             try:
-                # 1. 헤더만 먼저 확인해서 HTML 등 엉뚱한 타입인지 빠르게 거를 수도 있음 (옵션)
                 res = cls.get_response(img_src, timeout=10)
                 if not res or res.status_code != 200:
                     logger.debug(f"[{cls.site_name}] imopen failed: Status {res.status_code if res else 'None'} for {img_src}")
@@ -742,20 +766,17 @@ class SiteAvBase:
                     return None
 
                 img = Image.open(BytesIO(res.content))
-                img.load() # 강제 로드
+                img.load()
                 return img
                 
             except UnidentifiedImageError:
-                # 데이터는 받았으나 이미지 형식이 아닌 경우 (조용히 Warning만 출력)
                 logger.warning(f"[{cls.site_name}] imopen: Not a valid image file. URL: {img_src}")
                 return None
             except Exception as e:
-                # 그 외의 심각한 예외
                 logger.error(f"[{cls.site_name}] imopen exception for {img_src}: {e}")
                 return None
         else:
             try:
-                # local file
                 img = Image.open(img_src)
                 img.load() 
                 return img
@@ -1047,7 +1068,8 @@ class SiteAvBase:
                 'image_server_paths': {'target_folder': None, 'url_prefix': None},
                 'user_files_exist': {'poster': False, 'landscape': False},
                 'system_files_exist': {'poster': False, 'landscape': False, 'arts': 0},
-                'rewrite_flag': True
+                'rewrite_flag': True,
+                'is_rescued': is_rescued
             }
 
             if image_mode == 'image_server' and entity.ui_code:
@@ -1097,6 +1119,15 @@ class SiteAvBase:
                         elif label_full:
                             label_first = label_full[0]
 
+                        safe_studio = getattr(entity, 'studio', '') or 'Unknown'
+                        safe_studio_clean = re.sub(r'[^A-Za-z0-9가-힣]', '_', safe_studio).strip('_') or 'Unknown'
+
+                        format_map = {
+                            'label': label_full,
+                            'label_1': label_first,
+                            'studio': safe_studio_clean
+                        }
+
                         try:
                             # KeyError 방지를 위해 format_map 사용
                             format_map = {'label': label_full, 'label_1': label_first}
@@ -1111,54 +1142,27 @@ class SiteAvBase:
 
                 if target_folder and url_prefix:
                     decision_data['image_server_paths'] = {'target_folder': target_folder, 'url_prefix': url_prefix}
-
-                    if is_rescued and image_mode == 'image_server':
-                        logger.debug(f"[{cls.site_name}] Image Rescued flag is ON. Skipping download and scanning local folder directly.")
-                        code_lower = entity.ui_code.lower()
-                        
-                        if os.path.exists(target_folder):
-                            if decision_data['user_files_exist']['poster']:
-                                entity.thumb.append(EntityThumb(aspect="poster", value=f"{url_prefix}/{decision_data['user_files_exist']['poster']}"))
-                            elif os.path.exists(os.path.join(target_folder, f"{code_lower}_p.jpg")):
-                                entity.thumb.append(EntityThumb(aspect="poster", value=f"{url_prefix}/{code_lower}_p.jpg"))
-                                
-                            if decision_data['user_files_exist']['landscape']:
-                                entity.thumb.append(EntityThumb(aspect="landscape", value=f"{url_prefix}/{decision_data['user_files_exist']['landscape']}"))
-                            elif os.path.exists(os.path.join(target_folder, f"{code_lower}_pl.jpg")):
-                                entity.thumb.append(EntityThumb(aspect="landscape", value=f"{url_prefix}/{code_lower}_pl.jpg"))
-                            
-                            arts = [f for f in sorted(os.listdir(target_folder)) if f.startswith(f"{code_lower}_art_")]
-                            for art in arts:
-                                entity.fanart.append(f"{url_prefix}/{art}")
-                                
-                        return entity
-
-                    # 사용자 및 시스템 파일 존재 여부 확인
                     code_lower = entity.ui_code.lower()
                     supported_extensions = ['jpg', 'png', 'webp']
 
-                    # 사용자 포스터 파일 확인 (발견된 파일명을 저장)
-                    for ext in supported_extensions:
-                        user_poster_filename = f"{code_lower}_p_user.{ext}"
-                        if os.path.exists(os.path.join(target_folder, user_poster_filename)):
-                            # True/False가 아닌, 실제 파일명을 저장합니다.
-                            decision_data['user_files_exist']['poster'] = user_poster_filename
-                            break 
-
-                    # 사용자 랜드스케이프 파일 확인 (발견된 파일명을 저장)
-                    for ext in supported_extensions:
-                        user_landscape_filename = f"{code_lower}_pl_user.{ext}"
-                        if os.path.exists(os.path.join(target_folder, user_landscape_filename)):
-                            # True/False가 아닌, 실제 파일명을 저장합니다.
-                            decision_data['user_files_exist']['landscape'] = user_landscape_filename
-                            break
-
-                    if os.path.exists(os.path.join(target_folder, f"{code_lower}_p.jpg")):
-                        decision_data['system_files_exist']['poster'] = True
-                    if os.path.exists(os.path.join(target_folder, f"{code_lower}_pl.jpg")):
-                        decision_data['system_files_exist']['landscape'] = True
-
                     if os.path.exists(target_folder):
+                        for ext in supported_extensions:
+                            user_poster_filename = f"{code_lower}_p_user.{ext}"
+                            if os.path.exists(os.path.join(target_folder, user_poster_filename)):
+                                decision_data['user_files_exist']['poster'] = user_poster_filename
+                                break 
+
+                        for ext in supported_extensions:
+                            user_landscape_filename = f"{code_lower}_pl_user.{ext}"
+                            if os.path.exists(os.path.join(target_folder, user_landscape_filename)):
+                                decision_data['user_files_exist']['landscape'] = user_landscape_filename
+                                break
+
+                        if os.path.exists(os.path.join(target_folder, f"{code_lower}_p.jpg")):
+                            decision_data['system_files_exist']['poster'] = True
+                        if os.path.exists(os.path.join(target_folder, f"{code_lower}_pl.jpg")):
+                            decision_data['system_files_exist']['landscape'] = True
+
                         arts_count = len([f for f in os.listdir(target_folder) if f.startswith(f"{code_lower}_art_")])
                         decision_data['system_files_exist']['arts'] = arts_count
 
@@ -1201,6 +1205,7 @@ class SiteAvBase:
         ps_url = decision_data.get('ps_url')
         site_config = decision_data.get('site_config', {})
         site_name = decision_data.get('site_name')
+        is_rescued = decision_data.get('is_rescued', False)
 
         pl_url = raw_urls.get('pl')
         specific_candidates_on_page = raw_urls.get('specific_poster_candidates', [])
@@ -1248,29 +1253,47 @@ class SiteAvBase:
         if image_mode == 'image_server':
             paths = decision_data['image_server_paths']
             rewrite = decision_data['rewrite_flag']
+            url_prefix = paths.get('url_prefix')
             code_lower = ui_code.lower()
             
-            user_poster_filename = decision_data['user_files_exist']['poster']
-            if user_poster_filename:
-                final_image_sources['poster_source'] = f"{paths['url_prefix']}/{user_poster_filename}"
-                final_image_sources['skip_poster_download'] = True
-                final_image_sources['is_user_poster'] = True
-                should_process_poster = False
-            elif decision_data['system_files_exist']['poster'] and not rewrite:
-                final_image_sources['poster_source'] = f"{paths['url_prefix']}/{code_lower}_p.jpg"
-                final_image_sources['skip_poster_download'] = True
-                should_process_poster = False
+            if url_prefix:
+                # 1순위: 유저 커스텀 포스터
+                user_poster_filename = decision_data['user_files_exist']['poster']
+                if user_poster_filename:
+                    final_image_sources['poster_source'] = f"{url_prefix}/{user_poster_filename}"
+                    final_image_sources['skip_poster_download'] = True
+                    final_image_sources['is_user_poster'] = True
+                    should_process_poster = False
+                # 2순위: 구출 완료된 항목(is_rescued)
+                elif is_rescued and decision_data['system_files_exist']['poster']:
+                    final_image_sources['poster_source'] = f"{url_prefix}/{code_lower}_p.jpg"
+                    final_image_sources['skip_poster_download'] = True
+                    should_process_poster = False
+                    logger.debug(f"[{cls.site_name}] 구출 완료 항목: 로컬 포스터 URL 즉시 연결 -> {final_image_sources['poster_source']}")
+                # 3순위: 시스템 파일이 이미 있고 덮어쓰기가 꺼진 경우
+                elif decision_data['system_files_exist']['poster'] and not rewrite:
+                    final_image_sources['poster_source'] = f"{url_prefix}/{code_lower}_p.jpg"
+                    final_image_sources['skip_poster_download'] = True
+                    should_process_poster = False
 
-            user_landscape_filename = decision_data['user_files_exist']['landscape']
-            if user_landscape_filename:
-                final_image_sources['landscape_source'] = f"{paths['url_prefix']}/{user_landscape_filename}"
-                final_image_sources['skip_landscape_download'] = True
-                final_image_sources['is_user_landscape'] = True
-                should_process_landscape = False
-            elif decision_data['system_files_exist']['landscape'] and not rewrite:
-                final_image_sources['landscape_source'] = f"{paths['url_prefix']}/{code_lower}_pl.jpg"
-                final_image_sources['skip_landscape_download'] = True
-                should_process_landscape = False
+                # 1순위: 유저 커스텀 랜드스케이프
+                user_landscape_filename = decision_data['user_files_exist']['landscape']
+                if user_landscape_filename:
+                    final_image_sources['landscape_source'] = f"{url_prefix}/{user_landscape_filename}"
+                    final_image_sources['skip_landscape_download'] = True
+                    final_image_sources['is_user_landscape'] = True
+                    should_process_landscape = False
+                # 2순위: 구출 완료된 랜드스케이프
+                elif is_rescued and decision_data['system_files_exist']['landscape']:
+                    final_image_sources['landscape_source'] = f"{url_prefix}/{code_lower}_pl.jpg"
+                    final_image_sources['skip_landscape_download'] = True
+                    should_process_landscape = False
+                    logger.debug(f"[{cls.site_name}] 구출 완료 항목: 로컬 랜드스케이프 URL 즉시 연결 -> {final_image_sources['landscape_source']}")
+                # 3순위: 시스템 파일이 이미 있고 덮어쓰기가 꺼진 경우
+                elif decision_data['system_files_exist']['landscape'] and not rewrite:
+                    final_image_sources['landscape_source'] = f"{url_prefix}/{code_lower}_pl.jpg"
+                    final_image_sources['skip_landscape_download'] = True
+                    should_process_landscape = False
 
         # --- 3. 포스터 소스 결정 ---
         if should_process_poster:
@@ -1920,7 +1943,17 @@ class SiteAvBase:
 
     @classmethod
     def _parse_ui_code(cls, cid_part_raw: str, content_type: str = 'unknown') -> tuple:
-        if not cls.config or 'censored_parser_rules' not in cls.config:
+        special_rules = []
+        generic_rules = []
+        if cls.config and 'censored_parser_rules' in cls.config:
+            special_rules = cls.config.get('censored_parser_rules', [])
+            generic_rules = cls.config.get('generic_parser_rules', [])
+        elif cls._yaml_settings:
+            parsing_rules = cls._yaml_settings.get('jav_parsing_rules', {})
+            special_rules = parsing_rules.get('censored_special_rules', [])
+            generic_rules = parsing_rules.get('generic_rules', [])
+
+        if not special_rules and not generic_rules:
             logger.warning("Censored UI Code Parser rules not loaded in config.")
             ui_code = cid_part_raw.upper()
             label_part = ui_code.split('-')[0].lower() if '-' in ui_code else ui_code.lower()
