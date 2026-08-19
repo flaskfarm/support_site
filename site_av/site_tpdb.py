@@ -17,6 +17,7 @@ class SiteTpdb(SiteAvBase):
     site_name = 'tpdb'
     site_char = 'P'
     module_char = 'W'
+    default_headers = SiteAvBase.base_default_headers.copy()
 
     site_base_url = 'https://api.theporndb.net'
     
@@ -30,6 +31,7 @@ class SiteTpdb(SiteAvBase):
         cls.config.update({
             "tpdb_api_token": db.get(f"{prefix}_{cls.site_name}_api_token"),
             "trans_option": db.get(f"{prefix}_trans_option"),
+            "trans_title": db.get_bool(f"{prefix}_trans_title") if db.get(f"{prefix}_trans_title") is not None else True,
             "use_extras": db.get_bool(f"{prefix}_use_extras"),
 
             "title_format": db.get(f"{prefix}_title_format"),
@@ -148,75 +150,99 @@ class SiteTpdb(SiteAvBase):
             return None
 
     @classmethod
-    def _calculate_western_score(cls, keyword, item_data, tpdb_rank):
-        # 1. 공백 및 모든 특수문자 제거
+    def _calculate_western_score(cls, keyword, item_data, rank):
+        if not isinstance(item_data, dict): return 0.0
+
         word_pattern = r'[^a-z0-9\s]'
-        kw_clean = re.sub(r'\s+', ' ', re.sub(word_pattern, '', keyword.lower())).strip()
-        raw_title = str(item_data.get('title', '')).lower()
+        kw_clean = re.sub(r'\s+', ' ', re.sub(word_pattern, '', str(keyword or '').lower())).strip()
+        raw_title = str(item_data.get('title') or '').lower()
         title_clean = re.sub(r'\s+', ' ', re.sub(word_pattern, '', raw_title)).strip()
 
-        # 2. SequenceMatcher를 위한 공백 없는 순수 텍스트
         kw_norm = kw_clean.replace(' ', '')
         title_norm = title_clean.replace(' ', '')
 
-        similarity = difflib.SequenceMatcher(None, kw_norm, title_norm).ratio() if kw_norm and title_norm else 0.0
-        score = similarity * 100.0
+        # 1. 랭크 기본점 (최대 40점)
+        score = max(10.0, 40.0 - (rank * 8.0))
 
-        # 3. 시리즈 숫자(Number) 불일치 페널티 (-5점)
-        kw_nums = set(re.findall(r'\b\d+\b', kw_clean))
-        title_nums = set(re.findall(r'\b\d+\b', title_clean))
-        if kw_nums != title_nums:
-            score -= 5.0
+        # 2. 스튜디오 매칭 (+25점, VR +2점)
+        studio_node = item_data.get('site') or item_data.get('studio') or {}
+        studio_name = str(studio_node.get('name') or '').lower()
+        studio_matched = False
+        if studio_name:
+            studio_norm = re.sub(r'[^a-z0-9]', '', studio_name)
+            if studio_norm:
+                if studio_norm in kw_norm:
+                    studio_matched = True
+                    score += 25.0
+                    if 'vr' in kw_norm and 'vr' in studio_norm: score += 2.0
+                elif kw_norm.startswith(studio_norm[:6]):
+                    studio_matched = True
+                    score += 20.0
 
-        # 4. 스튜디오 매칭 보너스 (+5점)
-        studio = str(item_data.get('site', {}).get('name', '')).lower()
-        if not studio:
-            studio = str(item_data.get('studio', {}).get('name', '')).lower()
-        if studio:
-            studio_norm = re.sub(r'[^a-z0-9]', '', studio)
-            if studio_norm and studio_norm in kw_norm:
-                score += 5.0
-
-        # 5. 배우 매칭 보너스 (+5점)
-        performers = item_data.get('performers', [])
+        # 3. 배우 매칭 (+20점)
         actor_matched = False
-        for p in performers:
-            actor_name = str(p.get('parent', p).get('name', '')).lower() if p.get('parent') else str(p.get('name', '')).lower()
-            if actor_name:
-                actor_norm = re.sub(r'[^a-z0-9]', '', actor_name)
-                if actor_norm and actor_norm in kw_norm:
+        performers = item_data.get('performers') or []
+        if isinstance(performers, list):
+            for p in performers:
+                source_dict = p.get('parent') if p.get('parent') else p
+                p_name = str(source_dict.get('name') or '').lower()
+                p_norm = re.sub(r'[^a-z0-9]', '', p_name)
+                if p_norm and p_norm in kw_norm:
                     actor_matched = True
+                    score += 20.0
                     break
-        if actor_matched:
-            score += 5.0
 
-        # 6. 포함 보너스 (+40점)
-        # 검색어 안에 [스튜디오]나 배우 이름이 포함되어 있어서 SequenceMatcher 비율은 낮게 나왔지만,
-        # 사실 영화 제목 텍스트 자체가 검색어 안에 완벽하게 들어있는 경우 점수 폭등
-        if kw_norm and title_norm and (title_norm in kw_norm):
-            score += 40.0
+        # 4. 날짜 일치 검증 (+20점)
+        item_date = str(item_data.get('date') or '').replace('-', ' ')
+        date_matched = False
+        date_match = re.search(r'\b(20\d{2}|\d{2})[ ._-](\d{2})[ ._-](\d{2})\b', kw_clean)
+        kw_date_nums = set()
+        if date_match:
+            y, m, d = date_match.group(1), date_match.group(2), date_match.group(3)
+            kw_date_nums = {y, m, d, y[-2:]}
+            if m in item_date and d in item_date:
+                date_matched = True
+                score += 20.0
 
-        # 7. 양질의 데이터 검증 페널티 (-10점, -5점)
+        # 품번/에피소드 숫자 (날짜 구성 숫자는 제외)
+        kw_nums = set(re.findall(r'\b\d+\b', kw_clean)) - kw_date_nums
+        title_nums = set(re.findall(r'\b\d+\b', title_clean))
+        if kw_nums:
+            num_matched = any(len(num) >= 2 and num in title_nums for num in kw_nums)
+            if num_matched: score += 20.0
+            elif not date_matched: score -= 15.0
+
+        # 5. 제목 텍스트 일치도 (완전 포함 +25점 / 단어 비례 최대 +20점)
+        if kw_norm and title_norm:
+            if len(title_norm) >= 3 and (title_norm in kw_norm or kw_norm in title_norm):
+                score += 25.0
+            else:
+                kw_words = set(re.findall(r'\b[a-z0-9]{3,}\b', kw_clean))
+                title_words = set(re.findall(r'\b[a-z0-9]{3,}\b', title_clean))
+                if kw_words and title_words:
+                    intersect = kw_words.intersection(title_words)
+                    score += (len(intersect) / len(title_words)) * 20.0
+
+        # 6. 스튜디오 + 배우 + 날짜 3중 완전 일치 시 100점 확정
+        if studio_matched and actor_matched and date_matched:
+            score = 100.0
+
+        # 7. 이미지 부재 감점 (-10점)
         has_image = False
-        if isinstance(item_data.get('posters'), dict) and (item_data['posters'].get('full') or item_data['posters'].get('large')):
-            has_image = True
-        elif isinstance(item_data.get('background'), dict) and (item_data['background'].get('full') or item_data['background'].get('large')):
-            has_image = True
-        elif item_data.get('poster') or item_data.get('image'):
-            has_image = True
-            
+        posters = item_data.get('posters') or {}
+        backgrounds = item_data.get('background') or {}
+        if isinstance(posters, dict) and (posters.get('full') or posters.get('large')): has_image = True
+        elif isinstance(backgrounds, dict) and (backgrounds.get('full') or backgrounds.get('large')): has_image = True
+        elif item_data.get('poster') or item_data.get('image'): has_image = True
         if not has_image: score -= 10.0
-        
-        plot_text = str(item_data.get('description', '')).strip()
-        if not plot_text: score -= 5.0
 
-        # 8. TPDB 랭크 기본 페널티
-        score -= (tpdb_rank * 1.0)
+        final_score = min(100.0, max(1.0, score))
+        logger.debug(f"[{cls.site_name}] 채점 상세 -> Title:'{raw_title[:30]}' | Score:{final_score:.1f} (Rank:{rank}, Studio:{studio_matched}, Actor:{actor_matched}, Date:{date_matched})")
+        return final_score
 
-        return score
 
     @classmethod
-    def search(cls, keyword, manual=False):
+    def search(cls, keyword, manual=False, media_path=None, filename=None, **kwargs):
         encoded_keyword = urllib.parse.quote(keyword)
         
         scenes_data = cls._call_api(f"/scenes?parse={encoded_keyword}&hash=")
@@ -341,39 +367,26 @@ class SiteTpdb(SiteAvBase):
                 except Exception as e_proxy:
                     logger.error(f"[{cls.site_name}] Proxy conversion error for {item.image_url}: {e_proxy}")
 
-            item.score = cls._calculate_western_score(keyword, item_data, tpdb_rank)
+            calc_score = cls._calculate_western_score(keyword, item_data, tpdb_rank)
+            item.score = max(0, min(100, int(round(calc_score))))
             ret.append(item.as_dict())
 
         ret.sort(key=lambda k: k.get("score", 0), reverse=True)
 
-        if ret:
-            top_score = ret[0]["score"]
-            offset = top_score - 100.0 if top_score > 100.0 else 0.0
-            
-            for item in ret:
-                item["score"] = int(round(item["score"] - offset))
-                
-            for i in range(1, len(ret)):
-                if ret[i]["score"] >= ret[i-1]["score"]:
-                    ret[i]["score"] = max(0, ret[i-1]["score"] - 1)
-                    
-            for item in ret:
-                item["score"] = max(0, min(100, item["score"]))
-
-        # 단일 검색 결과 신뢰 옵션 (100점 바이패스)
-        if len(ret) == 1 and cls.config.get("trust_single_result", True):
+        # 단일 검색 결과 신뢰 옵션 (기본값: False)
+        if len(ret) == 1 and cls.config.get("trust_single_result", False):
             ret[0]['score'] = 100
-            logger.debug(f"[{cls.site_name}] Only one result found. Bypassing score check to 100.")
+            logger.debug(f"[{cls.site_name}] 단일 검색 결과 신뢰 옵션 활성화 -> 100점 부여")
 
         logger.info(f"[{cls.site_name}] Search Success: {len(ret)} results found.")
-        
+
         for i, item in enumerate(ret[:5]):
             logger.debug(f"  {i+1}. Score:{item.get('score'):>3} | Type:{item.get('content_type'):<5} | Title:{item.get('title')} | Code:{item.get('code')}")
 
         return {'ret': 'success', 'data': ret[:15]}
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False, skip_trans=False):
+    def info(cls, code, fp_meta_mode=False, skip_trans=False, media_path=None):
         try:
             entity = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans)
             return {'ret': 'success', 'data': entity.as_dict()} if entity else {'ret': 'error'}
@@ -382,7 +395,7 @@ class SiteTpdb(SiteAvBase):
             return {'ret': 'exception', 'data': str(e)}
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
+    def __info(cls, code, fp_meta_mode=False, skip_trans=False, media_path=None):
         if len(code) < 5 or code[3] != '_':
             logger.error(f"[{cls.site_name}] Invalid code format: {code}")
             return None
@@ -413,9 +426,16 @@ class SiteTpdb(SiteAvBase):
         entity.original = {}
 
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
-        entity.title = entity.originaltitle = entity.sorttitle = str(item_data.get('title', entity.ui_code))
-        entity.original['tagline'] = entity.originaltitle
-        entity.tagline = entity.originaltitle
+        raw_title = str(item_data.get('title', entity.ui_code)).strip()
+        entity.title = entity.originaltitle = entity.sorttitle = raw_title
+        
+        cleaned_tagline = cls.A_P(raw_title)
+        entity.original['tagline'] = cleaned_tagline
+        
+        if skip_trans or not cls.config.get('trans_title', True):
+            entity.tagline = cleaned_tagline
+        else:
+            entity.tagline = cls.trans_by_llm(cleaned_tagline)
         
         if item_data.get('date'):
             entity.premiered = str(item_data['date'])
@@ -478,13 +498,16 @@ class SiteTpdb(SiteAvBase):
             selected_actors = females + males
         entity.actor.extend(selected_actors)
 
+        # Tags & Genres (JAV 표준 tags.json 및 번역 엔진 적용)
         if 'genre' not in entity.original: entity.original['genre'] = []
         for tag in item_data.get('tags', []):
             tag_name = tag.get('name')
             if tag_name:
-                tag_str = str(tag_name)
+                tag_str = str(tag_name).strip()
                 entity.original['genre'].append(tag_str)
-                entity.genre.append(tag_str)
+                trans_genre = cls.get_translated_tag('uncen_tags', tag_str)
+                if trans_genre not in entity.genre:
+                    entity.genre.append(trans_genre)
 
         # =========================================================
         # 이미지 소스 추출 및 병합 로직

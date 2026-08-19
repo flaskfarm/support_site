@@ -579,7 +579,7 @@ class SiteAvBase:
             if cls.config and cls.config.get('use_proxy', False):
                 proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
 
-            request_headers = cls.default_headers.copy()
+            request_headers = cls.default_headers.copy() if cls.default_headers else cls.base_default_headers.copy()
 
             for domain, expert_module in CONTEXT_SWITCH_RULES.items():
                 if domain in url:
@@ -2196,29 +2196,47 @@ class SiteAvBase:
 
     @classmethod
     def get_translated_tag(cls, tag_type, tag):
-        tags_json = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tags.json")
-        with open(tags_json, "r", encoding="utf8") as f:
-            tags = json.load(f)
-
-        if tag_type not in tags:
+        if not tag or not isinstance(tag, str):
             return tag
 
+        tag = tag.strip()
+        if not tag:
+            return tag
+
+        # 1. 이미 한글이 포함된 태그는 사전 조회 및 파일 쓰기 없이 즉시 반환 (사전 오염 방지)
+        if SiteUtilAv.is_include_hangul(tag):
+            return tag
+
+        tags_json = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tags.json")
+        try:
+            with open(tags_json, "r", encoding="utf8") as f:
+                tags = json.load(f)
+        except Exception:
+            tags = {}
+
+        if tag_type not in tags:
+            tags[tag_type] = {}
+
+        # 2. 사전에 이미 등록된 외래어 태그라면 캐시된 번역어 즉시 반환
         if tag in tags[tag_type]:
             return tags[tag_type][tag]
 
-        trans_text = cls.trans(tag, source="ja", target="ko")
-        # logger.debug(f'태그 번역: {tag} - {trans_text}')
-        if SiteUtilAv.is_include_hangul(trans_text) or trans_text.replace(" ", "").isalnum():
+        # 3. 원문 언어 감지 (순수 영문: en, 일본어/한자: ja)
+        is_english = bool(re.match(r'^[a-zA-Z0-9\s\-_.,/&()]+$', tag))
+        source_lang = "en" if is_english else "ja"
+        trans_text = cls.trans(tag, source=source_lang, target="ko")
+
+        # 4. 유의미하게 한글로 번역된 결과만 사전에 신규 등록
+        if trans_text and trans_text != tag and SiteUtilAv.is_include_hangul(trans_text):
             tags[tag_type][tag] = trans_text
+            try:
+                with open(tags_json, "w", encoding="utf8") as f:
+                    json.dump(tags, f, indent=4, ensure_ascii=False)
+            except Exception as e_write:
+                logger.error(f"[{cls.site_name}] tags.json 저장 실패: {e_write}")
+            return trans_text
 
-            with open(tags_json, "w", encoding="utf8") as f:
-                json.dump(tags, f, indent=4, ensure_ascii=False)
-
-            res = tags[tag_type][tag]
-        else:
-            res = tag
-
-        return res
+        return tag
 
 
     @classmethod
@@ -3556,6 +3574,218 @@ class SiteAvBase:
             time.sleep(2)
         
         return None, None
+
+
+    # =========================================================================
+    # region Video Fingerprint Calculation (OSHash / pHash)
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def calculate_oshash(cls, filepath: str) -> str:
+        """
+        Stash/OpenSubtitles 공식 OSHash 알고리즘
+        파일 크기 + 앞 64KB(8192개 64비트 정수) + 뒤 64KB(8192개 64비트 정수) Little-Endian 합산
+        """
+        if not filepath:
+            logger.debug("[Fingerprint:OSHASH] 파일 경로가 전달되지 않았습니다.")
+            return None
+
+        if not os.path.exists(filepath):
+            logger.debug(f"[Fingerprint:OSHASH] 파일이 존재하지 않습니다: '{filepath}'")
+            return None
+
+        try:
+            import struct
+            t_start = time.time()
+            size = os.path.getsize(filepath)
+            
+            if size < 65536 * 2:
+                logger.debug(f"[Fingerprint:OSHASH] 파일 크기가 너무 작아(128KB 미만) 계산을 건너뜁니다: {size} bytes ({os.path.basename(filepath)})")
+                return None
+
+            logger.debug(f"[Fingerprint:OSHASH] 시작: {os.path.basename(filepath)} (크기: {size:,} bytes)")
+
+            chunk_size = 65536  # 64KB
+            num_uint64 = chunk_size // 8  # 8192
+            hash_val = size
+
+            with open(filepath, 'rb') as f:
+                # 앞 64KB 고속 통언패킹
+                head_bytes = f.read(chunk_size)
+                if len(head_bytes) == chunk_size:
+                    head_ints = struct.unpack(f'<{num_uint64}Q', head_bytes)
+                    hash_val = (hash_val + sum(head_ints)) & 0xFFFFFFFFFFFFFFFF
+
+                # 뒤 64KB 고속 통언패킹
+                f.seek(max(0, size - chunk_size), 0)
+                tail_bytes = f.read(chunk_size)
+                if len(tail_bytes) == chunk_size:
+                    tail_ints = struct.unpack(f'<{num_uint64}Q', tail_bytes)
+                    hash_val = (hash_val + sum(tail_ints)) & 0xFFFFFFFFFFFFFFFF
+
+            oshash_str = f"{hash_val:016x}"
+            elapsed = time.time() - t_start
+            logger.debug(f"[Fingerprint:OSHASH] 계산 완료: {oshash_str} (소요시간: {elapsed:.4f}초)")
+            return oshash_str
+        except Exception as e:
+            logger.error(f"[Fingerprint:OSHASH] 계산 중 오류 발생 ({filepath}): {e}")
+            logger.error(traceback.format_exc())
+            return None
+
+
+    @classmethod
+    def calculate_phash(cls, filepath: str, ffmpeg_path: str = "ffmpeg") -> str:
+        """
+        Stash 공식 5x5 Sprite Collage 비디오 pHash 알고리즘
+        클라우드 마운트 최적화: 전체 스트림 순차 디코딩을 배제하고 25개 지점만 고속 키프레임 점프(-ss before -i)하여 메모리 합성
+        """
+        if not filepath:
+            logger.debug("[Fingerprint:PHASH] 파일 경로가 전달되지 않았습니다.")
+            return None
+
+        if not os.path.exists(filepath):
+            logger.debug(f"[Fingerprint:PHASH] 파일이 존재하지 않습니다: '{filepath}'")
+            return None
+
+        try:
+            import subprocess
+            from io import BytesIO
+            t_start = time.time()
+
+            logger.debug(f"[Fingerprint:PHASH] 시작: {os.path.basename(filepath)} (FFmpeg: '{ffmpeg_path}')")
+
+            # 1. ffprobe 실행 파일 자동 추론 및 재생 시간 획득
+            ffprobe_path = "ffprobe"
+            if ffmpeg_path and ffmpeg_path != "ffmpeg":
+                bin_dir = os.path.dirname(ffmpeg_path)
+                probe_bin = os.path.join(bin_dir, "ffprobe.exe" if os.name == 'nt' else "ffprobe")
+                if os.path.exists(probe_bin):
+                    ffprobe_path = probe_bin
+
+            probe_cmd = [
+                ffprobe_path, "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", filepath
+            ]
+            res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+            duration_str = res.stdout.strip()
+            
+            if not duration_str:
+                logger.warning(f"[Fingerprint:PHASH] ffprobe로 재생 시간을 가져오지 못했습니다. stderr: {res.stderr[:200]}")
+                return None
+
+            duration = float(duration_str)
+            if duration <= 10.0:
+                logger.debug(f"[Fingerprint:PHASH] 영상 길이가 너무 짧아(10초 이하) 건너뜁니다: {duration:.2f}초")
+                return None
+
+            # 2. 5% ~ 95% 구간 25개 균등 타임스탬프 계산
+            start_time = duration * 0.05
+            end_time = duration * 0.95
+            sample_count = 25
+            interval = (end_time - start_time) / float(sample_count - 1)
+            timestamps = [start_time + i * interval for i in range(sample_count)]
+
+            logger.debug(f"[Fingerprint:PHASH] 25개 지점 고속 점프 캡처 시작: {start_time:.1f}s ~ {end_time:.1f}s (총 {duration:.1f}s, 간격: {interval:.1f}s)")
+
+            # 3. 25개 지점 고속 시크(-ss before -i) 및 메모리 파이프 로드
+            frames = []
+            screenshot_width = 160
+
+            for idx, ts in enumerate(timestamps):
+                cmd = [
+                    ffmpeg_path, "-y", "-ss", f"{ts:.2f}", "-noaccurate_seek",
+                    "-i", filepath, "-vf", f"scale={screenshot_width}:-1",
+                    "-frames:v", "1", "-f", "image2", "pipe:1"
+                ]
+                try:
+                    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8)
+                    if p.returncode == 0 and p.stdout:
+                        img = Image.open(BytesIO(p.stdout)).convert('RGB')
+                        frames.append(img)
+                except Exception as e_f:
+                    logger.debug(f"[Fingerprint:PHASH] 프레임 #{idx+1} 캡처 예외 (ts: {ts:.1f}s): {e_f}")
+
+            if not frames:
+                logger.warning(f"[Fingerprint:PHASH] 유효한 프레임을 하나도 추출하지 못했습니다: {filepath}")
+                return None
+
+            # 프레임 누락 시 마지막 프레임으로 25개 보충
+            while len(frames) < sample_count:
+                frames.append(frames[-1].copy())
+            frames = frames[:sample_count]
+
+            # 4. 5x5 콜라주 (Sprite) 이미지 메모리 합성
+            frame_w, frame_h = frames[0].size
+            sprite_w = screenshot_width * 5
+            sprite_h = frame_h * 5
+            sprite_image = Image.new('RGB', (sprite_w, sprite_h))
+
+            for i in range(sample_count):
+                c = i % 5
+                r = i // 5
+                f = frames[i]
+                if f.size != (screenshot_width, frame_h):
+                    f = f.resize((screenshot_width, frame_h), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.ANTIALIAS)
+                sprite_image.paste(f, (c * screenshot_width, r * frame_h))
+                f.close()
+
+            # 5. 32x32 DCT pHash 연산 (imagehash)
+            phash_str = None
+            try:
+                import imagehash
+                phash_val = imagehash.phash(sprite_image)
+                phash_str = str(phash_val)
+            except ImportError:
+                logger.warning("[Fingerprint:PHASH] imagehash 라이브러리가 설치되어 있지 않아 pHash를 계산할 수 없습니다. (pip install imagehash)")
+            finally:
+                sprite_image.close()
+
+            elapsed = time.time() - t_start
+            logger.debug(f"[Fingerprint:PHASH] 계산 완료: {phash_str} (소요시간: {elapsed:.2f}초)")
+            return phash_str
+
+        except Exception as e:
+            logger.error(f"[Fingerprint:PHASH] 계산 중 오류 발생 ({filepath}): {e}")
+            logger.error(traceback.format_exc())
+            return None
+
+
+    @classmethod
+    def get_video_fingerprints(cls, filepath: str, fp_type: str = "OSHASH", ffmpeg_path: str = "ffmpeg") -> list:
+        """
+        지문 방식 설정에 따라 fingerprints 리스트를 구성합니다.
+        반환: [{'algorithm': 'OSHASH', 'hash': '...'}, {'algorithm': 'PHASH', 'hash': '...'}]
+        """
+        fingerprints = []
+        if not filepath:
+            logger.debug("[Fingerprint] get_video_fingerprints: 전달된 경로가 없습니다.")
+            return fingerprints
+
+        if not os.path.exists(filepath):
+            logger.debug(f"[Fingerprint] get_video_fingerprints: 파일이 존재하지 않습니다: '{filepath}'")
+            return fingerprints
+
+        fp_type_upper = (fp_type or "OSHASH").upper()
+        logger.debug(f"[Fingerprint] 지문 추출 파이프라인 시작 -> 파일: '{os.path.basename(filepath)}', 요청 방식: {fp_type_upper}")
+
+        # 1. OSHash 계산
+        if fp_type_upper in ["OSHASH", "BOTH"]:
+            oshash = cls.calculate_oshash(filepath)
+            if oshash:
+                fingerprints.append({"algorithm": "OSHASH", "hash": oshash})
+
+        # 2. pHash 계산
+        if fp_type_upper in ["PHASH", "BOTH"]:
+            phash = cls.calculate_phash(filepath, ffmpeg_path=ffmpeg_path)
+            if phash:
+                fingerprints.append({"algorithm": "PHASH", "hash": phash})
+
+        logger.debug(f"[Fingerprint] 최종 추출된 지문 개수: {len(fingerprints)}개 -> {fingerprints}")
+        return fingerprints
+
+
+    # endregion Video Fingerprint Calculation
+    # =========================================================================
 
 
     # ---------------------------------------------------------

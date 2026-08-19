@@ -89,6 +89,9 @@ from .site_av.site_carib import SiteCarib
 from .site_av.site_heyzo import SiteHeyzo
 from .site_av.site_fc2com import SiteFc2com
 
+from .site_av.site_stashdb import SiteStashdb
+from .site_av.site_tpdb import SiteTpdb
+
 """
 from .site_fc2.site_7mmtv import Site7mmTv
 from .site_fc2.site_bp4x import SiteBp4x
