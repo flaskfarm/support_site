@@ -150,7 +150,7 @@ class SiteTpdb(SiteAvBase):
             return None
 
     @classmethod
-    def _calculate_western_score(cls, keyword, item_data, rank):
+    def _calculate_western_score(cls, keyword, item_data, rank, local_duration=None):
         if not isinstance(item_data, dict): return 0.0
 
         word_pattern = r'[^a-z0-9\s]'
@@ -161,10 +161,34 @@ class SiteTpdb(SiteAvBase):
         kw_norm = kw_clean.replace(' ', '')
         title_norm = title_clean.replace(' ', '')
 
-        # 1. 랭크 기본점 (최대 40점)
-        score = max(10.0, 40.0 - (rank * 8.0))
+        # 1. 랭크 기본점 (1위 30점, 2위 18점, 3위 17점, 4위 16점, 5위~ 15점)
+        score = 30.0 if rank == 0 else max(15.0, 19.0 - float(rank))
 
-        # 2. 스튜디오 매칭 (+25점, VR +2점)
+        # 2. 영상 길이(Duration) 정밀 매칭 (최대 +30점 가산)
+        duration_matched = False
+        item_duration = item_data.get('duration') or item_data.get('seconds')
+        if not item_duration and item_data.get('length'):
+            parts = str(item_data['length']).split(':')
+            if len(parts) == 2: item_duration = int(parts[0])*60 + int(parts[1])
+            elif len(parts) == 3: item_duration = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
+
+        if local_duration and item_duration:
+            try:
+                item_sec = float(item_duration)
+                diff_sec = abs(float(local_duration) - item_sec)
+                if diff_sec <= 0.2:
+                    score += 30.0
+                    duration_matched = True
+                elif diff_sec <= 1.0:
+                    score += 25.0
+                    duration_matched = True
+                elif diff_sec <= 10.0:
+                    score += max(2.0, 22.0 - (diff_sec * 2.0))
+                    duration_matched = True
+            except Exception:
+                pass
+
+        # 3. 스튜디오 매칭 (+25점, VR +2점)
         studio_node = item_data.get('site') or item_data.get('studio') or {}
         studio_name = str(studio_node.get('name') or '').lower()
         studio_matched = False
@@ -179,7 +203,7 @@ class SiteTpdb(SiteAvBase):
                     studio_matched = True
                     score += 20.0
 
-        # 3. 배우 매칭 (+20점)
+        # 4. 배우 매칭 (+20점)
         actor_matched = False
         performers = item_data.get('performers') or []
         if isinstance(performers, list):
@@ -192,7 +216,7 @@ class SiteTpdb(SiteAvBase):
                     score += 20.0
                     break
 
-        # 4. 날짜 일치 검증 (+20점)
+        # 5. 날짜 일치 검증 (+20점)
         item_date = str(item_data.get('date') or '').replace('-', ' ')
         date_matched = False
         date_match = re.search(r'\b(20\d{2}|\d{2})[ ._-](\d{2})[ ._-](\d{2})\b', kw_clean)
@@ -212,7 +236,7 @@ class SiteTpdb(SiteAvBase):
             if num_matched: score += 20.0
             elif not date_matched: score -= 15.0
 
-        # 5. 제목 텍스트 일치도 (완전 포함 +25점 / 단어 비례 최대 +20점)
+        # 6. 제목 텍스트 일치도 (완전 포함 +25점 / 단어 비례 최대 +20점)
         if kw_norm and title_norm:
             if len(title_norm) >= 3 and (title_norm in kw_norm or kw_norm in title_norm):
                 score += 25.0
@@ -223,11 +247,15 @@ class SiteTpdb(SiteAvBase):
                     intersect = kw_words.intersection(title_words)
                     score += (len(intersect) / len(title_words)) * 20.0
 
-        # 6. 스튜디오 + 배우 + 날짜 3중 완전 일치 시 100점 확정
+        # 7. 스튜디오 + 배우 + 날짜 3중 완전 일치 시 100점 확정
         if studio_matched and actor_matched and date_matched:
             score = 100.0
 
-        # 7. 이미지 부재 감점 (-10점)
+        # 8. 스튜디오 + 배우 + 영상길이 일치 시 100점 확정 (제목 없는 파일명 구출)
+        if studio_matched and actor_matched and duration_matched:
+            score = 100.0
+
+        # 9. 이미지 부재 감점 (-10점)
         has_image = False
         posters = item_data.get('posters') or {}
         backgrounds = item_data.get('background') or {}
@@ -237,12 +265,15 @@ class SiteTpdb(SiteAvBase):
         if not has_image: score -= 10.0
 
         final_score = min(100.0, max(1.0, score))
-        logger.debug(f"[{cls.site_name}] 채점 상세 -> Title:'{raw_title[:30]}' | Score:{final_score:.1f} (Rank:{rank}, Studio:{studio_matched}, Actor:{actor_matched}, Date:{date_matched})")
+        dur_log = f"DurMatch:{duration_matched}" if local_duration else "DurMatch:N/A"
+        logger.debug(f"[{cls.site_name}] 채점 상세 -> Title:'{raw_title[:30]}' | Score:{final_score:.1f} (Rank:{rank}, Studio:{studio_matched}, Actor:{actor_matched}, Date:{date_matched}, {dur_log})")
         return final_score
 
 
     @classmethod
     def search(cls, keyword, manual=False, media_path=None, filename=None, **kwargs):
+        target_video = media_path or filename
+        local_dur = cls.get_video_duration(target_video) if target_video and os.path.exists(target_video) else None
         encoded_keyword = urllib.parse.quote(keyword)
         
         scenes_data = cls._call_api(f"/scenes?parse={encoded_keyword}&hash=")
@@ -367,7 +398,7 @@ class SiteTpdb(SiteAvBase):
                 except Exception as e_proxy:
                     logger.error(f"[{cls.site_name}] Proxy conversion error for {item.image_url}: {e_proxy}")
 
-            calc_score = cls._calculate_western_score(keyword, item_data, tpdb_rank)
+            calc_score = cls._calculate_western_score(keyword, item_data, tpdb_rank, local_duration=local_dur)
             item.score = max(0, min(100, int(round(calc_score))))
             ret.append(item.as_dict())
 
@@ -498,14 +529,14 @@ class SiteTpdb(SiteAvBase):
             selected_actors = females + males
         entity.actor.extend(selected_actors)
 
-        # Tags & Genres (JAV 표준 tags.json 및 번역 엔진 적용)
+        # Tags & Genres
         if 'genre' not in entity.original: entity.original['genre'] = []
         for tag in item_data.get('tags', []):
             tag_name = tag.get('name')
             if tag_name:
                 tag_str = str(tag_name).strip()
                 entity.original['genre'].append(tag_str)
-                trans_genre = cls.get_translated_tag('uncen_tags', tag_str)
+                trans_genre = cls.get_translated_tag(tag_str)
                 if trans_genre not in entity.genre:
                     entity.genre.append(trans_genre)
 
@@ -521,19 +552,35 @@ class SiteTpdb(SiteAvBase):
         is_force_poster = current_studio_norm in force_studios
 
         if content_type == 'scene':
-            front_cover = item_data.get('background', {}).get('full') or item_data.get('background', {}).get('large')
-            original_poster = item_data.get('posters', {}).get('full') or item_data.get('posters', {}).get('large')
-            
-            if is_force_poster and original_poster:
-                logger.debug(f"[{cls.site_name}] Studio '{entity.studio}' is in Poster Force list. Bypassing Smart Crop.")
-                raw_image_urls['poster'] = original_poster
-            elif use_smart_crop and front_cover:
-                logger.debug(f"[{cls.site_name}] Scene & Smart Crop is ON. Routing Background to Poster for AI Cropping.")
-                raw_image_urls['poster'] = front_cover
-            else:
-                raw_image_urls['poster'] = original_poster
-            
-            raw_image_urls['pl'] = front_cover
+            landscape_cover_url = item_data.get('background', {}).get('full') or item_data.get('background', {}).get('large')
+            portrait_poster_url = item_data.get('posters', {}).get('full') or item_data.get('posters', {}).get('large')
+
+            poster_url = None
+            if is_force_poster and portrait_poster_url:
+                poster_url = portrait_poster_url
+            elif portrait_poster_url:
+                poster_url = portrait_poster_url
+            elif use_smart_crop and landscape_cover_url:
+                try:
+                    res_pl = cls.get_response(landscape_cover_url, timeout=10)
+                    if res_pl and res_pl.status_code == 200:
+                        img_pl = Image.open(BytesIO(res_pl.content))
+                        cropped = cls._smart_crop_image(img_pl)
+                        if cropped:
+                            temp_path = cls.save_pil_to_temp(cropped)
+                            if temp_path:
+                                poster_url = temp_path
+                                logger.debug(f"[{cls.site_name}] 스마트 크롭 성공 -> 임시 세로 포스터 생성: {temp_path}")
+                            cropped.close()
+                        img_pl.close()
+                except Exception as e_crop:
+                    logger.error(f"[{cls.site_name}] 스마트 크롭 시도 중 오류: {e_crop}")
+
+            if not poster_url:
+                logger.debug(f"[{cls.site_name}] 세로 포스터 없음/크롭 실패 -> _p.jpg 생성 없이 _pl.jpg 직결")
+
+            raw_image_urls['poster'] = poster_url
+            raw_image_urls['pl'] = landscape_cover_url
 
         elif content_type == 'movie':
             raw_image_urls['poster'] = item_data.get('posters', {}).get('full') or item_data.get('posters', {}).get('large')
@@ -554,25 +601,31 @@ class SiteTpdb(SiteAvBase):
         if image_mode == 'image_server':
             try:
                 safe_studio = re.sub(r'[^A-Za-z0-9]', '_', entity.studio) if entity.studio else 'Unknown'
-                local_path = cls.MetadataSetting.get('western_image_server_local_path')
-                server_url = cls.MetadataSetting.get('western_image_server_url')
-                base_save_format = cls.MetadataSetting.get('western_image_server_save_format')
+                first_char = safe_studio[0].upper() if safe_studio else 'ETC'
+                if first_char.isdigit():
+                    first_char = '09'
+                elif not first_char.isalpha():
+                    first_char = 'ETC'
+
+                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                base_save_format = cls.MetadataSetting.get('western_image_server_save_format') or "/western/{studio_1}/{studio}"
                 
-                format_map = {'studio': safe_studio, 'label': safe_studio, 'label_1': safe_studio[0]}
+                format_map = {
+                    'studio': safe_studio,
+                    'studio_1': first_char,
+                    'label': safe_studio,
+                    'label_1': first_char,
+                }
                 final_relative_folder_path = base_save_format.format_map(format_map).strip('/\\')
                 
                 entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
                 entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
 
-                combined_title = f"[{safe_studio}] {entity.originaltitle}"
-                safe_filename = cls._make_safe_filename(combined_title)
-                safe_filename += f"_{type_char}_{item_id}" 
-                entity.ui_code = safe_filename 
-
             except Exception as e:
-                logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+                logger.error(f"[{cls.site_name}] Image Server Path 생성 실패: {e}")
 
-        # Base 클래스의 공통 이미지 처리
+        # 고유 코드(WPS_ID / WPM_ID) 기반으로 이미지 저장
         entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
 
         # 병합된 Landscape 이미지 로컬/서버 적용
