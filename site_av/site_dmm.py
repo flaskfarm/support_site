@@ -799,13 +799,9 @@ class SiteDmm(SiteAvBase):
                         if "％OFF" in g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
 
                         entity.original['genre'].append(g_ja)
-
-                        if g_ja in AV_GENRE: 
-                            entity.genre.append(AV_GENRE[g_ja])
-                        else:
-                            g_ko = cls.trans(g_ja).replace(" ", "")
-                            if g_ko not in AV_GENRE_IGNORE_KO: 
-                                entity.genre.append(g_ko)
+                        trans_genre = cls.get_translated_tag(g_ja)
+                        if trans_genre and trans_genre not in AV_GENRE_IGNORE_KO and trans_genre not in entity.genre:
+                            entity.genre.append(trans_genre)
 
             elif tree is not None:
                 # --- HTML에서 데이터 파싱 (dvd/bluray) ---
@@ -877,14 +873,10 @@ class SiteDmm(SiteAvBase):
                             genre_ja_dvd = genre_ja_tag_dvd.text_content().strip()
                             if not genre_ja_dvd or "％OFF" in genre_ja_dvd or genre_ja_dvd in AV_GENRE_IGNORE_JA: 
                                 continue
-                            entity.original['genre'].append(genre_ja_dvd) # <<-- [수정]
-                            if genre_ja_dvd in AV_GENRE:
-                                if AV_GENRE[genre_ja_dvd] not in entity.genre: 
-                                    entity.genre.append(AV_GENRE[genre_ja_dvd])
-                            else:
-                                genre_ko_dvd = cls.trans(genre_ja_dvd).replace(" ", "")
-                                if genre_ko_dvd not in AV_GENRE_IGNORE_KO and genre_ko_dvd not in entity.genre :
-                                    entity.genre.append(genre_ko_dvd)
+                            entity.original['genre'].append(genre_ja_dvd)
+                            trans_genre = cls.get_translated_tag(genre_ja_dvd)
+                            if trans_genre and trans_genre not in AV_GENRE_IGNORE_KO and trans_genre not in entity.genre:
+                                entity.genre.append(trans_genre)
 
                     # 출시일 관련 정보 수집
                     elif "商品発売日" in key_dvd: premiered_shouhin_dvd = value_text_all_dvd.replace("/", "-")

@@ -594,7 +594,7 @@ class SiteFc2com(SiteAvBase):
                     g = genre_name.text_content().strip()
                     if g:
                         entity.original['genre'].append(g)
-                        entity.genre.append(cls.trans(g))
+                        entity.genre.append(cls.get_translated_tag(g))
 
                 # 6. Image (PL)
                 # og:image 우선 -> 없으면 본문

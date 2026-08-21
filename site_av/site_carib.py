@@ -243,7 +243,7 @@ class SiteCarib(SiteAvBase):
         for item in genre_nodes:
             item_str = str(item).strip()
             entity.original['genre'].append(item_str)
-            entity.genre.append(cls.get_translated_tag('uncen_tags', item_str))
+            entity.genre.append(cls.get_translated_tag(item_str))
 
         # Plot
         plot_node = tree.xpath('//p[@itemprop="description"]/text()')

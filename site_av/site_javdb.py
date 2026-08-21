@@ -331,8 +331,8 @@ class SiteJavdb(SiteAvBase):
                     genre_name = genre_name_raw.strip()
                     if genre_name:
                         entity.original['genre'].append(genre_name)
-                        trans_genre = cls.trans(genre_name)
-                        if trans_genre not in entity.genre: 
+                        trans_genre = cls.get_translated_tag(genre_name)
+                        if trans_genre and trans_genre not in entity.genre:
                             entity.genre.append(trans_genre)
             elif key == 'actor(s)':
                 if entity.actor is None: entity.actor = []

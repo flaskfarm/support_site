@@ -311,12 +311,9 @@ class SiteMgstage(SiteAvBase):
                         if "MGSだけのおまけ映像付き" in g_ja or not g_ja or g_ja in AV_GENRE_IGNORE_JA: continue
 
                         entity.original['genre'].append(g_ja)
-                        if g_ja in AV_GENRE:
-                            g_ko = AV_GENRE[g_ja]
-                            if g_ko not in entity.genre: entity.genre.append(g_ko)
-                        else:
-                            g_ko = cls.trans(g_ja).replace(" ", "")
-                            if g_ko not in AV_GENRE_IGNORE_KO and g_ko not in entity.genre: entity.genre.append(g_ko)
+                        trans_genre = cls.get_translated_tag(g_ja)
+                        if trans_genre and trans_genre not in AV_GENRE_IGNORE_KO and trans_genre not in entity.genre:
+                            entity.genre.append(trans_genre)
 
             premiered_str = None
             date_pattern = re.compile(r'^\d{4}\/\d{2}\/\d{2}$')

@@ -258,13 +258,9 @@ class SiteJavbus(SiteAvBase):
                     if not genre_ja or genre_ja == "多選提交" or genre_ja in AV_GENRE_IGNORE_JA: 
                         continue
                     entity.original['genre'].append(genre_ja)
-                    if genre_ja in AV_GENRE:
-                        if AV_GENRE[genre_ja] not in entity.genre:
-                            entity.genre.append(AV_GENRE[genre_ja])
-                    else:
-                        genre_ko = cls.trans(genre_ja).replace(" ", "")
-                        if genre_ko not in AV_GENRE_IGNORE_KO and genre_ko not in entity.genre: 
-                            entity.genre.append(genre_ko)
+                    trans_genre = cls.get_translated_tag(genre_ja)
+                    if trans_genre and trans_genre not in AV_GENRE_IGNORE_KO and trans_genre not in entity.genre:
+                        entity.genre.append(trans_genre)
 
             if actor_header_p_node is not None:
                 for actor_span in actor_header_p_node.xpath("./following-sibling::p[1]//span[@class='genre']"):
