@@ -43,7 +43,7 @@ class SiteStashdb(SiteAvBase):
             "image_server_local_path": db.get(f"{prefix}_image_server_local_path"),
             "image_server_url": db.get(f"{prefix}_image_server_url"),
             "image_server_rewrite": db.get_bool(f"{prefix}_image_server_rewrite"),
-            "western_image_format": db.get(f"{prefix}_image_server_save_format") or "/western/{studio}",
+            "western_image_format": db.get(f"{prefix}_image_server_save_format") or "/western/{studio_1}/{studio}",
 
             "use_smart_crop": db.get_bool("western_use_smart_crop"),
             "stashdb_user_schema": db.get("western_stashdb_user_schema"),
@@ -176,7 +176,7 @@ class SiteStashdb(SiteAvBase):
 
 
     @classmethod
-    def _calculate_western_score(cls, keyword, item_data, rank):
+    def _calculate_western_score(cls, keyword, item_data, rank, local_duration=None):
         if not isinstance(item_data, dict): return 0.0
 
         word_pattern = r'[^a-z0-9\s]'
@@ -188,20 +188,44 @@ class SiteStashdb(SiteAvBase):
         kw_norm = kw_clean.replace(' ', '')
         title_norm = title_clean.replace(' ', '')
 
-        score = max(10.0, 40.0 - (rank * 8.0))
+        # 1. 랭크 기본점 (1위 30점, 2위 18점, 3위 17점, 4위 16점, 5위~ 15점)
+        score = 30.0 if rank == 0 else max(15.0, 19.0 - float(rank))
 
-        # 스튜디오 매칭 (+25점, VR 일치 +2점)
+        # 2. 영상 길이(Duration) 정밀 매칭 (최대 +30점 가산)
+        duration_matched = False
+        item_duration = item_data.get('duration')
+        if local_duration and item_duration:
+            try:
+                item_sec = float(item_duration)
+                diff_sec = abs(float(local_duration) - item_sec)
+                if diff_sec <= 0.2:
+                    score += 30.0
+                    duration_matched = True
+                elif diff_sec <= 1.0:
+                    score += 25.0
+                    duration_matched = True
+                elif diff_sec <= 10.0:
+                    score += max(2.0, 22.0 - (diff_sec * 2.0))
+                    duration_matched = True
+            except Exception:
+                pass
+
+        # 3. 스튜디오 매칭 (+25점, VR +2점)
         studio_node = item_data.get('studio') or {}
         studio_name = str(studio_node.get('name') or '').lower()
+        studio_matched = False
         if studio_name:
             studio_norm = re.sub(r'[^a-z0-9]', '', studio_name)
             if studio_norm:
                 if studio_norm in kw_norm:
+                    studio_matched = True
                     score += 25.0
                     if 'vr' in kw_norm and 'vr' in studio_norm: score += 2.0
-                elif kw_norm.startswith(studio_norm[:6]): score += 20.0
+                elif kw_norm.startswith(studio_norm[:6]):
+                    studio_matched = True
+                    score += 20.0
 
-        # 배우명 일치 검증 (+20점)
+        # 4. 배우명 일치 검증 (+20점)
         actor_matched = False
         performers = item_data.get('performers') or []
         if isinstance(performers, list):
@@ -214,22 +238,19 @@ class SiteStashdb(SiteAvBase):
                     score += 20.0
                     break
 
-        # 날짜 일치 검증 및 번호 페널티 분리
+        # 5. 날짜 일치 검증 (+20점)
         item_date = str(item_data.get('date') or '').replace('-', ' ')
         date_matched = False
-        
-        # 검색어 내 날짜 패턴 (예: 26 08 03 또는 2026 08 03) 추출
         date_match = re.search(r'\b(20\d{2}|\d{2})[ ._-](\d{2})[ ._-](\d{2})\b', kw_clean)
         kw_date_nums = set()
         if date_match:
             y, m, d = date_match.group(1), date_match.group(2), date_match.group(3)
             kw_date_nums = {y, m, d, y[-2:]}
-            # StashDB 출시일(date)과 일치 시 보너스 (+20점)
             if m in item_date and d in item_date:
                 date_matched = True
                 score += 20.0
 
-        # 품번/에피소드 숫자 (날짜 구성 숫자는 제외하여 오감점 방지)
+        # 품번/에피소드 숫자 (날짜 구성 숫자는 제외)
         kw_nums = set(re.findall(r'\b\d+\b', kw_clean)) - kw_date_nums
         title_nums = set(re.findall(r'\b\d+\b', title_clean))
         code_nums = set(re.findall(r'\b\d+\b', studio_code))
@@ -238,9 +259,9 @@ class SiteStashdb(SiteAvBase):
         if kw_nums:
             num_matched = any(len(num) >= 2 and num in all_item_nums for num in kw_nums)
             if num_matched: score += 20.0
-            elif not date_matched: score -= 15.0 # 날짜도 안 맞고 번호도 다를 때만 감점
+            elif not date_matched: score -= 15.0
 
-        # 제목 텍스트 일치도 (완전 포함 +25점 / 단어 비례 최대 +20점)
+        # 6. 제목 텍스트 일치도 (완전 포함 +25점 / 단어 비례 최대 +20점)
         if kw_norm and title_norm:
             if len(title_norm) >= 3 and (title_norm in kw_norm or kw_norm in title_norm):
                 score += 25.0
@@ -251,18 +272,22 @@ class SiteStashdb(SiteAvBase):
                     intersect = kw_words.intersection(title_words)
                     score += (len(intersect) / len(title_words)) * 20.0
 
-        # 6. 스튜디오 + 배우 + 날짜 3중 완전 일치 시 순위 무관 100점 확정
-        studio_matched = bool(studio_norm and studio_norm in kw_norm)
+        # 7. 스튜디오 + 배우 + 날짜 3중 완전 일치 시 100점 확정
         if studio_matched and actor_matched and date_matched:
             score = 100.0
 
-        # 이미지 데이터 부재 (-10점)
+        # 8. 스튜디오 + 배우 + 영상길이 일치 시 100점 확정 (제목 없는 파일명 구출)
+        if studio_matched and actor_matched and duration_matched:
+            score = 100.0
+
+        # 9. 이미지 데이터 부재 (-10점)
         images = item_data.get('images') or []
         if not (images or studio_node.get('images')):
             score -= 10.0
 
         final_score = min(100.0, max(1.0, score))
-        logger.debug(f"[{cls.site_name}] 채점 상세 -> Title:'{raw_title[:30]}' | Score:{final_score:.1f} (Rank:{rank}, Studio:{studio_matched}, Actor:{actor_matched}, Date:{date_matched})")
+        dur_log = f"DurMatch:{duration_matched}" if local_duration else "DurMatch:N/A"
+        logger.debug(f"[{cls.site_name}] 채점 상세 -> Title:'{raw_title[:30]}' | Score:{final_score:.1f} (Rank:{rank}, Studio:{studio_matched}, Actor:{actor_matched}, Date:{date_matched}, {dur_log})")
         return final_score
 
 
@@ -361,6 +386,7 @@ class SiteStashdb(SiteAvBase):
                   code
                   details
                   date
+                  duration
                   studio { id name parent { id name } images { url } }
                   performers { performer { id name gender disambiguation images { url } } }
                   images { url width height }
@@ -390,6 +416,9 @@ class SiteStashdb(SiteAvBase):
         if not scenes_list:
             logger.info(f"[{cls.site_name}] Search END - 결과 없음: {keyword}")
             return {'ret': 'no_match', 'data': []}
+
+        ret = []
+        local_dur = cls.get_video_duration(target_video) if target_video and os.path.exists(target_video) else None
 
         ret = []
         for idx, item_data in enumerate(scenes_list):
@@ -455,8 +484,8 @@ class SiteStashdb(SiteAvBase):
             if is_fp_match:
                 item.score = 100
             else:
-                calc_score = cls._calculate_western_score(keyword, item_data, idx)
-                item.score = int(round(calc_score)) # Plex 인식을 위해 정수형 변환
+                calc_score = cls._calculate_western_score(keyword, item_data, idx, local_duration=local_dur)
+                item.score = int(round(calc_score))
 
             item.score = max(0, min(100, item.score))
             ret.append(item.as_dict())
@@ -603,13 +632,13 @@ class SiteStashdb(SiteAvBase):
         selected_actors = females if females else males
         entity.actor.extend(selected_actors)
 
-        # Tags & Genres (JAV 표준 tags.json 및 번역 엔진 적용)
+        # Tags & Genres
         if 'genre' not in entity.original: entity.original['genre'] = []
         for tag in (item_data.get('tags') or []):
             if isinstance(tag, dict) and tag.get('name'):
                 tag_str = str(tag['name']).strip()
                 entity.original['genre'].append(tag_str)
-                trans_genre = cls.get_translated_tag('uncen_tags', tag_str)
+                trans_genre = cls.get_translated_tag(tag_str)
                 if trans_genre not in entity.genre:
                     entity.genre.append(trans_genre)
 
@@ -619,7 +648,10 @@ class SiteStashdb(SiteAvBase):
         force_studios = cls.config.get('poster_force_studios_set', set())
         is_force_poster = (entity.studio.lower() if entity.studio else "") in force_studios
 
-        front_cover, original_poster = None, None
+        # 1. 가로 커버(Landscape = PL) 및 세로 포스터(Portrait = P) 명확한 분류
+        landscape_cover_url = None
+        portrait_poster_url = None
+
         for img_obj in (item_data.get('images') or []):
             if not isinstance(img_obj, dict): continue
             url = str(img_obj.get('url') or '')
@@ -627,47 +659,78 @@ class SiteStashdb(SiteAvBase):
             w = img_obj.get('width')
             h = img_obj.get('height')
             if w and h and int(w) > int(h):
-                if not front_cover: front_cover = url
+                if not landscape_cover_url: landscape_cover_url = url
             else:
-                if not original_poster: original_poster = url
+                if not portrait_poster_url: portrait_poster_url = url
 
-        if not front_cover and not original_poster and item_data.get('images'):
+        if not landscape_cover_url and not portrait_poster_url and item_data.get('images'):
             first_url = str(item_data['images'][0].get('url') or '')
-            front_cover = first_url
-            original_poster = first_url
+            landscape_cover_url = first_url
 
-        if is_force_poster and original_poster:
-            raw_image_urls['poster'] = original_poster
-        elif use_smart_crop and front_cover:
-            raw_image_urls['poster'] = front_cover
-        else:
-            raw_image_urls['poster'] = original_poster or front_cover
+        # 2. 포스터 소스 결정 및 스마트 크롭 직접 실행 (Uncen과 동일한 표준 방식)
+        poster_url = None
 
-        raw_image_urls['pl'] = front_cover or original_poster
+        if is_force_poster and portrait_poster_url:
+            logger.debug(f"[{cls.site_name}] Studio '{entity.studio}' is in Poster Force list. Using Portrait Poster.")
+            poster_url = portrait_poster_url
+        elif portrait_poster_url:
+            # 공식 세로 포스터가 이미 존재하면 우선 사용
+            poster_url = portrait_poster_url
+        elif use_smart_crop and landscape_cover_url:
+            # 세로 포스터가 없고 스마트 크롭이 켜진 경우 -> 가로 커버 크롭 직접 시도
+            try:
+                res_pl = cls.get_response(landscape_cover_url, timeout=10)
+                if res_pl and res_pl.status_code == 200:
+                    img_pl = Image.open(BytesIO(res_pl.content))
+                    cropped = cls._smart_crop_image(img_pl)
+                    if cropped:
+                        temp_path = cls.save_pil_to_temp(cropped)
+                        if temp_path:
+                            poster_url = temp_path
+                            logger.debug(f"[{cls.site_name}] 스마트 크롭 성공 -> 임시 세로 포스터 생성: {temp_path}")
+                        cropped.close()
+                    img_pl.close()
+            except Exception as e_crop:
+                logger.error(f"[{cls.site_name}] 스마트 크롭 시도 중 오류: {e_crop}")
+
+        # 크롭 실패 시: poster_url은 None으로 유지 (억지로 가로 이미지를 포스터 소스로 넘기지 않음!)
+        if not poster_url:
+            logger.debug(f"[{cls.site_name}] 세로 포스터 없음/크롭 실패 -> _p.jpg 생성 없이 _pl.jpg 직결")
+
+        raw_image_urls['poster'] = poster_url
+        raw_image_urls['pl'] = landscape_cover_url
 
         # Image Server Path
         image_mode = cls.MetadataSetting.get('western_image_mode')
         if image_mode == 'image_server':
             try:
                 safe_studio = re.sub(r'[^A-Za-z0-9]', '_', entity.studio) if entity.studio else 'Unknown'
-                local_path = cls.MetadataSetting.get('western_image_server_local_path')
-                server_url = cls.MetadataSetting.get('western_image_server_url')
-                base_save_format = cls.MetadataSetting.get('western_image_server_save_format')
+                first_char = safe_studio[0].upper() if safe_studio else 'ETC'
+                if first_char.isdigit():
+                    first_char = '09'
+                elif not first_char.isalpha():
+                    first_char = 'ETC'
+
+                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
+                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
+                base_save_format = cls.MetadataSetting.get('western_image_server_save_format') or "/western/{studio_1}/{studio}"
                 
-                format_map = {'studio': safe_studio, 'label': safe_studio, 'label_1': safe_studio[0]}
+                format_map = {
+                    'studio': safe_studio,
+                    'studio_1': first_char,
+                    'label': safe_studio,
+                    'label_1': first_char,
+                }
                 final_relative_folder_path = base_save_format.format_map(format_map).strip('/\\')
                 
                 entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
                 entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
 
-                combined_title = f"[{safe_studio}] {entity.originaltitle}"
-                safe_filename = cls._make_safe_filename(combined_title) + f"_{type_char}_{item_id}"
-                entity.ui_code = safe_filename
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Image Server Path 생성 실패: {e}")
 
+        # 고유 코드(WSS_ID) 기반으로 이미지 저장
         entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
-        entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
 
         # Trailers
         urls_list = item_data.get('urls') or []

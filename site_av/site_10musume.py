@@ -324,7 +324,7 @@ class Site10Musume(SiteAvBase):
             if 'genre' not in entity.original: entity.original['genre'] = []
             for item in genrelist:
                 entity.original['genre'].append(item)
-                entity.genre.append(cls.get_translated_tag('uncen_tags', item))
+                entity.genre.append(cls.get_translated_tag(item))
 
         try:
             avg_rating = json_data.get('AvgRating')

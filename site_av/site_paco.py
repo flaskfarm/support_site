@@ -191,7 +191,7 @@ class SitePaco(SiteAvBase):
                 
                 entity.original['genre'] = entity.original.get('genre', [])
                 entity.original['genre'].append(tag)
-                trans_tag = cls.trans(tag)
+                trans_tag = cls.get_translated_tag(tag)
                 if trans_tag not in entity.genre: entity.genre.append(trans_tag)
 
         # 이미지 서버 경로 사전 설정

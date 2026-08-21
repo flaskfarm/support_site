@@ -272,13 +272,11 @@ class SiteJav321(SiteAvBase):
                             genre_ja_cleaned = cls._clean_value(genre_link.text_content().strip())
                             if not genre_ja_cleaned or genre_ja_cleaned in AV_GENRE_IGNORE_JA: continue
                             entity.original['genre'].append(genre_ja_cleaned)
-                            if genre_ja_cleaned in AV_GENRE: 
-                                temp_genre_list.append(AV_GENRE[genre_ja_cleaned])
-                            else:
-                                genre_ko_item = cls.trans(genre_ja_cleaned).replace(" ", "")
-                                if genre_ko_item not in AV_GENRE_IGNORE_KO: 
-                                    temp_genre_list.append(genre_ko_item)
+                            trans_genre = cls.get_translated_tag(genre_ja_cleaned)
+                            if trans_genre and trans_genre not in AV_GENRE_IGNORE_KO and trans_genre not in temp_genre_list:
+                                temp_genre_list.append(trans_genre)
                         if temp_genre_list: entity.genre = list(set(temp_genre_list))
+
                     elif current_key == "配信開始日":
                         date_val_cleaned = cls._clean_value((b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0])
                         if date_val_cleaned: 

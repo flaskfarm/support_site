@@ -347,7 +347,7 @@ class SiteHeyzo(SiteAvBase):
             if 'genre' not in entity.original: entity.original['genre'] = []
             for item in genrelist:
                 entity.original['genre'].append(item)
-                entity.genre.append(cls.get_translated_tag('uncen_tags', item))
+                entity.genre.append(cls.get_translated_tag(item))
 
         raw_plot = tmp.get('plot', '')
         if raw_plot:

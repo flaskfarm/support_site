@@ -1122,10 +1122,15 @@ class SiteAvBase:
                         safe_studio = getattr(entity, 'studio', '') or 'Unknown'
                         safe_studio_clean = re.sub(r'[^A-Za-z0-9가-힣]', '_', safe_studio).strip('_') or 'Unknown'
 
+                        studio_first = safe_studio_clean[0].upper() if safe_studio_clean else 'ETC'
+                        if studio_first.isdigit():
+                            studio_first = '09'
+
                         format_map = {
                             'label': label_full,
                             'label_1': label_first,
-                            'studio': safe_studio_clean
+                            'studio': safe_studio_clean,
+                            'studio_1': studio_first,
                         }
 
                         try:
@@ -1297,18 +1302,14 @@ class SiteAvBase:
 
         # --- 3. 포스터 소스 결정 ---
         if should_process_poster:
-            # logger.debug(f"Determining poster source for {ui_code} as no user/system file exists or rewrite is on.")
-            
+            # 사이트 모듈에서 이미 세로 포스터나 크롭본을 직접 넘긴 경우 (Uncen, Western 등)
             if direct_poster_url:
-                # logger.debug(f"Using pre-determined poster URL for {ui_code}.")
                 final_image_sources['poster_source'] = direct_poster_url
-                
-                # URL이 http로 시작할 때만 스마트 크롭 예약.
-                # 로컬 파일 경로라면 이미 처리된 것이므로 모드를 'local_file'로 설정.
                 if direct_poster_url.startswith('http'):
-                    if cls.config.get('use_smart_crop'):
-                        final_image_sources['poster_mode'] = 'smart_crop'
+                    # 원격 세로 이미지 URL (크롭 없이 그대로 저장)
+                    final_image_sources['poster_mode'] = None
                 else:
+                    # 스마트 크롭으로 생성된 로컬 임시 파일
                     final_image_sources['poster_mode'] = 'local_file'
                     temp_dir = os.path.join(path_data, "tmp")
                     if os.path.commonpath([temp_dir, os.path.abspath(direct_poster_url)]) == temp_dir:
@@ -1493,7 +1494,7 @@ class SiteAvBase:
                     if forced_crop_mode and pl_url:
                         final_image_sources.update({'poster_source': pl_url, 'poster_mode': f"crop_{forced_crop_mode}"})
 
-            else:
+            elif specific_candidates_on_page or (site_name == 'javdb'):
                 # Case 3: JavDB와 같이 ps_url 없이 pl/arts로 결정해야 하는 경우
                 # 1. (자동 탐색) 고화질 세로 이미지 우선 탐색
                 portrait_found = False
@@ -1555,7 +1556,12 @@ class SiteAvBase:
                         finally:
                             if im_lg_obj: im_lg_obj.close()
 
-            # 최종 폴백: 어떤 조건도 만족하지 못하면 PS 이미지를 포스터로 사용
+            # 그 외 (크롭 실패 또는 세로 포스터가 없는 경우)
+            else:
+                final_image_sources['poster_source'] = None
+                final_image_sources['poster_mode'] = None
+
+            # 최후의 수단: PS 이미지가 있다면 포스터로 할당
             if not final_image_sources.get('poster_source') and ps_url:
                 final_image_sources['poster_source'] = ps_url
 
@@ -1630,10 +1636,6 @@ class SiteAvBase:
             return None
 
 
-    # 의미상 메타데이터에서 처리해야한다.
-    # 귀찮아서 일단 여기서 처리
-    # 이미지 처리모드는 기본(ff_proxy)와 discord_proxy, image_server가 있다.
-    # 오리지널은 proxy사용 여부에 따라 ff_proxy에서 판단한다.
     @classmethod
     def finalize_images_for_entity(cls, entity, decision_data):
         if entity.thumb is None: entity.thumb = []
@@ -1647,7 +1649,7 @@ class SiteAvBase:
         landscape_source = image_sources.get('landscape_source')
         arts = image_sources.get('arts', [])
 
-        if not image_sources or not poster_source:
+        if not image_sources or (not poster_source and not landscape_source):
             return
 
         # 안전하게 jav_image 호출 헬퍼
@@ -1770,15 +1772,23 @@ class SiteAvBase:
 
             # --- 포스터 처리 ---
             poster_source = image_sources.get('poster_source')
-            if poster_source:
+            landscape_source = image_sources.get('landscape_source')
+            source_mode = image_sources.get('poster_mode')
+            os.makedirs(target_folder, exist_ok=True)
+
+            # 포스터 소스가 가로 커버 원본과 완벽히 동일하고, 크롭 지시어(source_mode)도 없는 경우 (크롭 실패 상태)
+            is_uncropped_landscape = bool(
+                poster_source and landscape_source and 
+                poster_source == landscape_source and not source_mode
+            )
+
+            if poster_source and not is_uncropped_landscape:
                 if image_sources.get('skip_poster_download'):
                     entity.thumb.append(EntityThumb(aspect="poster", value=poster_source))
-                else: # 다운로드 필요
+                else:
                     system_poster_path = os.path.join(target_folder, f"{code_lower}_p.jpg")
-                    os.makedirs(target_folder, exist_ok=True)
-                    source_mode = image_sources.get('poster_mode')
-                    
                     save_success = False
+                    
                     if source_mode == 'local_file':
                         try:
                             with open(poster_source, 'rb') as f:
@@ -1796,13 +1806,25 @@ class SiteAvBase:
                             save_success = True
                         else:
                             logger.error(f"Failed to download poster for {code_lower} from {poster_source}")
-                    
-                    # 파일 저장 성공 시 또는 파일이 존재할 시 엔티티 추가
+
                     if save_success or os.path.exists(system_poster_path):
                         entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{code_lower}_p.jpg"))
+            else:
+                # 크롭되지 않은 가로 이미지인 경우: _p.jpg를 만들지 않고 _pl.jpg 주소를 포스터로 직접 연결
+                sys_p_path = os.path.join(target_folder, f"{code_lower}_p.jpg")
+                if os.path.exists(sys_p_path):
+                    try: os.remove(sys_p_path)
+                    except Exception: pass
+                
+                # 유저 커스텀 포스터(_p_user)가 이미 존재한다면 그것을 우선 사용, 없으면 _pl.jpg 연결
+                user_poster_filename = decision_data['user_files_exist'].get('poster')
+                if user_poster_filename:
+                    entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{user_poster_filename}"))
+                else:
+                    entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{code_lower}_pl.jpg"))
+                    logger.debug(f"[{cls.site_name}] 세로 포스터 없음/크롭 미적용 -> 포스터에 _pl.jpg 지정: {server_url_prefix}/{code_lower}_pl.jpg")
 
             # --- 랜드스케이프 처리 ---
-            landscape_source = image_sources.get('landscape_source')
             if landscape_source:
                 if image_sources.get('skip_landscape_download'):
                     entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_source))
@@ -1851,7 +1873,9 @@ class SiteAvBase:
                         if filename.startswith(f"{code_lower}_art_"):
                             entity.fanart.append(f"{server_url_prefix}/{filename}")
 
-        logger.info(f"[ImageUtil] 이미지 최종 처리 완료. Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}")
+        unique_thumb_urls = {t.value if hasattr(t, 'value') else t.get('value') for t in (entity.thumb or []) if (hasattr(t, 'value') and t.value) or (isinstance(t, dict) and t.get('value'))}
+        unique_fanarts = {f for f in (entity.fanart or []) if f}
+        logger.info(f"[ImageUtil] 이미지 최종 처리 완료. Thumbs: {len(unique_thumb_urls)}, Fanarts: {len(unique_fanarts)}")
 
 
     # endregion 이미지 처리 관련
@@ -2195,45 +2219,89 @@ class SiteAvBase:
 
 
     @classmethod
-    def get_translated_tag(cls, tag_type, tag):
+    def clean_and_split_tags(cls, raw_tag_text: str) -> list:
+        """
+        전각/반각 공백, 일본식 쉼표(，, 、), 가운뎃점(・), 슬래시(/), 해시태그(#) 등으로 뭉쳐진
+        복합 태그 문자열을 개별 단어 리스트로 정제하여 분리합니다.
+        """
+        if not raw_tag_text or not isinstance(raw_tag_text, str):
+            return []
+
+        # 1. 해시태그(#) 및 불필요한 따옴표/괄호 정리
+        text = re.sub(r'[#\"\'\[\]\(\)]', ' ', raw_tag_text)
+
+        # 2. 모든 구분자(전각/반각 공백, 전각/반각 쉼표, 일본식 모점, 가운뎃점, 슬래시)를 단일 구분자로 치환
+        # \u3000(전각 공백), \uFF0C(전각 쉼표), \u3001(일본식 쉼표 、), \u30FB(가운뎃점 ・)
+        delimiters = r'[\s\u3000,\uFF0C\u3001\u30FB/\\]+'
+        tokens = [t.strip() for t in re.split(delimiters, text) if t.strip()]
+
+        # 2자 미만의 무의미한 특수문자나 숫자 단독 찌꺼기 제외
+        clean_tokens = []
+        for t in tokens:
+            if t and t not in clean_tokens:
+                clean_tokens.append(t)
+        return clean_tokens
+
+
+    @classmethod
+    def get_translated_tag(cls, *args):
+        """
+        영구 사용자 사전({path_data}/db/av_tags.json) 단일 Flat 사전을 조회/갱신합니다.
+        우선순위: av_tags.json(유저 최우선) -> constants.py(AV_GENRE) -> 실시간 번역
+        """
+        if not args:
+            return ""
+        tag = args[-1] # 단일 인자 또는 (category, tag) 호출 모두 지원
         if not tag or not isinstance(tag, str):
             return tag
 
-        tag = tag.strip()
+        tag = re.sub(r'^[#\s]+|[#\s]+$', '', tag.strip())
         if not tag:
             return tag
 
-        # 1. 이미 한글이 포함된 태그는 사전 조회 및 파일 쓰기 없이 즉시 반환 (사전 오염 방지)
+        # 1. 이미 한글이 포함된 태그는 사전 조회/저장 없이 즉시 원문 반환
         if SiteUtilAv.is_include_hangul(tag):
             return tag
 
-        tags_json = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tags.json")
+        # 2. 영구 사용자 사전({path_data}/db/av_tags.json) 로드
+        user_tags_path = os.path.join(path_data, 'db', 'av_tags.json')
+        tags = {}
+        if os.path.exists(user_tags_path):
+            try:
+                with open(user_tags_path, "r", encoding="utf8") as f:
+                    tags = json.load(f)
+            except Exception:
+                tags = {}
+
+        # 3. [1순위] 사용자 영구 사전(av_tags.json) 조회 -> 유저 커스텀 수정값 최우선 반영
+        if tag in tags:
+            return tags[tag]
+
+        # 4. [2순위] 개발자 표준 사전(AV_GENRE) 조회 -> 기본 사전 일치 시 즉시 반환 (중복 저장 방지)
         try:
-            with open(tags_json, "r", encoding="utf8") as f:
-                tags = json.load(f)
-        except Exception:
-            tags = {}
+            from ..constants import AV_GENRE
+            if tag in AV_GENRE:
+                return AV_GENRE[tag]
+        except Exception as e_const:
+            logger.debug(f"[{cls.site_name}] AV_GENRE 참조 오류: {e_const}")
 
-        if tag_type not in tags:
-            tags[tag_type] = {}
-
-        # 2. 사전에 이미 등록된 외래어 태그라면 캐시된 번역어 즉시 반환
-        if tag in tags[tag_type]:
-            return tags[tag_type][tag]
-
-        # 3. 원문 언어 감지 (순수 영문: en, 일본어/한자: ja)
+        # 5. [3순위] 두 사전 모두에 없는 신규 태그만 실시간 번역 수행
         is_english = bool(re.match(r'^[a-zA-Z0-9\s\-_.,/&()]+$', tag))
         source_lang = "en" if is_english else "ja"
         trans_text = cls.trans(tag, source=source_lang, target="ko")
 
-        # 4. 유의미하게 한글로 번역된 결과만 사전에 신규 등록
+        if trans_text:
+            trans_text = re.sub(r'\s+', '', trans_text)
+
+        # 6. 번역된 신규 단어만 사용자 사전(av_tags.json)에 추가 저장
         if trans_text and trans_text != tag and SiteUtilAv.is_include_hangul(trans_text):
-            tags[tag_type][tag] = trans_text
+            tags[tag] = trans_text
             try:
-                with open(tags_json, "w", encoding="utf8") as f:
+                os.makedirs(os.path.dirname(user_tags_path), exist_ok=True)
+                with open(user_tags_path, "w", encoding="utf8") as f:
                     json.dump(tags, f, indent=4, ensure_ascii=False)
             except Exception as e_write:
-                logger.error(f"[{cls.site_name}] tags.json 저장 실패: {e_write}")
+                logger.error(f"[{cls.site_name}] av_tags.json 저장 실패: {e_write}")
             return trans_text
 
         return tag
@@ -3782,6 +3850,33 @@ class SiteAvBase:
 
         logger.debug(f"[Fingerprint] 최종 추출된 지문 개수: {len(fingerprints)}개 -> {fingerprints}")
         return fingerprints
+
+    @classmethod
+    def get_video_duration(cls, filepath: str, ffmpeg_path: str = "ffmpeg") -> float:
+        """ffprobe를 이용해 로컬 비디오의 총 재생 시간(초 단위 float)을 측정"""
+        if not filepath or not os.path.exists(filepath):
+            return None
+        try:
+            import subprocess
+            ffprobe_path = "ffprobe"
+            if ffmpeg_path and ffmpeg_path != "ffmpeg":
+                bin_dir = os.path.dirname(ffmpeg_path)
+                probe_bin = os.path.join(bin_dir, "ffprobe.exe" if os.name == 'nt' else "ffprobe")
+                if os.path.exists(probe_bin):
+                    ffprobe_path = probe_bin
+
+            probe_cmd = [
+                ffprobe_path, "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", filepath
+            ]
+            res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                dur = float(res.stdout.strip())
+                logger.debug(f"[{cls.site_name}] get_video_duration: {dur:.2f}초 ({os.path.basename(filepath)})")
+                return dur
+        except Exception as e:
+            logger.debug(f"[{cls.site_name}] get_video_duration 실패 ({filepath}): {e}")
+        return None
 
 
     # endregion Video Fingerprint Calculation
