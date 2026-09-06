@@ -459,11 +459,21 @@ class SiteAvdbs(SiteAvBase):
     @classmethod
     def set_config(cls, db):
         super().set_config(db)
+
+        # 설정된 배우 이미지 소스 모드에 따라 배포 DB 탐색 순서 자동 동기화 (기본값: gds)
+        jav_mode = db.get("jav_censored_actor_image_mode") or "gds"
+        if jav_mode == 'image_server':
+            auto_img_order = "local_img_path, google_fileid, site_img_url"
+        elif jav_mode == 'site':
+            auto_img_order = "site_img_url, google_fileid, local_img_path"
+        else:
+            auto_img_order = "google_fileid, local_img_path, site_img_url"
+
         cls.config.update({
             "use_local_db": db.get_bool("jav_censored_avdbs_use_local_db"),
             "image_url_prefix": (db.get("jav_actor_img_url_prefix") or "").rstrip('/'),
             "use_web_search": db.get_bool("jav_censored_avdbs_use_web_search"),
-            "actor_img_order": db.get("jav_censored_avdbs_img_order") or "google_fileid, local_img_path, site_img_url",
+            "actor_img_order": auto_img_order,
         })
 
         #logger.debug(res.text)
