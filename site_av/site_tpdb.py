@@ -13,6 +13,16 @@ from ..entity_base import EntityMovie, EntityActor, EntityExtra, EntityThumb
 from ..setup import P, logger, F, path_data
 from .site_av_base import SiteAvBase
 
+class ActorDict(dict):
+    def __getattr__(self, key):
+        return self.get(key)
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def as_dict(self):
+        return self
+
 class SiteTpdb(SiteAvBase):
     site_name = 'tpdb'
     site_char = 'P'
@@ -20,7 +30,46 @@ class SiteTpdb(SiteAvBase):
     default_headers = SiteAvBase.base_default_headers.copy()
 
     site_base_url = 'https://api.theporndb.net'
-    
+
+    @classmethod
+    def get_performer_by_id(cls, performer_id):
+        if not performer_id:
+            return None
+        clean_id = str(performer_id).replace('PP', '').replace('PT', '').strip()
+        data = cls._call_api(f"/performers/{clean_id}")
+        if data and isinstance(data, dict) and 'data' in data:
+            return data['data']
+        return None
+
+    @classmethod
+    def get_actor_info(cls, entity_actor):
+        actor_name = entity_actor.get('name_org') or ''
+        actor_idx = entity_actor.get('actor_idx') or ''
+        if not actor_name and not actor_idx:
+            return False
+
+        p_data = None
+        if actor_idx:
+            p_data = cls.get_performer_by_id(actor_idx)
+        
+        if not p_data and actor_name:
+            encoded_name = urllib.parse.quote(actor_name)
+            res = cls._call_api(f"/performers?q={encoded_name}")
+            if res and isinstance(res, dict) and res.get('data'):
+                performers = res['data'] if isinstance(res['data'], list) else [res['data']]
+                if performers:
+                    p_data = cls.get_performer_by_id(performers[0].get('id')) or performers[0]
+
+        if p_data:
+            p_id = str(p_data.get('id') or '')
+            entity_actor['name_ko'] = p_data.get('name_ko') or ''
+            entity_actor['name_org'] = actor_name or ''
+            entity_actor['actor_idx'] = f"PP{p_id}" if (p_id and not p_id.startswith('PP')) else p_id
+            entity_actor['thumb'] = p_data.get('image') or p_data.get('face') or ''
+            entity_actor['site'] = 'tpdb'
+            return True
+        return False
+
     @classmethod
     def set_config(cls, db):
         # 1. Base 클래스의 공통 설정(이미지 임계값, 캐시, 스마트크롭 Threshold 등)을 먼저 로드
@@ -32,8 +81,8 @@ class SiteTpdb(SiteAvBase):
             "tpdb_api_token": db.get(f"{prefix}_{cls.site_name}_api_token"),
             "trans_option": db.get(f"{prefix}_trans_option"),
             "trans_title": db.get_bool(f"{prefix}_trans_title") if db.get(f"{prefix}_trans_title") is not None else True,
+            "include_male": db.get_bool(f"{prefix}_include_male"),
             "use_extras": db.get_bool(f"{prefix}_use_extras"),
-
             "title_format": db.get(f"{prefix}_title_format"),
             "use_movie_title_format": db.get_bool(f"{prefix}_use_movie_title_format"),
             "movie_title_format": db.get(f"{prefix}_movie_title_format"),
@@ -273,17 +322,33 @@ class SiteTpdb(SiteAvBase):
     @classmethod
     def search(cls, keyword, manual=False, media_path=None, filename=None, **kwargs):
         target_video = media_path or filename
+        if not target_video and os.path.isabs(keyword) and os.path.exists(keyword):
+            target_video = keyword
+
+        oshash = None
+        if target_video and os.path.exists(target_video):
+            oshash = cls.calculate_oshash(target_video)
+
         local_dur = cls.get_video_duration(target_video) if target_video and os.path.exists(target_video) else None
         encoded_keyword = urllib.parse.quote(keyword)
         
-        scenes_data = cls._call_api(f"/scenes?parse={encoded_keyword}&hash=")
-        movies_data = cls._call_api(f"/movies?parse={encoded_keyword}&hash=")
+        hash_param = f"&hash={oshash}" if oshash else "&hash="
+        scenes_data = cls._call_api(f"/scenes?parse={encoded_keyword}{hash_param}")
+        movies_data = cls._call_api(f"/movies?parse={encoded_keyword}{hash_param}")
         
         scenes_list = scenes_data.get('data', []) if scenes_data else []
         movies_list = movies_data.get('data', []) if movies_data else []
         
         if isinstance(scenes_list, dict): scenes_list = [scenes_list]
         if isinstance(movies_list, dict): movies_list = [movies_list]
+
+        # 텍스트+해시 결과가 없을 때 OSHash 단독 검색 시도
+        if not scenes_list and not movies_list and oshash:
+            logger.debug(f"[{cls.site_name}] 1차 검색 실패 ➔ OSHash 단독 역검색 시도: {oshash}")
+            hash_scenes_data = cls._call_api(f"/scenes?hash={oshash}")
+            if hash_scenes_data and hash_scenes_data.get('data'):
+                h_data = hash_scenes_data['data']
+                scenes_list = h_data if isinstance(h_data, list) else [h_data]
 
         combined_results = []
         for idx, item in enumerate(scenes_list):
@@ -331,8 +396,9 @@ class SiteTpdb(SiteAvBase):
                     if gender == 'female': females.append(actor_name)
                     else: males.append(actor_name)
 
+            include_male = cls.config.get("include_male", False)
             if content_type == 'scene':
-                selected_actors = females if females else males
+                selected_actors = (females + males) if include_male else (females if females else males)
             else:
                 selected_actors = females + males
             
@@ -417,16 +483,35 @@ class SiteTpdb(SiteAvBase):
         return {'ret': 'success', 'data': ret[:15]}
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False, skip_trans=False, media_path=None):
+    def info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         try:
-            entity = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans)
-            return {'ret': 'success', 'data': entity.as_dict()} if entity else {'ret': 'error'}
+            entity_obj = cls.__info(code, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+                return {'ret': 'success', 'data': entity_result_val_final}
+            return {'ret': 'error', 'data': f"Failed to get {cls.site_name} info for {code}"}
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Info Exception: {e}")
             return {'ret': 'exception', 'data': str(e)}
 
+
     @classmethod
-    def __info(cls, code, fp_meta_mode=False, skip_trans=False, media_path=None):
+    def __info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        media_path = opts.get('media_path', None)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         if len(code) < 5 or code[3] != '_':
             logger.error(f"[{cls.site_name}] Invalid code format: {code}")
             return None
@@ -434,7 +519,7 @@ class SiteTpdb(SiteAvBase):
         type_char = code[2]
         item_id = code[4:]
         content_type = 'scene' if type_char == 'S' else 'movie'
-        
+
         endpoint = f"/scenes/{item_id}" if content_type == 'scene' else f"/movies/{item_id}"
         data = cls._call_api(endpoint)
         
@@ -460,6 +545,8 @@ class SiteTpdb(SiteAvBase):
         raw_title = str(item_data.get('title', entity.ui_code)).strip()
         entity.title = entity.originaltitle = entity.sorttitle = raw_title
         
+        entity.extra_info['info_url'] = f"https://theporndb.net/{'scenes' if content_type == 'scene' else 'movies'}/{item_id}"
+
         cleaned_tagline = cls.A_P(raw_title)
         entity.original['tagline'] = cleaned_tagline
         
@@ -501,33 +588,59 @@ class SiteTpdb(SiteAvBase):
             else:
                 entity.plot = cls.trans_by_llm(entity.original['plot'])
 
-        # 배우 필터링
         females, males = [], []
         for performer in item_data.get('performers', []):
-            actor_name, gender, act_img = "", "", ""
             source_dict = performer.get('parent') if performer.get('parent') else performer
-            
-            if source_dict.get('name'): actor_name = str(source_dict['name'])
-            if source_dict.get('face'): act_img = str(source_dict['face'])
-            if source_dict.get('extras') and source_dict['extras'].get('gender'):
-                gender = str(source_dict['extras']['gender']).lower()
-            elif source_dict.get('extra') and source_dict['extra'].get('gender'):
-                gender = str(source_dict['extra']['gender']).lower()
+            actor_name = str(source_dict.get('name') or '').strip()
+            actor_id = str(source_dict.get('id') or '').strip()
+            if not actor_name: continue
 
-            if actor_name:
-                act = EntityActor(actor_name)
-                act.name = str(actor_name)
-                act.originalname = str(actor_name)
-                if act_img: act.thumb = act_img
-                
-                if gender == 'female': females.append(act)
-                else: males.append(act)
+            p_detail = cls.get_performer_by_id(actor_id) if actor_id else None
+            p_target = p_detail if p_detail else source_dict
 
-        if content_type == 'scene':
-            selected_actors = females if females else males
-        else:
-            selected_actors = females + males
-        entity.actor.extend(selected_actors)
+            act_extras = p_target.get('extras') or p_target.get('extra') or {}
+            gender = str(act_extras.get('gender') or '').lower()
+
+            all_tpdb_photos = []
+            for pst in (p_target.get('posters') or []):
+                if isinstance(pst, dict) and pst.get('url'):
+                    all_tpdb_photos.append(pst['url'])
+
+            primary_img = p_target.get('image') or p_target.get('face') or source_dict.get('face') or ''
+            if primary_img and primary_img not in all_tpdb_photos:
+                all_tpdb_photos.insert(0, primary_img)
+
+            formatted_idx = f"PP{actor_id}" if (actor_id and not (actor_id.startswith('PP') or actor_id.startswith('PT'))) else (f"PP{actor_id[2:]}" if actor_id.startswith('PT') else actor_id)
+
+            actor_entry = ActorDict({
+                'name_org': actor_name,
+                'name_ko': '',
+                'name_en': actor_name,
+                'actor_idx': formatted_idx,
+                'thumb': primary_img,
+                'role': '출연',
+                'gender': gender,
+                'extra_info': {
+                    'gender': gender,
+                    'birth': str(act_extras.get('birthday') or '').strip(),
+                    'height': act_extras.get('height'),
+                    'body_size': str(act_extras.get('measurements') or '').strip(),
+                    'bra_size': str(act_extras.get('cupsize') or '').strip(),
+                    'debut': str(act_extras.get('career_start_year') or '').strip(),
+                    'country': str(act_extras.get('birthplace_code') or act_extras.get('nationality') or '').strip(),
+                    'info_url': f"https://theporndb.net/performers/{actor_id}" if actor_id else '',
+                    'site_img_url': primary_img,
+                    'site_img_urls': all_tpdb_photos,
+                    'aliases': p_target.get('aliases') or []
+                }
+            })
+
+            if gender == 'female':
+                females.append(actor_entry)
+            else:
+                males.append(actor_entry)
+
+        entity.actor.extend(females + males)
 
         # Tags & Genres
         if 'genre' not in entity.original: entity.original['genre'] = []
@@ -555,6 +668,11 @@ class SiteTpdb(SiteAvBase):
             landscape_cover_url = item_data.get('background', {}).get('full') or item_data.get('background', {}).get('large')
             portrait_poster_url = item_data.get('posters', {}).get('full') or item_data.get('posters', {}).get('large')
 
+            entity.original['thumb'] = {
+                'poster': portrait_poster_url or '',
+                'landscape': landscape_cover_url or ''
+            }
+
             poster_url = None
             if is_force_poster and portrait_poster_url:
                 poster_url = portrait_poster_url
@@ -576,9 +694,6 @@ class SiteTpdb(SiteAvBase):
                 except Exception as e_crop:
                     logger.error(f"[{cls.site_name}] 스마트 크롭 시도 중 오류: {e_crop}")
 
-            if not poster_url:
-                logger.debug(f"[{cls.site_name}] 세로 포스터 없음/크롭 실패 -> _p.jpg 생성 없이 _pl.jpg 직결")
-
             raw_image_urls['poster'] = poster_url
             raw_image_urls['pl'] = landscape_cover_url
 
@@ -588,6 +703,11 @@ class SiteTpdb(SiteAvBase):
             front_cover = item_data.get('background', {}).get('full') or item_data.get('background', {}).get('large')
             back_cover = item_data.get('background_back', {}).get('full') or item_data.get('background_back', {}).get('large')
 
+            entity.original['thumb'] = {
+                'poster': raw_image_urls['poster'] or '',
+                'landscape': front_cover or ''
+            }
+
             if front_cover and back_cover:
                 merged_landscape_path = cls._merge_covers(back_cover, front_cover)
             
@@ -596,37 +716,8 @@ class SiteTpdb(SiteAvBase):
             else:
                 raw_image_urls['pl'] = front_cover
 
-        # 이미지 서버 폴더 포맷팅 설정
-        image_mode = cls.MetadataSetting.get('western_image_mode')
-        if image_mode == 'image_server':
-            try:
-                safe_studio = re.sub(r'[^A-Za-z0-9]', '_', entity.studio) if entity.studio else 'Unknown'
-                first_char = safe_studio[0].upper() if safe_studio else 'ETC'
-                if first_char.isdigit():
-                    first_char = '09'
-                elif not first_char.isalpha():
-                    first_char = 'ETC'
-
-                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                base_save_format = cls.MetadataSetting.get('western_image_server_save_format') or "/western/{studio_1}/{studio}"
-                
-                format_map = {
-                    'studio': safe_studio,
-                    'studio_1': first_char,
-                    'label': safe_studio,
-                    'label_1': first_char,
-                }
-                final_relative_folder_path = base_save_format.format_map(format_map).strip('/\\')
-                
-                entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-                entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-
-            except Exception as e:
-                logger.error(f"[{cls.site_name}] Image Server Path 생성 실패: {e}")
-
         # 고유 코드(WPS_ID / WPM_ID) 기반으로 이미지 저장
-        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
+        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
 
         # 병합된 Landscape 이미지 로컬/서버 적용
         if merged_landscape_path:
@@ -655,14 +746,21 @@ class SiteTpdb(SiteAvBase):
         if cls.config.get('use_extras', False) and item_data.get('trailer'):
             trailer_url = item_data['trailer']
             try:
+                if not hasattr(entity, 'original') or entity.original is None:
+                    entity.original = {}
+                entity.original['extras'] = [{
+                    'content_url': trailer_url,
+                    'content_type': 'trailer'
+                }]
+
                 if cls.config.get('use_trailer_proxy', False):
                     final_url = cls.make_video_url(trailer_url)
                     if final_url:
                         logger.debug(f"[{cls.site_name}] Added Proxied Trailer URL: {final_url}")
-                        entity.extras.append(EntityExtra("trailer", entity.title, "mp4", final_url))
+                        entity.extras.append(EntityExtra("trailer", entity.tagline or entity.title, "mp4", final_url))
                 else:
                     logger.debug(f"[{cls.site_name}] Added Direct Trailer URL: {trailer_url}")
-                    entity.extras.append(EntityExtra("trailer", entity.title, "mp4", trailer_url))
+                    entity.extras.append(EntityExtra("trailer", entity.tagline or entity.title, "mp4", trailer_url))
             except Exception as e_trailer:
                 logger.error(f"[{cls.site_name}] Error adding trailer: {e_trailer}")
 

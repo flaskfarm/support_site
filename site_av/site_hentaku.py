@@ -28,8 +28,9 @@ class SiteHentaku:
             doc = SiteUtil.get_tree(hrefs[0], proxy_url=proxy_url)
             thumb_url = doc.xpath('//div[@class="avstar_photo"]//img/@src')[0]
             return {
-                "name": name_ko,
-                "name2": name_en,
+                "name_org": name_ja,
+                "name_ko": name_ko,
+                "name_en": name_en,
                 "site": "hentaku",
                 "thumb": SiteUtil.process_image_mode(image_mode, thumb_url, proxy_url=proxy_url),
             }
@@ -44,7 +45,7 @@ class SiteHentaku:
         info = None
         try:
             info = SiteHentaku.__get_actor_info(
-                entity_actor["originalname"], 
+                entity_actor["name_org"], 
                 proxy_url=proxy_url, 
                 image_mode=image_mode
             )
@@ -54,13 +55,13 @@ class SiteHentaku:
                 logger.debug("Hentaku: 단시간 많은 요청으로 2초 후 재시도")
                 time.sleep(2)
                 return SiteHentaku.get_actor_info(entity_actor, retry=False, **kwargs)
-            logger.exception("Hentaku: 배우 정보 업데이트 중 최종 예외: originalname=%s", entity_actor["originalname"])
+            logger.exception("Hentaku: 배우 정보 업데이트 중 최종 예외: name_org=%s", entity_actor["name_org"])
             return False
 
         if info is not None:
-            logger.info(f"Hentaku: '{entity_actor['originalname']}' 정보 찾음. 업데이트 수행.")
+            logger.info(f"Hentaku: '{entity_actor['name_org']}' 정보 찾음. 업데이트 수행.")
             entity_actor.update(info)
             return True
         else:
-            logger.debug(f"Hentaku: '{entity_actor['originalname']}' 정보 찾지 못함.")
+            logger.debug(f"Hentaku: '{entity_actor['name_org']}' 정보 찾지 못함.")
             return False

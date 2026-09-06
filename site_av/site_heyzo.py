@@ -99,12 +99,20 @@ class SiteHeyzo(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False, skip_trans=False):
+    def info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         ret = {}
-        entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
-            if entity_result_val_final:
+            entity_obj = cls.__info(code, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+
                 ret['ret'] = 'success'
                 ret['data'] = entity_result_val_final
             else:
@@ -118,7 +126,14 @@ class SiteHeyzo(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
+    def __info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         code_part = code[2:]
         tmp = {}
         json_data = None
@@ -227,6 +242,7 @@ class SiteHeyzo(SiteAvBase):
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
         entity.original = {}
+        entity.extra_info['info_url'] = f"https://www.heyzo.com/moviepages/{code_part}/index.html"
 
         entity.ui_code = cls._parse_ui_code_uncensored(f'heyzo-{code_part}')
         if not entity.ui_code: entity.ui_code = f'HEYZO-{code_part}'
@@ -235,7 +251,7 @@ class SiteHeyzo(SiteAvBase):
         entity.label = "HEYZO"
 
         cleaned_title = tmp.get('title', '')
-        entity.original['title'] = cleaned_title
+        entity.original['title'] = entity.originaltitle
         entity.original['tagline'] = cleaned_title
         if skip_trans:
             entity.tagline = cleaned_title
@@ -313,19 +329,10 @@ class SiteHeyzo(SiteAvBase):
             poster_url = tmp.get('json_poster') or tmp.get('mobile_poster') or landscape_url
             logger.debug(f"[{cls.site_name}] Fallback to original poster/PL.")
 
-        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-        if image_mode == 'image_server':
-            try:
-                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
-                base_path_part = base_save_format.format(label=entity.label)
-                code_prefix_part = code_part[:2] 
-                final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), code_prefix_part)
-                entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-                entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-            except Exception as e:
-                logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+        entity.original['thumb'] = {
+            'poster': tmp.get('json_poster') or tmp.get('mobile_poster') or '',
+            'landscape': landscape_url or ''
+        }
 
         try:
             raw_image_urls = {
@@ -333,7 +340,7 @@ class SiteHeyzo(SiteAvBase):
                 'pl': landscape_url,
                 'arts': gallery_urls,
             }
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
@@ -365,9 +372,17 @@ class SiteHeyzo(SiteAvBase):
         # 부가영상 or 예고편
         if cls.config.get('use_extras'):
             try:
-                video_url = cls.make_video_url(f'https://m.heyzo.com/contents/3000/{code_part}/sample.mp4')
+                raw_sample_url = f'https://m.heyzo.com/contents/3000/{code_part}/sample.mp4'
+                if not hasattr(entity, 'original') or entity.original is None:
+                    entity.original = {}
+                entity.original['extras'] = [{
+                    'content_url': raw_sample_url,
+                    'content_type': 'trailer'
+                }]
+
+                video_url = cls.make_video_url(raw_sample_url)
                 if video_url:
-                    trailer_title = entity.tagline if entity.tagline else entity.title
+                    trailer_title = entity.tagline or entity.ui_code
                     entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url))
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Trailer processing error: {e}")

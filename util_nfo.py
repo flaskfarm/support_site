@@ -51,13 +51,25 @@ class UtilNfo(object):
         try:
             movie = builder.ElementMaker().movie()
 
-            movie = E.movie (
-                E.title(cls.change_html(info['title'])),
-                E.originaltitle(info['originaltitle']),
-                E.sorttitle(info['sorttitle']),
-                E.id(info['originaltitle']),
-                E.uniqueid(info['code'], type=info['site'], default='true'),
-            )
+            # NFO 필드는 서로 독립적으로 추가해 하나의 누락/오류가 전체 생성을 막지 않도록 합니다.
+            for key in ('title', 'originaltitle', 'sorttitle'):
+                try:
+                    value = info.get(key)
+                    if value is not None and value != '':
+                        movie.append(E(key, cls.change_html(str(value))))
+                except Exception as e:
+                    logger.warning(f"NFO 필드 '{key}' 생성 건너뜀: {e}")
+
+            for key, value in (('id', info.get('originaltitle')), ('uniqueid', info.get('code'))):
+                try:
+                    if value is None or value == '':
+                        continue
+                    if key == 'uniqueid':
+                        movie.append(E.uniqueid(str(value), type=str(info.get('site') or ''), default='true'))
+                    else:
+                        movie.append(E.id(str(value)))
+                except Exception as e:
+                    logger.warning(f"NFO 필드 '{key}' 생성 건너뜀: {e}")
 
             cls.append_tag(movie, info, 'credits')
             cls.append_tag(movie, info, 'mpaa')
@@ -73,37 +85,63 @@ class UtilNfo(object):
             cls.append_tag_list(movie, info, 'tag')
 
 
-            if info['thumb'] is not None and len(info['thumb']) > 0:
-                for item in info['thumb']:
-                    tag = E.thumb(item['value'], aspect=item['aspect'])
-                    movie.append(tag)
+            for item in info.get('thumb') or []:
+                try:
+                    value = item.get('value') if isinstance(item, dict) else None
+                    if value is None:
+                        continue
+                    attrs = {}
+                    if isinstance(item, dict) and item.get('aspect'):
+                        attrs['aspect'] = str(item['aspect'])
+                    movie.append(E.thumb(str(value), **attrs))
+                except Exception as e:
+                    logger.warning(f"NFO thumb 필드 생성 건너뜀: {e}")
 
-            if info['fanart'] is not None and len(info['fanart']) > 0:
-                for item in info['fanart']:
-                    tag = E.fanart(E.thumb(item))
-                    movie.append(tag)
+            for item in info.get('fanart') or []:
+                try:
+                    if item is not None:
+                        movie.append(E.fanart(E.thumb(str(item))))
+                except Exception as e:
+                    logger.warning(f"NFO fanart 필드 생성 건너뜀: {e}")
 
-            if info['ratings'] is not None and len(info['ratings']) > 0:
-                for item in info['ratings']:
-                    tag = E.ratings(name=item['name'], max=str(item['max']))
+            for item in info.get('ratings') or []:
+                try:
+                    if not isinstance(item, dict):
+                        continue
+                    attrs = {}
+                    if item.get('name') not in (None, ''):
+                        attrs['name'] = str(item['name'])
+                    if item.get('max') not in (None, ''):
+                        attrs['max'] = str(item['max'])
+                    if not attrs:
+                        continue
+                    tag = E.ratings(**attrs)
                     cls.append_tag(tag, item, 'value')
                     cls.append_tag(tag, item, 'votes')
                     movie.append(tag)
+                except Exception as e:
+                    logger.warning(f"NFO ratings 필드 생성 건너뜀: {e}")
 
-            if info['extras'] is not None and len(info['extras']) > 0:
-                for item in info['extras']:
-                    if item['content_type'] == 'trailer':
-                        tag = E.trailer(item['content_url'])
-                        movie.append(tag)
+            for item in info.get('extras') or []:
+                try:
+                    if isinstance(item, dict) and item.get('content_type') == 'trailer' and item.get('content_url'):
+                        movie.append(E.trailer(str(item['content_url'])))
+                except Exception as e:
+                    logger.warning(f"NFO extras 필드 생성 건너뜀: {e}")
 
-            if info['actor'] is not None and len(info['actor']) > 0:
-                for item in info['actor']:
+            for item in info.get('actor') or []:
+                try:
+                    if not isinstance(item, dict):
+                        continue
                     tag = E.actor()
-                    cls.append_tag(tag, item, 'name')
+                    actor_display_name = item.get('name_ko') or item.get('name_org', '')
+                    cls.append_tag(tag, {'name': actor_display_name}, 'name')
                     cls.append_tag(tag, item, 'role')
                     cls.append_tag(tag, item, 'order')
                     cls.append_tag(tag, item, 'thumb')
                     movie.append(tag)
+                except Exception as e:
+                    logger.warning(f"NFO actor 필드 생성 건너뜀: {e}")
 
             root = movie
             tmp = ET.tostring(root, pretty_print=True, xml_declaration=True, encoding="utf-8")
@@ -117,6 +155,9 @@ class UtilNfo(object):
     @classmethod
     def make_nfo_movie(cls, info, output='text', filename='movie.nfo', savepath=None):
         text = cls._make_nfo_movie(info)
+        if text is None:
+            logger.error("NFO 본문 생성 실패로 저장을 중단합니다.")
+            return None
         if output == 'text':
             return text
         elif output == 'xml':
@@ -240,15 +281,23 @@ class UtilNfo(object):
             # 배우
             if actors := info.get('actor'):
                 for item in actors:
-                    yaml_data['roles'].append({
-                        'name': clean_str(item.get('name', '')),
-                        'role': clean_str(item.get('originalname', '')),
+                    name_ko_val = clean_str(item.get('name_ko', ''))
+                    name_org_val = clean_str(item.get('name_org') or item.get('originalname', ''))
+                    name_en_val = clean_str(item.get('name_en', ''))
+                    display_name = name_ko_val or name_org_val or clean_str(item.get('name', ''))
+
+                    role_dict = {
+                        'name': display_name,
+                        'name_ko': name_ko_val,
+                        'name_org': name_org_val,
+                        'name_en': name_en_val,
+                        'role': name_org_val or clean_str(item.get('role', '출연')),
                         'photo': clean_str(item.get('thumb', ''))
-                    })
+                    }
+                    yaml_data['roles'].append(role_dict)
 
             return yaml_data
         except Exception as e:
             logger.error(f"Error in _make_yaml_movie: {e}")
             logger.error(traceback.format_exc())
             return None
-

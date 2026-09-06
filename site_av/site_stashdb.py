@@ -15,6 +15,15 @@ from ..entity_base import EntityMovie, EntityActor, EntityExtra, EntityThumb
 from ..setup import P, logger, F, path_data
 from .site_av_base import SiteAvBase
 
+class ActorDict(dict):
+    def __getattr__(self, key):
+        return self.get(key)
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def as_dict(self):
+        return self
 
 class SiteStashdb(SiteAvBase):
     site_name = 'stashdb'
@@ -23,7 +32,81 @@ class SiteStashdb(SiteAvBase):
     default_headers = SiteAvBase.base_default_headers.copy()
 
     site_base_url = 'https://stashdb.org/graphql'
-    
+
+    @classmethod
+    def get_performer_by_id(cls, performer_id):
+        if not performer_id:
+            return None
+        clean_id = str(performer_id).replace('PS', '').strip()
+        query = """
+        query FindPerformer($id: ID!) {
+          findPerformer(id: $id) {
+            id
+            name
+            disambiguation
+            aliases
+            gender
+            birth_date
+            career_start_year
+            height
+            band_size
+            cup_size
+            waist_size
+            hip_size
+            breast_type
+            country
+            ethnicity
+            hair_color
+            eye_color
+            images { url width height }
+            urls { url }
+          }
+        }
+        """
+        res_data = cls._call_graphql_api(query, {"id": clean_id})
+        return ((res_data or {}).get('data') or {}).get('findPerformer')
+
+    @classmethod
+    def get_actor_info(cls, entity_actor):
+        actor_name = entity_actor.get('name_org') or ''
+        actor_idx = entity_actor.get('actor_idx') or ''
+        if not actor_name and not actor_idx:
+            return False
+
+        p_data = None
+        if actor_idx:
+            p_data = cls.get_performer_by_id(actor_idx)
+
+        if not p_data and actor_name:
+            query = """
+            query SearchPerformers($term: String!) {
+              searchPerformers(term: $term) {
+                performers {
+                  id
+                  name
+                  images { url }
+                }
+              }
+            }
+            """
+            res = cls._call_graphql_api(query, {"term": actor_name})
+            performers = ((res or {}).get('data') or {}).get('searchPerformers', {}).get('performers', [])
+            if performers:
+                p_data = cls.get_performer_by_id(performers[0].get('id')) or performers[0]
+
+        if p_data:
+            p_id = str(p_data.get('id') or '')
+            images = p_data.get('images') or []
+            act_img = images[0].get('url') if images and isinstance(images[0], dict) else ''
+
+            entity_actor['name_ko'] = p_data.get('name_ko') or ''
+            entity_actor['name_org'] = actor_name or ''
+            entity_actor['actor_idx'] = f"PS{p_id}" if (p_id and not p_id.startswith('PS')) else p_id
+            entity_actor['thumb'] = act_img
+            entity_actor['site'] = 'stashdb'
+            return True
+        return False
+
     @classmethod
     def set_config(cls, db):
         super().set_config(db)
@@ -33,8 +116,8 @@ class SiteStashdb(SiteAvBase):
             "stashdb_api_key": db.get(f"{prefix}_{cls.site_name}_api_key") or db.get(f"{prefix}_{cls.site_name}_api_token"),
             "trans_option": db.get(f"{prefix}_trans_option"),
             "trans_title": db.get_bool(f"{prefix}_trans_title") if db.get(f"{prefix}_trans_title") is not None else True,
+            "include_male": db.get_bool(f"{prefix}_include_male"),
             "use_extras": db.get_bool(f"{prefix}_use_extras"),
-
             "title_format": db.get(f"{prefix}_title_format"),
             "use_movie_title_format": db.get_bool(f"{prefix}_use_movie_title_format"),
             "movie_title_format": db.get(f"{prefix}_movie_title_format"),
@@ -123,7 +206,8 @@ class SiteStashdb(SiteAvBase):
                 if actor_name:
                     if gender == 'female': females.append(actor_name)
                     else: males.append(actor_name)
-        selected_actors = females if females else males
+        include_male = cls.config.get("include_male", False)
+        selected_actors = (females + males) if include_male else (females if females else males)
         actor_val = ", ".join(selected_actors[:3]) if selected_actors else ""
 
         user_schema_str = cls.config.get("stashdb_user_schema") or "studio:czechvr|{raw_title}|{studio_code} - {raw_title}"
@@ -328,14 +412,14 @@ class SiteStashdb(SiteAvBase):
             fp_type = (cls.config.get("fingerprint_type") or "OSHASH").upper()
             ffmpeg_path = cls.config.get("ffmpeg_path") or "ffmpeg"
 
-            # 1단계: OSHash 우선 시도 (OSHASH 또는 BOTH 모드일 때 0.008초 고속 검사)
+            # 1단계: OSHash 우선 시도
             if fp_type in ["OSHASH", "BOTH"]:
                 oshash = cls.calculate_oshash(video_file)
                 if oshash:
                     logger.debug(f"[{cls.site_name}] 1단계 OSHash 조회 시작: {oshash}")
                     matched_scenes = query_stash_fingerprints([{"algorithm": "OSHASH", "hash": oshash}])
                     if matched_scenes:
-                        logger.info(f"[{cls.site_name}] ★★★ StashDB OSHash 초고속 매칭 성공! (0.01초 완료, pHash 생략) ★★★")
+                        logger.info(f"[{cls.site_name}] ★★★ StashDB OSHash 초고속 매칭 성공! (pHash 생략) ★★★")
                         return matched_scenes
 
             # 2단계: pHash 지연 평가 (PHASH 모드이거나, BOTH 모드에서 OSHash 매칭에 실패한 경우에만 실행)
@@ -451,7 +535,8 @@ class SiteStashdb(SiteAvBase):
                         if gender == 'female': females.append(actor_name)
                         else: males.append(actor_name)
 
-            selected_actors = females if females else males
+            include_male = cls.config.get("include_male", False)
+            selected_actors = (females + males) if include_male else (females if females else males)
             actor_str = ", ".join(selected_actors[:3]) if selected_actors else ""
             date_val = str(item_data.get('date') or '').strip()
             year_val = date_val[:4] if len(date_val) >= 4 and date_val[:4].isdigit() else ''
@@ -505,17 +590,35 @@ class SiteStashdb(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False, skip_trans=False, media_path=None):
+    def info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         try:
-            entity = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans, media_path=media_path)
-            return {'ret': 'success', 'data': entity.as_dict()} if entity else {'ret': 'error'}
+            entity_obj = cls.__info(code, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+                return {'ret': 'success', 'data': entity_result_val_final}
+            return {'ret': 'error', 'data': f"Failed to get {cls.site_name} info for {code}"}
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Info Exception: {e}")
             return {'ret': 'exception', 'data': str(e)}
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False, skip_trans=False, media_path=None):
+    def __info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        media_path = opts.get('media_path', None)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         if len(code) < 5 or code[3] != '_':
             logger.error(f"[{cls.site_name}] 잘못된 코드 형식: {code}")
             return None
@@ -523,7 +626,7 @@ class SiteStashdb(SiteAvBase):
         type_char = code[2]
         item_id = code[4:]
         content_type = 'scene' if type_char == 'S' else 'movie'
-        
+
         query = """
         query FindScene($id: ID!) {
           findScene(id: $id) {
@@ -533,7 +636,29 @@ class SiteStashdb(SiteAvBase):
             details
             date
             studio { id name parent { id name images { url } } images { url } }
-            performers { performer { id name gender disambiguation images { url } } }
+            performers {
+              performer {
+                id
+                name
+                disambiguation
+                aliases
+                gender
+                birth_date
+                career_start_year
+                height
+                band_size
+                cup_size
+                waist_size
+                hip_size
+                breast_type
+                country
+                ethnicity
+                hair_color
+                eye_color
+                images { url }
+                urls { url }
+              }
+            }
             images { url width height }
             urls { url type }
             tags { id name }
@@ -558,19 +683,24 @@ class SiteStashdb(SiteAvBase):
         if not hasattr(entity, 'extra_info') or entity.extra_info is None:
             entity.extra_info = {}
 
-        # StashDB에 등록된 모든 공식 핑거프린트를 extra_info에 자동 저장
-        fps = item_data.get('fingerprints') or []
-        if isinstance(fps, list):
+        fps = list(item_data.get('fingerprints') or [])
+        if media_path and os.path.exists(media_path):
+            local_fps = cls.get_video_fingerprints(
+                media_path,
+                fp_type=cls.config.get("fingerprint_type") or "BOTH",
+                ffmpeg_path=cls.config.get("ffmpeg_path") or "ffmpeg"
+            )
+            for l_fp in local_fps:
+                if not any(f.get('hash', '').lower() == l_fp.get('hash', '').lower() for f in fps):
+                    fps.append(l_fp)
+
+        if fps:
             entity.extra_info['fingerprints'] = fps
-            for fp in fps:
-                if isinstance(fp, dict):
-                    algo = str(fp.get('algorithm') or '').lower()
-                    h_val = str(fp.get('hash') or '').strip()
-                    if algo and h_val and algo not in entity.extra_info:
-                        entity.extra_info[algo] = h_val
 
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
         raw_title = str(item_data.get('title') or entity.ui_code).strip()
+
+        entity.extra_info['info_url'] = f"https://stashdb.org/scenes/{item_id}"
 
         date_str = str(item_data.get('date') or '').strip()
         if date_str:
@@ -607,30 +737,66 @@ class SiteStashdb(SiteAvBase):
             entity.original['plot'] = cleaned_plot
             entity.plot = cleaned_plot if skip_trans else cls.trans_by_llm(entity.original['plot'])
 
-        # Actors
         females, males = [], []
         performers = item_data.get('performers') or []
         if isinstance(performers, list):
             for p_wrap in performers:
                 if not isinstance(p_wrap, dict): continue
-                source_dict = p_wrap.get('performer') or {}
-                actor_name = str(source_dict.get('name') or '').strip()
-                gender = str(source_dict.get('gender') or '').lower()
-                act_img = ""
-                images_list = source_dict.get('images') or []
-                if isinstance(images_list, list) and len(images_list) > 0 and isinstance(images_list[0], dict):
-                    act_img = str(images_list[0].get('url') or '')
+                p_dict = p_wrap.get('performer') or {}
+                actor_name = str(p_dict.get('name') or '').strip()
+                actor_id = str(p_dict.get('id') or '').strip()
+                if not actor_name: continue
 
-                if actor_name:
-                    act = EntityActor(actor_name)
-                    act.name = str(actor_name)
-                    act.originalname = str(actor_name)
-                    if act_img: act.thumb = act_img
-                    if gender == 'female': females.append(act)
-                    else: males.append(act)
+                gender = str(p_dict.get('gender') or '').lower()
+                images_list = p_dict.get('images') or []
+                act_img = str(images_list[0].get('url') or '') if (images_list and isinstance(images_list[0], dict)) else ''
 
-        selected_actors = females if females else males
-        entity.actor.extend(selected_actors)
+                formatted_idx = f"PS{actor_id}" if (actor_id and not actor_id.startswith('PS')) else actor_id
+
+                band_sz = str(p_dict.get('band_size') or '').strip()
+                cup_sz = str(p_dict.get('cup_size') or '').strip()
+                waist_sz = str(p_dict.get('waist_size') or '').strip()
+                hip_sz = str(p_dict.get('hip_size') or '').strip()
+
+                bra_size_str = f"{band_sz}{cup_sz}".strip() if (band_sz or cup_sz) else ""
+                body_size_str = ""
+                if bra_size_str or waist_sz or hip_sz:
+                    b_part = f"B{bra_size_str}" if bra_size_str else "B-"
+                    w_part = f"W{waist_sz}" if waist_sz else "W-"
+                    h_part = f"H{hip_sz}" if hip_sz else "H-"
+                    body_size_str = f"{b_part}-{w_part}-{h_part}"
+
+                all_site_photos = [str(im.get('url')) for im in images_list if isinstance(im, dict) and im.get('url')]
+
+                actor_entry = ActorDict({
+                    'name_org': actor_name,
+                    'name_ko': '',
+                    'name_en': actor_name,
+                    'actor_idx': formatted_idx,
+                    'thumb': act_img,
+                    'role': '출연',
+                    'gender': gender,
+                    'extra_info': {
+                        'gender': gender,
+                        'birth': str(p_dict.get('birth_date') or p_dict.get('birthdate') or '').strip(),
+                        'height': p_dict.get('height'),
+                        'body_size': body_size_str,
+                        'bra_size': f"{cup_sz}컵" if (cup_sz and not cup_sz.endswith('컵')) else bra_size_str,
+                        'debut': str(p_dict.get('career_start_year') or '').strip(),
+                        'country': str(p_dict.get('country') or '').strip(),
+                        'info_url': f"https://stashdb.org/performers/{actor_id}" if actor_id else '',
+                        'site_img_url': act_img,
+                        'site_img_urls': all_site_photos,
+                        'aliases': p_dict.get('aliases') or []
+                    }
+                })
+
+                if gender == 'female':
+                    females.append(actor_entry)
+                else:
+                    males.append(actor_entry)
+
+        entity.actor.extend(females + males)
 
         # Tags & Genres
         if 'genre' not in entity.original: entity.original['genre'] = []
@@ -648,7 +814,6 @@ class SiteStashdb(SiteAvBase):
         force_studios = cls.config.get('poster_force_studios_set', set())
         is_force_poster = (entity.studio.lower() if entity.studio else "") in force_studios
 
-        # 1. 가로 커버(Landscape = PL) 및 세로 포스터(Portrait = P) 명확한 분류
         landscape_cover_url = None
         portrait_poster_url = None
 
@@ -667,17 +832,18 @@ class SiteStashdb(SiteAvBase):
             first_url = str(item_data['images'][0].get('url') or '')
             landscape_cover_url = first_url
 
-        # 2. 포스터 소스 결정 및 스마트 크롭 직접 실행 (Uncen과 동일한 표준 방식)
-        poster_url = None
+        entity.original['thumb'] = {
+            'poster': portrait_poster_url or '',
+            'landscape': landscape_cover_url or ''
+        }
 
+        # 스마트 크롭 실행 (이미지 서버 저장용 임시 포스터 파일 생성)
+        poster_url = None
         if is_force_poster and portrait_poster_url:
-            logger.debug(f"[{cls.site_name}] Studio '{entity.studio}' is in Poster Force list. Using Portrait Poster.")
             poster_url = portrait_poster_url
         elif portrait_poster_url:
-            # 공식 세로 포스터가 이미 존재하면 우선 사용
             poster_url = portrait_poster_url
         elif use_smart_crop and landscape_cover_url:
-            # 세로 포스터가 없고 스마트 크롭이 켜진 경우 -> 가로 커버 크롭 직접 시도
             try:
                 res_pl = cls.get_response(landscape_cover_url, timeout=10)
                 if res_pl and res_pl.status_code == 200:
@@ -687,50 +853,16 @@ class SiteStashdb(SiteAvBase):
                         temp_path = cls.save_pil_to_temp(cropped)
                         if temp_path:
                             poster_url = temp_path
-                            logger.debug(f"[{cls.site_name}] 스마트 크롭 성공 -> 임시 세로 포스터 생성: {temp_path}")
                         cropped.close()
                     img_pl.close()
             except Exception as e_crop:
-                logger.error(f"[{cls.site_name}] 스마트 크롭 시도 중 오류: {e_crop}")
-
-        # 크롭 실패 시: poster_url은 None으로 유지 (억지로 가로 이미지를 포스터 소스로 넘기지 않음!)
-        if not poster_url:
-            logger.debug(f"[{cls.site_name}] 세로 포스터 없음/크롭 실패 -> _p.jpg 생성 없이 _pl.jpg 직결")
+                logger.error(f"[{cls.site_name}] 스마트 크롭 오류: {e_crop}")
 
         raw_image_urls['poster'] = poster_url
         raw_image_urls['pl'] = landscape_cover_url
 
-        # Image Server Path
-        image_mode = cls.MetadataSetting.get('western_image_mode')
-        if image_mode == 'image_server':
-            try:
-                safe_studio = re.sub(r'[^A-Za-z0-9]', '_', entity.studio) if entity.studio else 'Unknown'
-                first_char = safe_studio[0].upper() if safe_studio else 'ETC'
-                if first_char.isdigit():
-                    first_char = '09'
-                elif not first_char.isalpha():
-                    first_char = 'ETC'
-
-                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                base_save_format = cls.MetadataSetting.get('western_image_server_save_format') or "/western/{studio_1}/{studio}"
-                
-                format_map = {
-                    'studio': safe_studio,
-                    'studio_1': first_char,
-                    'label': safe_studio,
-                    'label_1': first_char,
-                }
-                final_relative_folder_path = base_save_format.format_map(format_map).strip('/\\')
-                
-                entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-                entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-
-            except Exception as e:
-                logger.error(f"[{cls.site_name}] Image Server Path 생성 실패: {e}")
-
         # 고유 코드(WSS_ID) 기반으로 이미지 저장
-        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
+        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
 
         # Trailers
         urls_list = item_data.get('urls') or []
@@ -744,9 +876,16 @@ class SiteStashdb(SiteAvBase):
                     trailer_url = u_url
                     break
             if trailer_url:
+                if not hasattr(entity, 'original') or entity.original is None:
+                    entity.original = {}
+                entity.original['extras'] = [{
+                    'content_url': trailer_url,
+                    'content_type': 'trailer'
+                }]
+
                 final_url = cls.make_video_url(trailer_url) if cls.config.get('use_trailer_proxy', False) else trailer_url
                 if final_url:
-                    entity.extras.append(EntityExtra("trailer", entity.title, "mp4", final_url))
+                    entity.extras.append(EntityExtra("trailer", entity.tagline or entity.title, "mp4", final_url))
 
         used_model = getattr(cls, '_last_used_llm_model', None)
         if used_model:

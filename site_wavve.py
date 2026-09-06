@@ -209,7 +209,7 @@ class SiteWavveTv(SiteWavve):
                         tmp = item.strip()
                         if tmp:
                             actor = EntityActor(tmp)
-                            actor.name = item.strip()
+                            actor.name_org = item.strip()
                             show['actor'].append(actor.as_dict())
 
         except Exception as e:
@@ -251,7 +251,7 @@ class SiteWavveTv(SiteWavve):
                 show.mpaa = mpaa_map.get(targetage)
             for item in program_info['programactors']['list']:
                 actor = EntityActor(None)
-                actor.name = item['text']
+                actor.name_org = item['text']
                 show.actor.append(actor)
             show = show.as_dict()
             cls._apply_tv_by_program(show, program_info, all_episode=all_episode)
@@ -360,7 +360,7 @@ class SiteWavveMovie(SiteWavve):
             except: pass
             for item in wavve_data['actors']['list']:
                 actor = EntityActor('', site=cls.site_name)
-                actor.name = item['text']
+                actor.name_org = item['text']
                 entity.actor.append(actor)
 
             for item in wavve_data['directors']['list']:

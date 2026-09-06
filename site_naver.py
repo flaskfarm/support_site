@@ -236,10 +236,10 @@ class SiteNaverMovie(SiteNaver):
                     match = re.search(r'src\=(?P<url>.*?)\&', tmp)
                     if match:
                         actor.thumb = urllib.parse.unquote(match.group('url'))
-                    actor.name = tag.xpath('.//div[@class="p_info"]/a')[0].attrib['title']
+                    actor.name_ko = tag.xpath('.//div[@class="p_info"]/a')[0].attrib['title']
                     tmp = tag.xpath('.//div[@class="p_info"]/em')
                     if tmp:
-                        actor.originalname = tmp[0].text_content()
+                        actor.name_org = tmp[0].text_content()
                     tmp = tag.xpath('.//div[@class="p_info"]//p[@class="pe_cmt"]/span')
                     if tmp:
                         actor.role = tmp[0].text_content().replace(u'역', '').strip()

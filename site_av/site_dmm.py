@@ -522,13 +522,23 @@ class SiteDmm(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         ret = {}
         entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans, is_validating=is_validating, is_rescued=is_rescued).as_dict()
-            if entity_result_val_final: 
-                ret["ret"] = "success"; 
+            entity_obj = cls.__info(code, keyword=keyword, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+
+                ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
             else: 
                 ret["ret"] = "error"
@@ -541,10 +551,17 @@ class SiteDmm(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def __info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
 
         cached_data = cls._ps_url_cache.get(code, {})
-        ps_url_from_search_cache = None # kwargs.get('ps_url')
+        ps_url_from_search_cache = opts.get('ps_url')
+
         if not ps_url_from_search_cache:
             content_type_from_cache = cached_data.get('main_content_type', 'unknown')
             if (content_type_from_cache == 'unknown' or not cached_data.get(content_type_from_cache)) and cached_data: 
@@ -605,7 +622,7 @@ class SiteDmm(SiteAvBase):
             trusted_ui_code_from_keyword, _, _ = cls._parse_ui_code(trusted_keyword)
             logger.debug(f"DMM Info: Verifying against trusted UI code '{trusted_ui_code_from_keyword}' from keyword '{trusted_keyword}'.")
 
-        # === 1. 타입별 데이터 소스 분기 ===
+        # 타입별 데이터 소스 분기
         if entity.content_type in ['videoa', 'vr', 'amateur']:
             # --- videoa/vr은 GraphQL API 호출 ---
             # logger.debug(f"DMM Info (API): Getting info for {code} (type: {entity.content_type})")
@@ -698,7 +715,14 @@ class SiteDmm(SiteAvBase):
             except Exception as e_gt_info_dmm: 
                 logger.exception(f"DMM Info (DVD): Exc getting detail page: {e_gt_info_dmm}"); return None
 
-        # === 2. 전체 메타데이터 파싱 ===
+        if entity.content_type == 'amateur':
+            entity.extra_info['info_url'] = f"https://video.dmm.co.jp/amateur/content/?id={cid_part}"
+        elif entity.content_type in ['videoa', 'vr']:
+            entity.extra_info['info_url'] = f"https://video.dmm.co.jp/av/content/?id={cid_part}"
+        else:
+            entity.extra_info['info_url'] = detail_url
+
+        # 전체 메타데이터 파싱
         try:
             if api_data:
                 content = api_data.get('ppvContent')
@@ -715,6 +739,7 @@ class SiteDmm(SiteAvBase):
                 title_val = content.get('title')
                 if title_val: 
                     original_tagline = cls.A_P(title_val)
+                    entity.original['title'] = entity.originaltitle
                     entity.original['tagline'] = original_tagline
                     if skip_trans:
                         entity.tagline = original_tagline
@@ -767,17 +792,19 @@ class SiteDmm(SiteAvBase):
 
                 directors_list = content.get('directors')
                 if directors_list and isinstance(directors_list[0], dict) and directors_list[0].get('name'):
-                    entity.director = directors_list[0]['name']
+                    dir_name = directors_list[0]['name'].strip()
+                    entity.director = dir_name
+                    entity.original['director'] = dir_name
 
                 if content.get('label') and content.get('label').get('name'):
                     label_name = content['label']['name']
                     entity.original['studio'] = label_name
-                    entity.studio = AV_STUDIO.get(label_name, cls.trans(label_name))
+                    entity.studio = AV_STUDIO.get(label_name, label_name)
 
                 elif content.get('maker') and content.get('maker').get('name'):
                     maker_name = content['maker']['name']
                     entity.original['studio'] = maker_name
-                    entity.studio = cls.trans(maker_name)
+                    entity.studio = AV_STUDIO.get(maker_name, maker_name)
 
                 if content.get('series') and content.get('series').get('name'):
                     series_name = content['series']['name']
@@ -859,13 +886,13 @@ class SiteDmm(SiteAvBase):
                             m_name_dvd = (makers_dvd[0] if makers_dvd else value_text_all_dvd).strip()
                             if m_name_dvd and m_name_dvd != '----':
                                 entity.original['studio'] = m_name_dvd
-                                entity.studio = cls.trans(m_name_dvd)
+                                entity.studio = AV_STUDIO.get(m_name_dvd, m_name_dvd)
                     elif "レーベル" in key_dvd:
                         labels_dvd = [lb.strip() for lb in value_node_dvd.xpath('.//a/text()') if lb.strip()]
                         l_name_dvd = (labels_dvd[0] if labels_dvd else value_text_all_dvd).strip()
                         if l_name_dvd and l_name_dvd != '----':
                             entity.original['studio'] = l_name_dvd
-                            entity.studio = AV_STUDIO.get(l_name_dvd, cls.trans(l_name_dvd))
+                            entity.studio = AV_STUDIO.get(l_name_dvd, l_name_dvd)
                     elif "ジャンル" in key_dvd:
                         if entity.genre is None: entity.genre = []
                         if 'genre' not in entity.original: entity.original['genre'] = []
@@ -932,6 +959,7 @@ class SiteDmm(SiteAvBase):
             if identifier_parsed:
                 ui_code_for_image = entity.ui_code.lower()
                 entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
+                entity.original['title'] = entity.originaltitle
 
                 parsed_label = entity.ui_code.split('-')[0] if '-' in entity.ui_code else entity.ui_code
                 if entity.tag is None: entity.tag = []
@@ -945,32 +973,28 @@ class SiteDmm(SiteAvBase):
                 else:
                     entity.tagline = cls.trans_by_llm(fallback_tagline)
 
-            if not entity.plot and entity.tagline: 
-                entity.plot = entity.tagline 
-
         except Exception as e_meta:
             logger.exception(f"DMM Meta parsing error for {code}: {e_meta}")
             return None
 
-        # === 3. 이미지 처리: 모든 이미지 관련 로직을 공통 메서드에 위임 ===
+        # 이미지 처리 위임
         try:
-            # 원본 이미지 URL 목록 수집
             raw_image_urls = cls.__img_urls(
                 tree, 
                 content_type=entity.content_type,
                 api_data=api_data
             )
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, is_validating=is_validating, is_rescued=is_rescued)
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, extra_opts=opts)
 
         except Exception as e:
             logger.exception(f"DMM: Error during image processing for {code}: {e}")
 
-        # === 4. 예고편(Extras) 처리 ===
+        # 예고편(Extras) 처리
 
         if cls.config['use_extras']:
             cls.process_extras(entity, tree, detail_url, api_data)
 
-        # === 5. Landscape(PL) 이미지 폴백 로직 ===
+        # Landscape(PL) 이미지 폴백 로직
         try:
             has_landscape = any(thumb.aspect == 'landscape' for thumb in entity.thumb)
 
@@ -1126,7 +1150,7 @@ class SiteDmm(SiteAvBase):
     @classmethod
     def process_extras(cls, entity, tree, detail_url, api_data=None):
         entity.extras = []
-        trailer_title_for_extra = entity.tagline if entity.tagline else entity.ui_code
+        trailer_title_for_extra = entity.tagline or entity.ui_code
         trailer_url_final = None
         code = entity.code
         try:
@@ -1176,6 +1200,14 @@ class SiteDmm(SiteAvBase):
 
             if trailer_url_final:
                 logger.debug(f"DMM Trailer: Found URL for {code}: {trailer_url_final}")
+
+                if not hasattr(entity, 'original') or entity.original is None:
+                    entity.original = {}
+                entity.original['extras'] = [{
+                    'content_url': trailer_url_final,
+                    'content_type': 'trailer'
+                }]
+
                 url = cls.make_video_url(trailer_url_final)
                 if url:
                     entity.extras.append(EntityExtra("trailer", trailer_title_for_extra, "mp4", url))
@@ -1420,4 +1452,3 @@ class SiteDmm(SiteAvBase):
 
     # endregion SiteAvBase 메서드 오버라이드
     ################################################
-

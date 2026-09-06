@@ -59,28 +59,43 @@ class SiteFc2com(SiteAvBase):
 
 
     @classmethod
-    def _process_fc2_image_url(cls, url, base_url=None, target_size='w1280'):
-        if not url: return None
-        
-        normalized_url = url
+    def _process_fc2_image_url(cls, url, base_url=None, target_size='original'):
+        if not url or not isinstance(url, str):
+            return None
+
+        normalized_url = url.strip()
         if normalized_url.startswith('//'):
             normalized_url = 'https:' + normalized_url
         elif base_url and not normalized_url.startswith('http'):
             normalized_url = urljoin(base_url, normalized_url)
-            
-        # CDN 직결 URL(storage...)인 경우 리사이징 패스하고 반환
-        if 'storage' in normalized_url and 'contents-thumbnail' not in normalized_url:
-            return normalized_url
 
-        # 썸네일 서버 URL인 경우 리사이징 적용
-        if target_size == 'original':
-            match = re.search(r'contents-thumbnail\d*\.fc2\.com/w\d+/(.*)', normalized_url)
-            if match: return f"https://{match.group(1)}"
-            return normalized_url
+        # 썸네일 캐시 서버 주소(contents-thumbnail*.fc2.com/w1280/...)에서 원본 storage CDN 주소 추출
+        # 예: https://contents-thumbnail2.fc2.com/w1280/storage201000.contents.fc2.com/file/...
+        #  -> https://storage201000.contents.fc2.com/file/...
+        match_storage = re.search(r'contents-thumbnail\d*\.fc2\.com/(?:w\d+/)?(?:https?://)?(storage\d*\.contents\.fc2\.com/.*)', normalized_url, re.IGNORECASE)
+        if match_storage:
+            cdn_path = match_storage.group(1)
+            original_cdn_url = f"https://{cdn_path.lstrip('/')}"
 
-        if target_size:
-            normalized_url = re.sub(r'/w\d+/', f'/{target_size}/', normalized_url)
-            
+            # target_size가 'original'이거나 미지정인 경우 원본 CDN 직결 주소 반환
+            if not target_size or target_size == 'original':
+                return original_cdn_url
+
+            # 검색 목록용 작은 썸네일 등 특정 리사이즈가 명시된 경우에만 캐시 주소 생성
+            return f"https://contents-thumbnail2.fc2.com/{target_size}/{cdn_path}"
+
+        # 기타 contents-thumbnail 포맷 처리 (storage 서브도메인이 아닌 일반 경로)
+        if 'contents-thumbnail' in normalized_url:
+            if target_size == 'original':
+                match_generic = re.search(r'contents-thumbnail\d*\.fc2\.com/w\d+/(.*)', normalized_url, re.IGNORECASE)
+                if match_generic:
+                    inner_path = match_generic.group(1).lstrip('/')
+                    if not inner_path.startswith('http'):
+                        inner_path = 'https://' + inner_path
+                    return inner_path
+            elif target_size:
+                return re.sub(r'/w\d+/', f'/{target_size}/', normalized_url)
+
         return normalized_url
 
 
@@ -109,31 +124,59 @@ class SiteFc2com(SiteAvBase):
     # 이미지 유효성 검사
     @classmethod
     def _check_image_validity(cls, url):
-        if not url: return False
+        if not url:
+            return False
         try:
-            res = cls.get_response(url, method='GET', stream=True, timeout=10, allow_redirects=True)
-            
-            if not res:
-                logger.debug(f"[{cls.site_name}] Image check failed: No response for {url}")
+            res = cls.get_response(url, method='HEAD', timeout=4, allow_redirects=True)
+            if not res or res.status_code != 200:
+                res = cls.get_response(url, method='GET', stream=True, timeout=4, allow_redirects=True)
+
+            if not res or res.status_code != 200:
                 return False
-            
-            if res.status_code != 200:
-                logger.debug(f"[{cls.site_name}] Image check failed: Status {res.status_code} for {url}")
-                return False
-            
             if 'error.fc2.com' in res.url or 'noimage' in res.url:
-                logger.debug(f"[{cls.site_name}] Image check failed: Redirected to error page ({res.url}) for {url}")
                 return False
-            
+
             content_type = res.headers.get('Content-Type', '').lower()
-            if not content_type.startswith('image/'):
-                logger.debug(f"[{cls.site_name}] Image check failed: Invalid Content-Type ({content_type}) for {url}")
+            if content_type and not content_type.startswith('image/') and content_type != 'binary/octet-stream':
                 return False
-                
+
             return True
         except Exception as e:
-            logger.debug(f"[{cls.site_name}] Image check exception for {url}: {e}")
+            logger.debug(f"[{cls.site_name}] Image validity check exception for {url}: {e}")
             return False
+
+
+    @classmethod
+    def _resolve_fc2_image_url(cls, raw_url, base_url=None, check_valid=True):
+        """
+        FC2 이미지의 원본 storage CDN 주소를 우선 시도하고,
+        접속 불가 시 썸네일 캐시 서버 주소(w1280)로 안전하게 폴백합니다.
+        """
+        if not raw_url or not isinstance(raw_url, str):
+            return None
+
+        raw_url_clean = raw_url.strip()
+        if not raw_url_clean:
+            return None
+
+        original_cdn_url = cls._process_fc2_image_url(raw_url_clean, base_url=base_url, target_size='original')
+        thumbnail_fallback_url = cls._process_fc2_image_url(raw_url_clean, base_url=base_url, target_size='w1280')
+
+        if not original_cdn_url:
+            return thumbnail_fallback_url or raw_url_clean
+
+        # 썸네일 캐시 래퍼가 없는 독립 URL인 경우 그대로 반환
+        if original_cdn_url == thumbnail_fallback_url:
+            return original_cdn_url
+
+        if check_valid:
+            if cls._check_image_validity(original_cdn_url):
+                return original_cdn_url
+            else:
+                logger.debug(f"[{cls.site_name}] 원본 CDN 접근 불가({original_cdn_url}) ➔ 썸네일 캐시 주소로 안전 폴백: {thumbnail_fallback_url}")
+                return thumbnail_fallback_url
+
+        return original_cdn_url
 
 
     @classmethod
@@ -244,35 +287,29 @@ class SiteFc2com(SiteAvBase):
             landscape_url = None
             meta_og_img = tree.xpath('//meta[@property="og:image"]/@content')
             if meta_og_img:
-                candidate_url = cls._process_fc2_image_url(meta_og_img[0], target_size='original')
-                # logger.debug(f"[{cls.site_name}] Checking Meta Image: {candidate_url}")
-                
-                if cls._check_image_validity(candidate_url):
+                candidate_url = cls._resolve_fc2_image_url(meta_og_img[0], check_valid=True)
+                if candidate_url:
                     landscape_url = candidate_url
-                    # logger.debug(f"[{cls.site_name}] Meta Image is VALID: {landscape_url}")
-                else:
-                    logger.debug(f"[{cls.site_name}] Meta Image INVALID({candidate_url}). Trying fallback...")
 
-            # 2. Iframe 정보 추출 (포스터 및 트레일러)
+            # Iframe 정보 추출 (포스터 및 트레일러)
             if embed_url:
                 embed_info = cls._fetch_fc2_embed_info(embed_url)
                 if embed_info:
-                    # 포스터 백업 (메타 이미지가 없을 때만)
                     if not landscape_url and embed_info.get('poster'):
                         if cls._check_image_validity(embed_info['poster']):
                             landscape_url = embed_info['poster']
-                    
-                    # 트레일러 URL 저장
+
                     if embed_info.get('video'):
                         ret['trailer_url'] = embed_info['video']
 
-            if landscape_url: ret['landscape_url'] = landscape_url
+            if landscape_url:
+                ret['landscape_url'] = landscape_url
 
-            # Sample (Gallery) - 첫 번째 이미지 검증
+            # Sample (Gallery)
             gallery_el = tree.xpath('//a[@data-fancybox="gallery"]/@href')
             if gallery_el:
-                sample_url = cls._process_fc2_image_url(gallery_el[0], target_size='original')
-                if cls._check_image_validity(sample_url):
+                sample_url = cls._resolve_fc2_image_url(gallery_el[0], check_valid=True)
+                if sample_url:
                     ret['sample_url'] = sample_url
                 else:
                     logger.debug(f"[{cls.site_name}] Invalid Sample Image: {sample_url}")
@@ -444,28 +481,38 @@ class SiteFc2com(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False, skip_trans=False):
-        # 가용 소스 확인
-        has_official = cls.config.get('use_fc2_com') and cls.config.get('selenium_url')
-        has_web = cls.config.get('use_javten_web')
-        has_db = cls.config.get('use_javten_db')
-
-        if not (has_official or has_web or has_db):
-            return {'ret': 'error', 'data': 'No data source available/enabled.'}
+    def info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
 
         try:
-            entity = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans)
-            return {'ret': 'success', 'data': entity.as_dict()} if entity else {'ret': 'error'}
+            entity_obj = cls.__info(code, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+                return {'ret': 'success', 'data': entity_result_val_final}
+            return {'ret': 'error', 'data': f"Failed to get {cls.site_name} info for {code}"}
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Info Exception: {e}")
             return {'ret': 'exception', 'data': str(e)}
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
+    def __info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         code_part = code[len(cls.module_char) + len(cls.site_char):]
         
         entity = EntityMovie(cls.site_name, code)
+
         entity.country = ['일본']; entity.mpaa = '청소년 관람불가'
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.tag = []; entity.genre = []
         entity.original = {}
@@ -509,7 +556,7 @@ class SiteFc2com(SiteAvBase):
             if tree is None:
                 try:
                     info_url = f'{cls.site_base_url}/article/{code_part}/{cls._dynamic_suffix}'
-                    tree, _ = cls.get_tree(info_url)
+                    tree = cls.get_tree(info_url)
                 except Exception as e:
                     logger.error(f"[{cls.site_name}] Info CFFI Exception: {e}")
 
@@ -518,6 +565,8 @@ class SiteFc2com(SiteAvBase):
                 is_data_found = True
                 logger.debug(f"[{cls.site_name} - Official] Info Found: {code_part}")
                 
+                entity.extra_info['info_url'] = f"{cls.site_base_url}/article/{code_part}/"
+
                 # 메타 태그 파싱
                 head_meta = {}
                 for meta in tree.xpath('//meta'):
@@ -566,12 +615,9 @@ class SiteFc2com(SiteAvBase):
                         entity.plot = entity.original['plot']
                     else:
                         entity.plot = cls.trans_by_llm(entity.original['plot'])
-                elif not entity.plot:
-                    entity.original['plot'] = entity.original['tagline']
-                    if skip_trans:
-                        entity.plot = entity.original['tagline']
-                    else:
-                        entity.plot = cls.trans_by_llm(entity.tagline)
+                else:
+                    entity.original['plot'] = ''
+                    entity.plot = ''
 
                 # 3. Date
                 date_xpath = '//p[contains(text(), "Sale Day") or contains(text(), "販売日")]/text()'
@@ -597,24 +643,38 @@ class SiteFc2com(SiteAvBase):
                         entity.genre.append(cls.get_translated_tag(g))
 
                 # 6. Image (PL)
+                pl_candidate_raw = None
+
                 # og:image 우선 -> 없으면 본문
                 if 'og:image' in head_meta:
-                    raw_image_urls['pl'] = cls._process_fc2_image_url(head_meta['og:image'], target_size='original')
+                    pl_candidate_raw = head_meta['og:image']
                 elif poster_src := tree.xpath('//div[contains(@class, "items_article_MainitemThumb")]//img/@src | //div[contains(@class, "items_article_MainitemThumb")]//img/@data-src'):
-                    raw_image_urls['pl'] = cls._process_fc2_image_url(poster_src[0], base_url=cls.site_base_url, target_size='w1280')
+                    pl_candidate_raw = poster_src[0]
+
+                if pl_candidate_raw:
+                    raw_image_urls['pl'] = cls._resolve_fc2_image_url(pl_candidate_raw, base_url=cls.site_base_url, check_valid=True)
 
                 # 7. Arts (Gallery)
-                # 메타 태그에는 갤러리가 없으므로 본문 파싱
                 for href in tree.xpath('//a[@data-fancybox="gallery"]/@href') or tree.xpath('//section[contains(@class, "items_article_SampleImages")]//a/@href'):
-                    raw_image_urls['arts'].append(cls._process_fc2_image_url(href, base_url=cls.site_base_url, target_size='w1280'))
+                    art_url = cls._resolve_fc2_image_url(href, base_url=cls.site_base_url, check_valid=False)
+                    if art_url:
+                        raw_image_urls['arts'].append(art_url)
 
                 # 8. Trailer (API 사용)
                 if cls.config['use_extras']:
                     video_info = cls._fetch_video_api_info(code_part)
                     if video_info and video_info.get('video'):
-                        logger.debug(f"[{cls.site_name}] Trailer (API): {video_info['video']}")
-                        if url := cls.make_video_url(video_info['video']):
-                            entity.extras.append(EntityExtra("trailer", entity.tagline, "mp4", url))
+                        raw_sample_url = video_info['video']
+                        if not hasattr(entity, 'original') or entity.original is None:
+                            entity.original = {}
+                        entity.original['extras'] = [{
+                            'content_url': raw_sample_url,
+                            'content_type': 'trailer'
+                        }]
+
+                        logger.debug(f"[{cls.site_name}] Trailer (API): {raw_sample_url}")
+                        if url := cls.make_video_url(raw_sample_url):
+                            entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", url))
 
         # 2. [Javten Web 조회]
         should_try_web = (cached_source == 'web') or (not is_data_found and not cached_source and cls.config.get('use_javten_web'))
@@ -626,6 +686,8 @@ class SiteFc2com(SiteAvBase):
                 logger.debug(f"[{cls.site_name} - Javten] Info Found: {code_part}")
                 is_data_found = True
                 
+                entity.extra_info['info_url'] = javten_web_data.get('detail_url') or f"https://javten.com/search?kw={code_part}"
+
                 if javten_web_data.get('tagline'):
                     val = cls.A_P(javten_web_data['tagline'])
                     entity.original['tagline'] = val; entity.tagline = cls.trans(val)
@@ -636,7 +698,7 @@ class SiteFc2com(SiteAvBase):
                     entity.original['plot'] = val; entity.plot = cls.trans(val)
                 if javten_web_data.get('seller'):
                     val = javten_web_data['seller']
-                    entity.director = val; entity.studio = cls.trans(val); entity.tag.append(val)
+                    entity.director = val; entity.studio = val; entity.tag.append(val)
                 if javten_web_data.get('genres'):
                     for g in javten_web_data['genres']:
                         entity.genre.append(cls.trans(g))
@@ -650,15 +712,15 @@ class SiteFc2com(SiteAvBase):
                     match_year = re.search(r'/video/(\d{4})', javten_web_data['detail_url'])
                     if match_year: entity.year = int(match_year.group(1))
 
-                raw_image_urls['pl'] = cls._process_fc2_image_url(javten_web_data.get('landscape_url'), target_size='w1280')
+                raw_image_urls['pl'] = cls._process_fc2_image_url(javten_web_data.get('landscape_url'), target_size='original')
                 if javten_web_data.get('sample_url'):
-                    raw_image_urls['arts'].append(cls._process_fc2_image_url(javten_web_data.get('sample_url'), target_size='w1280'))
+                    raw_image_urls['arts'].append(cls._process_fc2_image_url(javten_web_data.get('sample_url'), target_size='original'))
 
                 if cls.config['use_extras']:
                     trailer_url = javten_web_data.get('trailer_url')
                     if trailer_url:
                         if url := cls.make_video_url(trailer_url):
-                            entity.extras.append(EntityExtra("trailer", entity.tagline, "mp4", url))
+                            entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", url))
 
         # 3. [공통 이미지 처리] (오리지널 확인 + 스마트 크롭)
         if is_data_found:
@@ -695,27 +757,13 @@ class SiteFc2com(SiteAvBase):
                 except Exception as e:
                     logger.error(f"[{cls.site_name}] Smart Crop Error: {e}")
 
-            image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-            if image_mode == 'image_server':
-                try:
-                    padded_num = code_part.zfill(7)
-                    sub_folder = padded_num[:3] 
-                    
-                    local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                    server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                    
-                    base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
-                    base_path_part = base_save_format.replace('{label}', entity.label).strip('/\\')
-                    
-                    final_relative_folder_path = os.path.join(base_path_part, sub_folder)
-                    
-                    entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-                    entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-                except Exception as e:
-                    logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
+            entity.original['thumb'] = {
+                'poster': '',
+                'landscape': raw_image_urls.get('pl') or ''
+            }
 
             try:
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
             except Exception as e:
                 logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
@@ -743,4 +791,3 @@ class SiteFc2com(SiteAvBase):
     @staticmethod
     def _extract_fc2com_title(h3_element):
         return ' '.join(h3_element.xpath(".//text()")).strip() if h3_element is not None else ""
-

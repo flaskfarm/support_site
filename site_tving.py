@@ -336,12 +336,12 @@ class SiteTvingTv(SiteTving):
 
             for item in tving_program['actor']:
                 actor = EntityActor(item)
-                actor.name = item
+                actor.name_org = item
                 show.actor.append(actor)
 
             for item in tving_program['director']:
                 actor = EntityActor(item)
-                actor.name = item
+                actor.name_org = item
                 show.director.append(actor)
 
             show = show.as_dict()
@@ -435,7 +435,7 @@ class SiteTvingMovie(SiteTving):
             entity.extra_info['title_en'] = tving_data['movie']['name']['en']
             for item in tving_data['movie']['actor']:
                 actor = EntityActor('', site=cls.site_name)
-                actor.name = item
+                actor.name_org = item
                 entity.actor.append(actor)
             entity.genre.append(tving_data['movie']['category1_name']['ko'])
             entity.director = tving_data['movie']['director']

@@ -7,6 +7,7 @@ from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
+from ..constants import AV_STUDIO, AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 
 SITE_BASE_URL = 'https://javdb.com'
 
@@ -172,12 +173,20 @@ class SiteJavdb(SiteAvBase):
     # region INFO
     
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         ret = {}
-        entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans, is_validating=is_validating, is_rescued=is_rescued).as_dict()
-            if entity_result_val_final:
+            entity_obj = cls.__info(code, keyword=keyword, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
             else:
@@ -191,10 +200,17 @@ class SiteJavdb(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def __info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         detail_url = f"{SITE_BASE_URL}/v/{original_code_for_url}"
-        
+
         original_keyword = keyword
 
         logger.debug(f"JavDB Info: Accessing URL: {detail_url}")
@@ -219,6 +235,7 @@ class SiteJavdb(SiteAvBase):
         entity.country = ['일본']; entity.mpaa = '청소년 관람불가'
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
         entity.original = {}
+        entity.extra_info['info_url'] = detail_url
 
         raw_ui_code_from_page = ""
         if id_panel_block := tree.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]/span[@class="value"]/text()'):
@@ -267,6 +284,7 @@ class SiteJavdb(SiteAvBase):
 
         if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
             cleaned_tagline = cls.A_P(actual_raw_title_text)
+            entity.original['title'] = entity.originaltitle
             entity.original['tagline'] = cleaned_tagline
             if skip_trans:
                 entity.tagline = cleaned_tagline
@@ -315,7 +333,7 @@ class SiteJavdb(SiteAvBase):
                 if not entity.studio and studio_text.lower() not in ['n/a', '暂无', '暫無']:
                     studio_name = studio_text.split(',')[0].strip()
                     entity.original['studio'] = studio_name
-                    entity.studio = cls.trans(studio_name)
+                    entity.studio = AV_STUDIO.get(studio_name, studio_name)
             elif key == 'series':
                 series_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
                 if series_text.lower() not in ['n/a', '暂无', '暫無']:
@@ -339,17 +357,14 @@ class SiteJavdb(SiteAvBase):
                 for actor_node in value_node.xpath('./a'):
                     if 'female' in (actor_node.xpath('./following-sibling::strong[1]/@class') or [''])[0]:
                         actor_name = actor_node.xpath('string()').strip()
-                        if actor_name and actor_name.lower() not in ['n/a', '暂无', '暫無'] and not any(act.originalname == actor_name for act in entity.actor):
+                        if actor_name and actor_name.lower() not in ['n/a', '暂无', '暫無'] and not any((act.name_ko or act.name_org) == actor_name for act in entity.actor):
                             actor_entity = EntityActor(actor_name)
                             entity.actor.append(actor_entity)
-
-        if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
-            entity.plot = entity.tagline
 
         ps_url_from_search_cache = None
         try:
             raw_image_urls = cls.__img_urls(tree)
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, is_validating=is_validating, is_rescued=is_rescued)
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, extra_opts=opts)
         except Exception as e:
             logger.exception(f"JavDB: Error during image processing delegation for {code}: {e}")
 
@@ -358,8 +373,15 @@ class SiteJavdb(SiteAvBase):
             if trailer_source_tag:
                 trailer_url_raw = trailer_source_tag[0].strip()
                 if trailer_url_raw:
-                    trailer_url_final = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
-                    trailer_url_final = cls.make_video_url(trailer_url_final)
+                    raw_trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
+                    if not hasattr(entity, 'original') or entity.original is None:
+                        entity.original = {}
+                    entity.original['extras'] = [{
+                        'content_url': raw_trailer_url,
+                        'content_type': 'trailer'
+                    }]
+
+                    trailer_url_final = cls.make_video_url(raw_trailer_url)
                     entity.extras.append(EntityExtra("trailer", entity.tagline or entity.ui_code, "mp4", trailer_url_final))
 
         if entity.originaltitle:
