@@ -102,12 +102,20 @@ class SitePaco(SiteAvBase):
 
 
     @classmethod
-    def info(cls, code, fp_meta_mode=False, skip_trans=False):
+    def info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         ret = {}
-        entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans).as_dict()
-            if entity_result_val_final:
+            entity_obj = cls.__info(code, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
             else:
@@ -121,7 +129,14 @@ class SitePaco(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, fp_meta_mode=False, skip_trans=False):
+    def __info(cls, code, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         code_part = code[2:]
         json_data = None
 
@@ -145,6 +160,7 @@ class SitePaco(SiteAvBase):
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.tag = []; entity.genre = []; entity.actor = []
         entity.original = {}
+        entity.extra_info['info_url'] = f"https://www.pacopacomama.com/movies/{code_part}/"
 
         movie_id = json_data.get('MovieID', code_part)
         entity.ui_code = f"PACO-{movie_id}"
@@ -159,7 +175,7 @@ class SitePaco(SiteAvBase):
         raw_title = json_data.get('Title', '')
         if raw_title:
             cleaned_title = cls.A_P(raw_title)
-            entity.original['title'] = cleaned_title
+            entity.original['title'] = entity.originaltitle
             entity.original['tagline'] = cleaned_title
             if skip_trans:
                 entity.tagline = cleaned_title
@@ -338,6 +354,11 @@ class SitePaco(SiteAvBase):
             poster_url = movie_thumb or thumb_ultra
             logger.debug(f"[{cls.site_name}] Fallback to MovieThumb/PL.")
 
+        entity.original['thumb'] = {
+            'poster': movie_thumb or '',
+            'landscape': thumb_ultra or ''
+        }
+
         try:
             raw_image_urls = {
                 'poster': poster_url,
@@ -345,7 +366,7 @@ class SitePaco(SiteAvBase):
                 'arts': arts_urls,
             }
 
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, is_validating=False, is_rescued=False)
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation: {e}")
 
@@ -363,10 +384,18 @@ class SitePaco(SiteAvBase):
                         if trailer_url: break
                     if not trailer_url: trailer_url = sample_files[-1].get('URL')
                     if trailer_url:
+                        if not hasattr(entity, 'original') or entity.original is None:
+                            entity.original = {}
+                        entity.original['extras'] = [{
+                            'content_url': trailer_url,
+                            'content_type': 'trailer'
+                        }]
+
                         video_url = cls.make_video_url(trailer_url)
                         if video_url:
-                            trailer_title = entity.tagline if entity.tagline else entity.ui_code
-                            entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', trailer_url))
+                            trailer_title = entity.tagline or entity.ui_code
+                            entity.extras.append(EntityExtra('trailer', trailer_title, 'mp4', video_url))
+
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Trailer processing error: {e}")
 
@@ -382,4 +411,3 @@ class SitePaco(SiteAvBase):
             entity.extra_info['ai_translator'] = "Default (FF)"
 
         return entity
-

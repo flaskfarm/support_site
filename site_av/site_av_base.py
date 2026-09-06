@@ -4,14 +4,15 @@ import re
 import time
 import socket
 import traceback
-from datetime import timedelta
-from urllib.parse import urlencode, unquote_plus, urlparse
 import random
 import json
 import math
-# python 확장
+import unicodedata
 import requests
 import ssl
+
+from datetime import timedelta
+from urllib.parse import urlencode, unquote_plus, urlparse
 from lxml import html
 from flask import Response, abort, send_file
 from io import BytesIO
@@ -115,10 +116,25 @@ class SiteAvBase:
         if F.config['run_celery'] == False:
             try:
                 from requests_cache import CachedSession
+
+                # 대용량 비디오 스트림 및 동영상 파일 캐싱 제외 필터
+                def is_cacheable_response(response):
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    if 'video/' in content_type:
+                        return False
+                    url_lower = response.request.url.lower()
+                    if url_lower.endswith(('.mp4', '.m4v', '.mkv', '.webm', '.m3u8', '.ts', '.ism')):
+                        return False
+                    if '/pv/' in url_lower or '/sample/' in url_lower:
+                        if any(ext in url_lower for ext in ['.mp4', '.m3u8', 'sample']):
+                            return False
+                    return True
+
                 session = CachedSession(
                     os.path.join(path_data, 'db', 'av_cache'),
                     use_temp=True,
                     expire_after=timedelta(hours=6),
+                    filter_fn=is_cacheable_response,
                 )
                 # logger.debug("requests_cache.CachedSession initialized successfully.")
             except Exception as e:
@@ -191,6 +207,9 @@ class SiteAvBase:
                     if expert_module.site_name == 'dmm':
                         request_headers['Referer'] = 'https://www.dmm.co.jp/'
                         request_headers['Cookie'] = 'age_check_done=1'
+                    elif expert_module.site_name == 'mgstage':
+                        request_headers['Referer'] = 'https://www.mgstage.com/'
+                        request_headers['Cookie'] = "coc=1;mgs_agef=1;"
                 break
 
         if 'dmm.co.jp' in url and cls.site_name == 'dmm':
@@ -484,19 +503,51 @@ class SiteAvBase:
             
             # 3. LLM 환각(수식/마크다운 찌꺼기) 치유
             replacements = {
+                # 1. 화살표류 (달러 감싸진 형태)
                 r'$\rightarrow$': '→',
                 r'$\leftarrow$': '←',
                 r'$\leftrightarrow$': '↔',
                 r'$\Rightarrow$': '⇒',
                 r'$\Leftarrow$': '⇐',
+                r'$\Leftrightarrow$': '⇔',
+                r'$\uparrow$': '↑',
+                r'$\downarrow$': '↓',
+
+                # 2. 화살표류 (백슬래시 단독 형태)
                 r'\rightarrow': '→',
                 r'\leftarrow': '←',
+                r'\leftrightarrow': '↔',
                 r'\Rightarrow': '⇒',
                 r'\Leftarrow': '⇐',
-                # 추가적으로 발생할 수 있는 마크다운 찌꺼기 방어
+                r'\Leftrightarrow': '⇔',
+                r'\uparrow': '↑',
+                r'\downarrow': '↓',
+
+                # 3. 주요 수학 기호
+                r'\leq': '≤',
+                r'\geq': '≥',
+                r'\neq': '≠',
+                r'\approx': '≈',
+                r'\times': '×',
+                r'\div': '÷',
+                r'\pm': '±',
+                r'\cdot': '·',
+                r'\infty': '∞',
+
+                # 4. 마크다운 이스케이프 방어
                 r'\*': '*',
                 r'\#': '#',
-                r'\_': '_'
+                r'\_': '_',
+                r'\[': '[',
+                r'\]': ']',
+                r'\(': '(',
+                r'\)': ')',
+                r'\{': '{',
+                r'\}': '}',
+                r'\|': '|',
+                r'\&': '&',
+                r'\$': '$',
+                r'\%': '%',
             }
             
             for bad_str, good_str in replacements.items():
@@ -531,14 +582,6 @@ class SiteAvBase:
 
     ################################################
     # region SiteAvBase 인터페이스
-
-    @classmethod
-    def search(cls, keyword, **kwargs):
-        pass
-
-    @classmethod
-    def info(cls, code, **kwargs):
-        pass
 
     # 메타데이터 라우팅 함수에서 호출한다.
     # 리턴타입: redirect 
@@ -625,6 +668,166 @@ class SiteAvBase:
         # logger.debug(f"Global parsing rules updated. Generic: {len(cls._parsing_rules.get('generic_rules', []))}, Censored: {len(cls._parsing_rules.get('censored_special_rules', []))}")
 
 
+    DEFAULT_UNCEN_IMAGE_RULES = [
+        {'이름': 'uncen_year4', '모듈': 'uncensored', '레이블': r'(1pon|10mu|carib|paco)', '폴더포맷': '{label}/{year4}'},
+        {'이름': 'uncen_num_3_7', '모듈': 'uncensored', '레이블': r'(fc2)', '폴더포맷': '{label}/{num_3_7}'},
+        {'이름': 'uncen_num_2_4', '모듈': 'uncensored', '레이블': r'(heyzo)', '폴더포맷': '{label}/{num_2_4}'},
+    ]
+
+    @classmethod
+    def get_server_folder_and_prefix(cls, domain, category, stem, studio="", year=1900, label="", entity=None):
+        """
+        카테고리/도메인 및 yaml 커스텀 설정(meta_custom_path)을 기반으로
+        실제 로컬 저장 폴더 경로와 서빙 URL Prefix를 단일 소스에서 결정합니다.
+        """
+        if not category:
+            logger.error("[SiteAvBase] get_server_folder_and_prefix: category 인자가 누락되었습니다.")
+            return None, None
+
+        target_cat = str(category).strip().upper()
+        if target_cat == 'JAV_CEN': module_prefix = 'jav_censored'
+        elif target_cat == 'JAV_UNCEN': module_prefix = 'jav_uncensored'
+        elif target_cat == 'WESTERN': module_prefix = 'western'
+        else: module_prefix = str(domain or 'jav_censored').lower()
+
+        setting_source = cls.MetadataSetting if cls.MetadataSetting else P.ModelSetting
+
+        local_root = (
+            setting_source.get(f"{module_prefix}_image_server_local_path") or
+            setting_source.get("jav_censored_image_server_local_path") or
+            "/data/images"
+        )
+        server_url = (
+            setting_source.get(f"{module_prefix}_image_server_url") or
+            setting_source.get("jav_censored_image_server_url") or
+            ""
+        )
+
+        if not local_root or not server_url:
+            logger.error(f"[SiteAvBase] 이미지 서버 경로 또는 URL 설정이 비어있습니다. ({module_prefix})")
+            return None, None
+
+        clean_stem = str(stem or '').strip()
+        stem_parts = clean_stem.split('-', 1) if '-' in clean_stem else [clean_stem, '']
+        base_label = str(label or getattr(entity, 'label', '') or stem_parts[0] or '').strip().upper()
+
+        number_part_raw = stem_parts[1] if len(stem_parts) > 1 else ''
+        if not number_part_raw:
+            num_match = re.search(r'\d+', clean_stem)
+            number_part_raw = num_match.group(0) if num_match else ''
+
+        main_number_part = re.split(r'[-_\s]', number_part_raw, 1)[0] if number_part_raw else ''
+
+        year_val = int(year) if year and int(year) != 1900 else 0
+        if year_val == 0 and len(main_number_part) == 6 and main_number_part.isdigit():
+            yy_part = int(main_number_part[4:6])
+            year_val = (2000 + yy_part) if yy_part < 50 else (1900 + yy_part)
+
+        year4_str = str(year_val) if year_val else "0000"
+        yymm_str = f"{main_number_part[4:6]}{main_number_part[:2]}" if (len(main_number_part) == 6 and main_number_part.isdigit()) else "0000"
+
+        safe_studio = re.sub(r'[^A-Za-z0-9가-힣]', '_', studio or getattr(entity, 'studio', '') or 'Unknown').strip('_') or 'Unknown'
+        studio_1 = safe_studio[0].upper() if safe_studio else 'ETC'
+        if studio_1.isdigit(): studio_1 = '09'
+
+        label_1 = base_label[0] if base_label else 'ETC'
+        if base_label.startswith('741') or label_1.isdigit():
+            label_1 = '09'
+
+        data_tokens = {
+            'label': base_label,
+            'label_1': label_1,
+            'label_lower': base_label.lower(),
+            'studio': safe_studio,
+            'studio_1': studio_1,
+            'studio_lower': safe_studio.lower(),
+            'year': str(year_val) if year_val else "",
+            'year4': year4_str,
+            'yymm': yymm_str,
+            'code': clean_stem.upper(),
+            'code_lower': clean_stem.lower(),
+        }
+
+        # 동적 {num_X_Y} 토큰 처리
+        if main_number_part:
+            for x in range(1, 10):
+                for y in range(1, 10):
+                    data_tokens[f'num_{x}_{y}'] = main_number_part.zfill(y)[:x]
+
+        rel_dir = ""
+
+        # yaml 커스텀 설정(meta_custom_path) 전 카테고리 최우선 검사
+        matched_folder_format = None
+        custom_path_cfg = cls._yaml_settings.get('meta_custom_path', {}) if isinstance(cls._yaml_settings, dict) else {}
+        if custom_path_cfg.get('enable'):
+            rules_list = custom_path_cfg.get('규칙', []) or custom_path_cfg.get('rules', []) or []
+            for rule in rules_list:
+                if not isinstance(rule, dict):
+                    continue
+                rule_mod = str(rule.get('모듈') or rule.get('module') or '').lower()
+                is_mod_match = False
+                if target_cat == 'JAV_UNCEN' and rule_mod in ['uncensored', 'jav_uncensored', 'jav_uncen']:
+                    is_mod_match = True
+                elif target_cat == 'JAV_CEN' and rule_mod in ['censored', 'jav_censored', 'jav_cen']:
+                    is_mod_match = True
+                elif target_cat == 'WESTERN' and rule_mod in ['western', 'west']:
+                    is_mod_match = True
+                elif not rule_mod or rule_mod in ['all', 'common']:
+                    is_mod_match = True
+
+                if is_mod_match:
+                    rule_label_pattern = rule.get('레이블') or rule.get('label') or ''
+                    if rule_label_pattern and re.search(rule_label_pattern, base_label, re.IGNORECASE):
+                        candidate_fmt = (
+                            rule.get('폴더포맷') or
+                            rule.get('포맷') or
+                            rule.get('폴더') or
+                            rule.get('폴더_포맷') or
+                            rule.get('폴더구조') or
+                            rule.get('folder_format') or
+                            rule.get('format') or
+                            rule.get('path')
+                        )
+                        if candidate_fmt and str(candidate_fmt).strip():
+                            matched_folder_format = str(candidate_fmt).strip()
+                            break
+
+        # 카테고리별 포맷팅 및 폴백 결정
+        if target_cat == 'JAV_CEN':
+            save_fmt = matched_folder_format or setting_source.get("jav_censored_image_server_save_format") or "/jav/cen/{label_1}/{label}"
+            formatted_sub = save_fmt.format_map(data_tokens).strip('/\\')
+            rel_dir = formatted_sub if formatted_sub.startswith('jav/cen') else os.path.join('jav/cen', formatted_sub).replace('\\', '/')
+
+        elif target_cat == 'JAV_UNCEN':
+            if not matched_folder_format:
+                for def_rule in cls.DEFAULT_UNCEN_IMAGE_RULES:
+                    if re.search(def_rule['레이블'], base_label, re.IGNORECASE):
+                        matched_folder_format = def_rule['폴더포맷']
+                        break
+            save_fmt = matched_folder_format or setting_source.get("jav_uncensored_image_server_save_format") or "/jav/uncen/{label}"
+            formatted_sub = save_fmt.format_map(data_tokens).strip('/\\')
+            rel_dir = formatted_sub if formatted_sub.startswith('jav/uncen') else os.path.join('jav/uncen', formatted_sub).replace('\\', '/')
+
+        elif target_cat == 'WESTERN':
+            save_fmt = matched_folder_format or setting_source.get("western_image_server_save_format") or "/western/scenes/{studio_1}/{studio}"
+            formatted_sub = save_fmt.format_map(data_tokens).strip('/\\')
+            rel_dir = formatted_sub if formatted_sub.startswith('western') else os.path.join('western', formatted_sub).replace('\\', '/')
+
+        # 기타 카테고리
+        elif target_cat == 'MOVIE':
+            rel_dir = f"movie/{year4_str}"
+        elif target_cat in ['KTV', 'FTV']:
+            rel_dir = f"tv/{target_cat.lower()}"
+        else:
+            rel_dir = f"{domain}/{target_cat.lower()}"
+
+        rel_dir = rel_dir.replace('\\', '/').strip('/')
+        target_folder = os.path.join(local_root, rel_dir.replace('/', os.path.sep))
+        server_url_prefix = f"{server_url.rstrip('/')}/{rel_dir}"
+
+        return target_folder, server_url_prefix
+
+
     @classmethod
     def set_config(cls, db):
         if cls.session is None:
@@ -669,6 +872,7 @@ class SiteAvBase:
             "image_server_local_path": db.get(f'{common_config_prefix}_image_server_local_path') or "",
             "image_server_url": db.get(f'{common_config_prefix}_image_server_url') or "",
             "image_server_rewrite": db.get_bool(f'{common_config_prefix}_image_server_rewrite'),
+            "image_save_mode": db.get(f'{module_type}_image_save_mode') or "jpeg",
             "censored_image_format": db.get('jav_censored_image_server_save_format') or "",
             "uncensored_image_format": db.get('jav_uncensored_image_server_save_format') or "",
             "western_image_format": db.get('western_image_server_save_format') or "/western/{studio}",
@@ -735,22 +939,19 @@ class SiteAvBase:
 
         # 이미지 서버 URL인 경우 인터넷(HTTP)을 타지 않고 로컬 디스크에서 즉시 로드
         local_root = cls.config.get('image_server_local_path') if cls.config else None
-        if local_root and os.path.exists(local_root) and ('/images/' in img_src or '/jav/' in img_src or '/western/' in img_src):
-            parsed = urlparse(img_src)
-            path_part = parsed.path
-            for prefix in ['/images', '/image']:
-                if path_part.startswith(prefix):
-                    path_part = path_part[len(prefix):]
-            
-            disk_path = os.path.join(local_root, path_part.lstrip('/\\'))
+        server_url = (cls.config.get('image_server_url') if cls.config else '') or ''
+        server_url_clean = server_url.rstrip('/')
+
+        if local_root and os.path.exists(local_root) and server_url_clean and img_src.startswith(server_url_clean):
+            rel_url_path = img_src[len(server_url_clean):].lstrip('/\\')
+            disk_path = os.path.join(local_root, rel_url_path.replace('/', os.path.sep))
             if os.path.exists(disk_path):
                 try:
                     img = Image.open(disk_path)
                     img.load()
-                    # logger.debug(f"[{cls.site_name}] imopen 로컬 디스크 직결 로드 성공: {disk_path}")
                     return img
                 except Exception as e_local:
-                    logger.debug(f"[{cls.site_name}] imopen local file load error: {disk_path} ({e_local})")
+                    logger.debug(f"[{cls.site_name}] imopen 로컬 파일 로드 예외: {disk_path} ({e_local})")
 
         # 순수 원격 원본 URL (DMM, JavBus 등)일 때만 네트워크 요청 수행
         if img_src.startswith("http"):
@@ -1041,16 +1242,49 @@ class SiteAvBase:
 
 
     @classmethod
-    def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache, is_validating=False, is_rescued=False):
+    def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         if is_validating:
-            # logger.debug(f"[{cls.site_name}] Validation mode active. Returning raw CDN URLs.")
-            # 파서가 넘겨준 ps(썸네일)를 poster로 임시 매핑
             if raw_image_urls.get('ps'): 
                 entity.thumb.append(EntityThumb(aspect="poster", value=raw_image_urls['ps']))
-            # pl(가로원본) 매핑
             if raw_image_urls.get('pl'): 
                 entity.thumb.append(EntityThumb(aspect="landscape", value=raw_image_urls['pl']))
             return entity
+
+        if not hasattr(entity, 'original') or entity.original is None:
+            entity.original = {}
+
+        existing_orig_thumb = entity.original.get('thumb') if isinstance(entity.original.get('thumb'), dict) else {}
+        
+        raw_ps_candidate = ps_url_from_cache or existing_orig_thumb.get('ps_url') or raw_image_urls.get('ps') or ''
+        raw_p_candidate = raw_image_urls.get('poster') or ''
+        raw_pl_candidate = raw_image_urls.get('pl') or ''
+
+        if not raw_pl_candidate:
+            existing_pl = existing_orig_thumb.get('landscape') or ''
+            if (
+                isinstance(existing_pl, str) and existing_pl.startswith(('http://', 'https://')) and
+                '/metadata/normal/' not in existing_pl and '_pl_user.' not in existing_pl
+            ):
+                raw_pl_candidate = existing_pl
+
+        # 로컬 임시 파일 경로인 경우 원본 포스터에서 제외
+        if isinstance(raw_p_candidate, str) and (raw_p_candidate.startswith('/data/tmp') or raw_p_candidate.startswith('temp_poster_') or (not raw_p_candidate.startswith('http') and not raw_p_candidate.startswith('//'))):
+            raw_p_candidate = ''
+
+        entity.original['thumb'] = {
+            'ps_url': raw_ps_candidate,
+            'poster': raw_p_candidate,
+            'landscape': raw_pl_candidate
+        }
+        
+        if 'fanart' not in entity.original or not entity.original['fanart']:
+            entity.original['fanart'] = list(raw_image_urls.get('arts') or [])
 
         image_mode = cls.config.get('image_mode')
         temp_filepath_to_clean = None
@@ -1077,73 +1311,26 @@ class SiteAvBase:
                 pre_calculated_target_folder = getattr(entity, 'image_server_target_folder', None)
                 pre_calculated_url_prefix = getattr(entity, 'image_server_url_prefix', None)
 
-                target_folder = None
-                url_prefix = None
-
                 if pre_calculated_target_folder and pre_calculated_url_prefix:
-                    # Case 1: 사이트 모듈에서 이미 경로를 계산해 준 경우 (FC2, 1pondo 등)
-                    # logger.debug(f"Using pre-calculated image server path from entity: {pre_calculated_target_folder}")
                     target_folder = pre_calculated_target_folder
                     url_prefix = pre_calculated_url_prefix
                 else:
-                    # Case 2: 경로가 없는 경우 (DMM, JavDB 등), 여기서 경로를 새로 계산
-                    # logger.debug("No pre-calculated path found. Calculating image server path in SiteAvBase.")
-                    module_prefix = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
+                    target_cat = 'JAV_UNCEN' if cls.module_char == 'E' else ('WESTERN' if cls.module_char == 'W' else 'JAV_CEN')
+                    domain_name = 'western' if cls.module_char == 'W' else ('jav_uncensored' if cls.module_char == 'E' else 'jav_censored')
+                    stem = entity.ui_code or getattr(entity, 'originaltitle', '') or entity.code
+                    year_val = getattr(entity, 'year', 1900) or 1900
+                    studio_val = getattr(entity, 'studio', '') or ''
+                    label_val = getattr(entity, 'label', '') or ''
 
-                    base_path = cls.config.get('image_server_local_path')
-                    url_base = cls.config.get('image_server_url')
-                    save_format_key = 'censored_image_format' if cls.module_char == 'C' else 'uncensored_image_format'
-                    save_format = cls.config.get(save_format_key)
-
-                    if base_path and url_base and save_format:
-                        base_label = getattr(entity, 'label', entity.ui_code.split('-')[0])
-                        label_full = base_label
-
-                        # '741'로 시작하는 특수 레이블은 규칙에서 제외
-                        if not base_label.upper().startswith('741'):
-                            numeric_prefix_match = re.match(r'^(\d+)([A-Z].*)', base_label.upper())
-                            if numeric_prefix_match:
-                                label_full = numeric_prefix_match.group(2)
-                                # logger.debug(f"Numeric prefix label detected: '{base_label}'. Using '{label_full}' for path.")
-
-                        # --- label_1 (첫 글자) 결정 로직 ---
-                        label_first = ""
-                        # 1. 741로 시작하는 특수 품번 예외 처리
-                        if base_label.upper().startswith('741'):
-                            label_first = '09'
-                            # logger.debug(f"Special '741' prefix label detected: '{base_label}'. Using '09' for label_1.")
-                        # 2. entity에 이미 label_1이 설정된 경우 (DMM 등에서 파싱)
-                        elif getattr(entity, 'label_1', None):
-                            label_first = entity.label_1
-                        # 3. 그 외의 경우, 정제된 label_full의 첫 글자 사용
-                        elif label_full:
-                            label_first = label_full[0]
-
-                        safe_studio = getattr(entity, 'studio', '') or 'Unknown'
-                        safe_studio_clean = re.sub(r'[^A-Za-z0-9가-힣]', '_', safe_studio).strip('_') or 'Unknown'
-
-                        studio_first = safe_studio_clean[0].upper() if safe_studio_clean else 'ETC'
-                        if studio_first.isdigit():
-                            studio_first = '09'
-
-                        format_map = {
-                            'label': label_full,
-                            'label_1': label_first,
-                            'studio': safe_studio_clean,
-                            'studio_1': studio_first,
-                        }
-
-                        try:
-                            # KeyError 방지를 위해 format_map 사용
-                            format_map = {'label': label_full, 'label_1': label_first}
-                            sub_path = save_format.format_map(format_map).strip('/\\')
-                        except KeyError as e:
-                            logger.warning(f"Image server save_format error for '{save_format}'. Key {e} not found. Falling back to default.")
-                            # 폴백: Uncensored는 레이블, Censored는 첫 글자 사용
-                            sub_path = label_full if cls.module_char == 'U' else label_first
-
-                        target_folder = os.path.join(base_path, sub_path)
-                        url_prefix = f"{url_base.rstrip('/')}/{sub_path}"
+                    target_folder, url_prefix = cls.get_server_folder_and_prefix(
+                        domain=domain_name,
+                        category=target_cat,
+                        stem=stem,
+                        studio=studio_val,
+                        year=year_val,
+                        label=label_val,
+                        entity=entity
+                    )
 
                 if target_folder and url_prefix:
                     decision_data['image_server_paths'] = {'target_folder': target_folder, 'url_prefix': url_prefix}
@@ -1180,6 +1367,24 @@ class SiteAvBase:
             # --- 2. 이미지 소스 결정 위임 ---
             decision_data['final_image_sources'] = cls.determine_final_image_sources(decision_data)
             temp_filepath_to_clean = decision_data['final_image_sources'].get('temp_poster_filepath')
+
+            original_poster_source = (
+                decision_data['final_image_sources'].get('original_poster_source') or ''
+            )
+            image_server_url = str(cls.config.get('image_server_url') or '').rstrip('/')
+            generated_image_prefix = str(
+                decision_data.get('image_server_paths', {}).get('url_prefix') or ''
+            ).rstrip('/')
+            if (
+                not isinstance(original_poster_source, str) or
+                not original_poster_source.startswith(('http://', 'https://')) or
+                '/metadata/normal/' in original_poster_source or
+                '_p_user.' in original_poster_source or
+                (image_server_url and original_poster_source.startswith(image_server_url)) or
+                (generated_image_prefix and original_poster_source.startswith(generated_image_prefix))
+            ):
+                original_poster_source = ''
+            entity.original['thumb']['poster'] = original_poster_source
 
             # --- 3. 최종 이미지 정보 생성 위임 ---
             cls.finalize_images_for_entity(entity, decision_data)
@@ -1219,6 +1424,7 @@ class SiteAvBase:
 
         final_image_sources = {
             'poster_source': None, 'poster_mode': None,
+            'original_poster_source': '',
             'landscape_source': None, 'arts': [], 'temp_poster_filepath': None,
             'skip_poster_download': False, 'skip_landscape_download': False,
             'is_user_poster': False, 'is_user_landscape': False,
@@ -1305,7 +1511,18 @@ class SiteAvBase:
             # 사이트 모듈에서 이미 세로 포스터나 크롭본을 직접 넘긴 경우 (Uncen, Western 등)
             if direct_poster_url:
                 final_image_sources['poster_source'] = direct_poster_url
-                if direct_poster_url.startswith('http'):
+                image_server_prefix = str(
+                    decision_data.get('image_server_paths', {}).get('url_prefix') or ''
+                ).rstrip('/')
+                is_generated_image_url = (
+                    isinstance(direct_poster_url, str) and (
+                        '/metadata/normal/' in direct_poster_url or
+                        '_p_user.' in direct_poster_url or
+                        (image_server_prefix and direct_poster_url.startswith(image_server_prefix))
+                    )
+                )
+                if direct_poster_url.startswith('http') and not is_generated_image_url:
+                    final_image_sources['original_poster_source'] = direct_poster_url
                     # 원격 세로 이미지 URL (크롭 없이 그대로 저장)
                     final_image_sources['poster_mode'] = None
                 else:
@@ -1364,6 +1581,7 @@ class SiteAvBase:
 
                                     logger.debug(f"Found ideal poster (visually same as thumbnail): {candidate_url}")
                                     final_image_sources['poster_source'] = candidate_url
+                                    final_image_sources['original_poster_source'] = candidate_url
                                     break
                             finally:
                                 if im_lg_obj: im_lg_obj.close()
@@ -1386,6 +1604,7 @@ class SiteAvBase:
 
                                         logger.debug(f"HQ Poster Found in advanced Phase 1: {candidate_url}")
                                         final_image_sources['poster_source'] = candidate_url
+                                        final_image_sources['original_poster_source'] = candidate_url
                                         break
                                 finally:
                                     if im_lg_obj: im_lg_obj.close()
@@ -1428,7 +1647,6 @@ class SiteAvBase:
                                                             final_image_sources['poster_mode'] = 'local_file'
                                                             final_image_sources['temp_poster_filepath'] = temp_filepath
                                                             final_image_sources['processed_from_url'] = candidate_url
-
                                                             found_poster_for_this_candidate = True
                                                             logger.debug(f"HQ Poster Found (Letterbox Processed): Saved to {temp_filepath}")
                                                         else:
@@ -1501,6 +1719,7 @@ class SiteAvBase:
                 for candidate_url in specific_candidates_on_page:
                     if cls.is_portrait_high_quality_image(cls.imopen(candidate_url)):
                         final_image_sources['poster_source'] = candidate_url
+                        final_image_sources['original_poster_source'] = candidate_url
                         portrait_found = True
                         logger.debug(f"Found & using portrait HQ poster: {candidate_url}")
                         break
@@ -1621,14 +1840,12 @@ class SiteAvBase:
         try:
             temp_dir = os.path.join(path_data, "tmp")
             os.makedirs(temp_dir, exist_ok=True)
-            filename = f"temp_poster_{int(time.time())}_{os.urandom(4).hex()}.jpg"
+            image_format = pil_obj.format or "PNG"
+            extension = image_format.lower()
+            filename = f"temp_poster_{int(time.time())}_{os.urandom(4).hex()}.{extension}"
             filepath = os.path.join(temp_dir, filename)
 
-            img_to_save = pil_obj
-            if pil_obj.mode != 'RGB':
-                img_to_save = pil_obj.convert('RGB')
-
-            img_to_save.save(filepath, "JPEG", quality=95)
+            pil_obj.save(filepath, image_format)
             logger.debug(f"Saved temporary poster to: {filepath}")
             return filepath
         except Exception as e:
@@ -1770,80 +1987,112 @@ class SiteAvBase:
                 logger.error(f"Image Server Error: 'target_folder' or 'url_prefix' not available for {entity.ui_code}")
                 return
 
-            # --- 포스터 처리 ---
+            os.makedirs(target_folder, exist_ok=True)
             poster_source = image_sources.get('poster_source')
             landscape_source = image_sources.get('landscape_source')
             source_mode = image_sources.get('poster_mode')
-            os.makedirs(target_folder, exist_ok=True)
 
-            # 포스터 소스가 가로 커버 원본과 완벽히 동일하고, 크롭 지시어(source_mode)도 없는 경우 (크롭 실패 상태)
-            is_uncropped_landscape = bool(
-                poster_source and landscape_source and 
-                poster_source == landscape_source and not source_mode
-            )
+            # -------------------------------------------------------------
+            # 랜드스케이프(_pl.jpg) 먼저 처리 및 디스크 저장
+            # -------------------------------------------------------------
+            saved_pl_url = None
+            user_pl_filename = decision_data['user_files_exist'].get('landscape')
+            system_landscape_path = os.path.join(target_folder, f"{code_lower}_pl.jpg")
 
-            if poster_source and not is_uncropped_landscape:
-                if image_sources.get('skip_poster_download'):
-                    entity.thumb.append(EntityThumb(aspect="poster", value=poster_source))
-                else:
-                    system_poster_path = os.path.join(target_folder, f"{code_lower}_p.jpg")
-                    save_success = False
-                    
-                    if source_mode == 'local_file':
-                        try:
-                            with open(poster_source, 'rb') as f:
-                                if not cls._save_image_as_jpeg(BytesIO(f.read()), system_poster_path):
-                                    import shutil
-                                    shutil.copy(poster_source, system_poster_path)
-                            save_success = True
-                        except Exception as e_read_local:
-                            logger.error(f"Failed to read local file {poster_source}: {e_read_local}")
-                    else:
-                        response = safe_jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
-                        if response and response.status_code == 200:
-                            if not cls._save_image_as_jpeg(BytesIO(response.data), system_poster_path):
-                                with open(system_poster_path, 'wb') as f: f.write(response.data)
-                            save_success = True
-                        else:
-                            logger.error(f"Failed to download poster for {code_lower} from {poster_source}")
-
-                    if save_success or os.path.exists(system_poster_path):
-                        entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{code_lower}_p.jpg"))
-            else:
-                # 크롭되지 않은 가로 이미지인 경우: _p.jpg를 만들지 않고 _pl.jpg 주소를 포스터로 직접 연결
-                sys_p_path = os.path.join(target_folder, f"{code_lower}_p.jpg")
-                if os.path.exists(sys_p_path):
-                    try: os.remove(sys_p_path)
-                    except Exception: pass
-                
-                # 유저 커스텀 포스터(_p_user)가 이미 존재한다면 그것을 우선 사용, 없으면 _pl.jpg 연결
-                user_poster_filename = decision_data['user_files_exist'].get('poster')
-                if user_poster_filename:
-                    entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{user_poster_filename}"))
-                else:
-                    entity.thumb.append(EntityThumb(aspect="poster", value=f"{server_url_prefix}/{code_lower}_pl.jpg"))
-                    logger.debug(f"[{cls.site_name}] 세로 포스터 없음/크롭 미적용 -> 포스터에 _pl.jpg 지정: {server_url_prefix}/{code_lower}_pl.jpg")
-
-            # --- 랜드스케이프 처리 ---
-            if landscape_source:
+            if user_pl_filename:
+                saved_pl_url = f"{server_url_prefix}/{user_pl_filename}"
+                entity.thumb.append(EntityThumb(aspect="landscape", value=saved_pl_url))
+            elif landscape_source:
                 if image_sources.get('skip_landscape_download'):
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_source))
-                else: 
-                    system_landscape_path = os.path.join(target_folder, f"{code_lower}_pl.jpg")
-                    os.makedirs(target_folder, exist_ok=True)
-                    
+                    saved_pl_url = landscape_source
+                    entity.thumb.append(EntityThumb(aspect="landscape", value=saved_pl_url))
+                else:
                     save_success = False
-                    response = safe_jav_image(url=landscape_source, site=cls.site_name)
-                    if response and response.status_code == 200:
-                        if not cls._save_image_as_jpeg(BytesIO(response.data), system_landscape_path):
-                            with open(system_landscape_path, 'wb') as f: f.write(response.data)
+                    if not rewrite and os.path.exists(system_landscape_path):
                         save_success = True
                     else:
-                        logger.warning(f"Failed to download landscape for {code_lower} from {landscape_source}")
-                    
-                    # 파일 저장 성공 시 또는 파일이 존재할 시 엔티티 추가
+                        response = safe_jav_image(url=landscape_source, site=cls.site_name)
+                        if response and response.status_code == 200:
+                            if not cls._save_image_data(BytesIO(response.data), system_landscape_path):
+                                with open(system_landscape_path, 'wb') as f:
+                                    f.write(response.data)
+                            save_success = True
+                        else:
+                            logger.warning(f"Failed to download landscape for {code_lower} from {landscape_source}")
+
                     if save_success or os.path.exists(system_landscape_path):
-                        entity.thumb.append(EntityThumb(aspect="landscape", value=f"{server_url_prefix}/{code_lower}_pl.jpg"))
+                        saved_pl_url = f"{server_url_prefix}/{code_lower}_pl.jpg"
+                        entity.thumb.append(EntityThumb(aspect="landscape", value=saved_pl_url))
+
+            # -------------------------------------------------------------
+            # 포스터(_p.jpg) 처리 (pl이 세로 비율인 경우 _p.jpg로 저장 보장)
+            # -------------------------------------------------------------
+            saved_p_url = None
+            user_p_filename = decision_data['user_files_exist'].get('poster')
+            system_poster_path = os.path.join(target_folder, f"{code_lower}_p.jpg")
+
+            if user_p_filename:
+                saved_p_url = f"{server_url_prefix}/{user_p_filename}"
+                entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
+            elif poster_source:
+                if image_sources.get('skip_poster_download'):
+                    saved_p_url = poster_source
+                    entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
+                else:
+                    # poster_source가 landscape_source와 동일하고 디스크에 _pl.jpg가 저장되어 있는 경우
+                    if poster_source == landscape_source and os.path.exists(system_landscape_path) and not source_mode:
+                        try:
+                            # 실제 이미지의 가로/세로 비율 확인
+                            im_pl_check = Image.open(system_landscape_path)
+                            w_pl, h_pl = im_pl_check.size
+                            im_pl_check.close()
+                            
+                            # 가로보다 세로가 길거나 정사각형에 가까운 경우 (포스터 비율 이미지)
+                            if w_pl <= h_pl * 1.1:
+                                if rewrite or not os.path.exists(system_poster_path):
+                                    import shutil
+                                    shutil.copy(system_landscape_path, system_poster_path)
+                                saved_p_url = f"{server_url_prefix}/{code_lower}_p.jpg"
+                                entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
+                                logger.debug(f"[{cls.site_name}] 세로 비율 원본 커버를 _p.jpg로 복사 생성 완료: {saved_p_url}")
+                            else:
+                                # 가로 비율이 뚜렷한 경우 _pl.jpg를 포스터 URL로 연결
+                                saved_p_url = saved_pl_url
+                                entity.thumb.append(EntityThumb(aspect="poster", value=saved_pl_url))
+                                logger.debug(f"[{cls.site_name}] 가로형 커버를 대표 포스터로 지정: {saved_pl_url}")
+                        except Exception as e_pl_check:
+                            logger.error(f"[{cls.site_name}] _pl.jpg 비율 확인 중 오류: {e_pl_check}")
+                    else:
+                        # 별도 세로 소스이거나 크롭 모드가 지정된 경우 다운로드/크롭 처리
+                        save_success = False
+                        if not rewrite and os.path.exists(system_poster_path):
+                            save_success = True
+                        elif source_mode == 'local_file':
+                            try:
+                                with open(poster_source, 'rb') as f:
+                                    if not cls._save_image_data(BytesIO(f.read()), system_poster_path):
+                                        import shutil
+                                        shutil.copy(poster_source, system_poster_path)
+                                save_success = True
+                            except Exception as e_read_local:
+                                logger.error(f"Failed to read local file {poster_source}: {e_read_local}")
+                        else:
+                            response = safe_jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
+                            if response and response.status_code == 200:
+                                if not cls._save_image_data(BytesIO(response.data), system_poster_path):
+                                    with open(system_poster_path, 'wb') as f: f.write(response.data)
+                                save_success = True
+                            else:
+                                logger.error(f"Failed to download poster for {code_lower} from {poster_source}")
+
+                        if save_success or os.path.exists(system_poster_path):
+                            saved_p_url = f"{server_url_prefix}/{code_lower}_p.jpg"
+                            entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
+
+            # 세로 포스터가 생성되지 않았으나 랜드스케이프가 존재하는 경우 대체 연결
+            if not saved_p_url and saved_pl_url:
+                entity.thumb.append(EntityThumb(aspect="poster", value=saved_pl_url))
+                logger.debug(f"[{cls.site_name}] 세로 포스터 없음/저장 실패 ➔ 대표 포스터에 _pl 대체 지정: {saved_pl_url}")
 
             # --- 팬아트 처리 ---
             if rewrite or system_files_exist.get('arts', 0) == 0:
@@ -1860,7 +2109,7 @@ class SiteAvBase:
                     
                     response = safe_jav_image(url=art_url, site=cls.site_name)
                     if response and response.status_code == 200:
-                        if cls._save_image_as_jpeg(BytesIO(response.data), filepath):
+                        if cls._save_image_data(BytesIO(response.data), filepath):
                             pass
                         else:
                             with open(filepath, 'wb') as f: f.write(response.data)
@@ -1966,35 +2215,53 @@ class SiteAvBase:
 
 
     @classmethod
-    def _parse_ui_code(cls, cid_part_raw: str, content_type: str = 'unknown') -> tuple:
+    def _parse_ui_code(cls, cid_part_raw: str, content_type: str = 'unknown', category: str = None) -> tuple:
         special_rules = []
         generic_rules = []
-        if cls.config and 'censored_parser_rules' in cls.config:
-            special_rules = cls.config.get('censored_parser_rules', [])
-            generic_rules = cls.config.get('generic_parser_rules', [])
-        elif cls._yaml_settings:
-            parsing_rules = cls._yaml_settings.get('jav_parsing_rules', {})
-            special_rules = parsing_rules.get('censored_special_rules', [])
-            generic_rules = parsing_rules.get('generic_rules', [])
 
-        if not special_rules and not generic_rules:
-            logger.warning("Censored UI Code Parser rules not loaded in config.")
+        # 카테고리 또는 호출 모듈 특성에 따른 파싱 규칙 분기
+        target_mod = None
+        if category:
+            cat_upper = str(category).upper()
+            if cat_upper in ['JAV_UNCEN', 'UNCENSORED']:
+                target_mod = 'uncensored'
+            elif cat_upper in ['JAV_CEN', 'CENSORED']:
+                target_mod = 'censored'
+        elif getattr(cls, 'module_char', None) == 'E':
+            target_mod = 'uncensored'
+        elif getattr(cls, 'module_char', None) == 'C':
+            target_mod = 'censored'
+
+        parsing_rules = cls._yaml_settings.get('jav_parsing_rules', {}) if isinstance(cls._yaml_settings, dict) else {}
+        generic_rules = (cls.config.get('generic_parser_rules') if cls.config else None) or parsing_rules.get('generic_rules', []) or []
+
+        if target_mod == 'uncensored':
+            special_rules = (cls.config.get('uncensored_parser_rules') if cls.config else None) or parsing_rules.get('uncensored_special_rules', []) or []
+        elif target_mod == 'censored':
+            special_rules = (cls.config.get('censored_parser_rules') if cls.config else None) or parsing_rules.get('censored_special_rules', []) or []
+        else:
+            censored_rules = (cls.config.get('censored_parser_rules') if cls.config else None) or parsing_rules.get('censored_special_rules', []) or []
+            uncensored_rules = (cls.config.get('uncensored_parser_rules') if cls.config else None) or parsing_rules.get('uncensored_special_rules', []) or []
+            special_rules = censored_rules + uncensored_rules
+
+        all_rules = special_rules + generic_rules
+
+        if not all_rules:
+            logger.warning("UI Code Parser rules not loaded in config.")
             ui_code = cid_part_raw.upper()
             label_part = ui_code.split('-')[0].lower() if '-' in ui_code else ui_code.lower()
             return ui_code, label_part, ""
 
         # CID 전처리
-        processed_cid = cid_part_raw.lower().strip()
+        processed_cid = unicodedata.normalize('NFKC', str(cid_part_raw or '')).lower().strip()
         processed_cid = re.sub(r'^[hn]_\d', '', processed_cid)
+        processed_cid = re.sub(r'\.\w+$', '', processed_cid)
+        processed_cid = re.sub(r'[\[\(].*?[\]\)]', '', processed_cid).strip()
         suffix_strip_match = re.match(r'^(.*\d+)([a-z]+)$', processed_cid, re.I)
         if suffix_strip_match:
             processed_cid = suffix_strip_match.group(1)
 
-        # 파싱 변수 초기화
         final_label_part, final_num_part, final_search_label_part, rule_applied = "", "", "", False
-        special_rules = cls.config.get('censored_parser_rules', [])
-        generic_rules = cls.config.get('generic_parser_rules', [])
-        all_rules = special_rules + generic_rules
 
         for line in all_rules:
             line = line.strip()
@@ -2012,11 +2279,11 @@ class SiteAvBase:
                 match = re.match(pattern, processed_cid, re.I)
                 if match:
                     template_parts = template.split('|')
-                    if len(template_parts) < 2: continue
+                    if len(template_parts) < 2:
+                        continue
 
                     label_template = template_parts[0]
                     num_template = template_parts[1]
-                    # 검색용 템플릿이 있는지 확인 (선택 사항)
                     search_label_template = template_parts[2] if len(template_parts) > 2 else None
 
                     groups = match.groups()
@@ -2024,7 +2291,6 @@ class SiteAvBase:
                     final_label_part = label_template.format(*groups)
                     final_num_part = num_template.format(*groups)
 
-                    # 검색용 템플릿이 있으면 그것으로 final_search_label_part를 채움
                     if search_label_template:
                         final_search_label_part = search_label_template.format(*groups)
 
@@ -2033,10 +2299,9 @@ class SiteAvBase:
             except (re.error, IndexError) as e:
                 logger.error(f"Error applying rule: '{line}' - {e}")
 
-        # 모든 규칙에 실패했을 경우의 최후의 폴백
+        # 모든 규칙에 실패했을 경우의 폴백
         if not rule_applied:
             logger.debug(f"UI Code Parser: No rule matched for '{processed_cid}'. Falling back.")
-            
             match_fallback = re.match(r'^([0-9a-z]+)-(\d+)$', processed_cid, re.I)
             if match_fallback:
                 final_label_part = match_fallback.group(1)
@@ -2045,27 +2310,22 @@ class SiteAvBase:
             else:
                 final_label_part, final_num_part = processed_cid, ""
 
-        # === 최종 값 조합 ===
-        label_ui_part = final_label_part.upper().strip('-')
+        label_ui_part = final_label_part.upper().strip('-_ ')
 
-        # --- 숫자 부분 처리 분기 ---
         if final_num_part.isdigit():
             num_stripped = final_num_part.lstrip('0') or "0"
             num_ui_part = num_stripped.zfill(3)
         else:
-            num_ui_part = final_num_part.upper().strip('-')
+            num_ui_part = final_num_part.upper().strip('-_ ')
 
-        # 최종 UI 코드 조합
         if label_ui_part and num_ui_part:
             ui_code_final = f"{label_ui_part}-{num_ui_part}"
         else:
             ui_code_final = label_ui_part or cid_part_raw.upper()
 
-        # 반환값 준비
         score_label_part = final_search_label_part.lower() if final_search_label_part else final_label_part.lower()
         score_num_raw_part = final_num_part
 
-        # logger.debug(f"UI Code Parser: Parsed '{cid_part_raw}' > '{pattern}' > Final: '{ui_code_final}'")
         return ui_code_final, score_label_part, score_num_raw_part
 
 
@@ -2075,61 +2335,7 @@ class SiteAvBase:
         Uncensored 품번을 파싱하고 표준화된 UI 코드를 반환합니다.
         (예: 'fc2-ppv-1234567' -> 'FC2-1234567')
         """
-        if not cls.config or 'uncensored_parser_rules' not in cls.config:
-            logger.warning("Uncensored UI Code Parser rules not loaded in config. Using raw value.")
-            return cid_part_raw.upper()
-
-        processed_cid = cid_part_raw.lower().strip()
-        processed_cid = re.sub(r'\.\w+$', '', processed_cid)
-        processed_cid = re.sub(r'[\[\(].*?[\]\)]', '', processed_cid).strip()
-
-        final_label_part, final_num_part, rule_applied = "", "", False
-        
-        special_rules = cls.config.get('uncensored_parser_rules', [])
-        generic_rules = cls.config.get('generic_parser_rules', [])
-        all_rules = special_rules + generic_rules
-
-        # logger.debug(f"[{cls.site_name}] _parse_ui_code_uncensored started for '{cid_part_raw}'. Using {len(special_rules)} special + {len(generic_rules)} generic rules.")
-
-        for line in all_rules:
-            line = line.strip()
-            if not line or line.startswith('#'): continue
-
-            parts = line.split('=>')
-            if len(parts) != 2:
-                logger.warning(f"Invalid rule format (expected 'pattern => template'): {line}")
-                continue
-
-            pattern, template = parts[0].strip(), parts[1].strip()
-            try:
-                match = re.match(pattern, processed_cid, re.I)
-                if match:
-                    template_parts = template.split('|')
-                    if len(template_parts) != 2: continue
-
-                    label_template, num_template = template_parts
-                    groups = match.groups()
-                    final_label_part = label_template.format(*groups).strip()
-                    final_num_part = num_template.format(*groups).strip()
-                    rule_applied = True
-                    # logger.debug(f"Uncensored Parser: Matched Rule '{pattern}' -> Label:'{final_label_part}', Num:'{final_num_part}'")
-                    break
-            except Exception as e:
-                logger.error(f"Error applying uncensored rule: '{line}' - {e}")
-
-        if not rule_applied:
-            logger.debug(f"Uncensored Parser: No rule matched for '{processed_cid}'. Falling back.")
-            final_label_part, final_num_part = processed_cid, ""
-
-        label_ui_part = final_label_part.upper().strip('-_ ')
-        num_ui_part = final_num_part.upper().strip('-_ ')
-
-        if label_ui_part and num_ui_part:
-            ui_code_final = f"{label_ui_part}-{num_ui_part}"
-        else:
-            ui_code_final = label_ui_part or cid_part_raw.upper()
-
-        logger.debug(f"Uncensored Parser: Parsed '{cid_part_raw}' -> Final UI Code: '{ui_code_final}'")
+        ui_code_final, _, _ = cls._parse_ui_code(cid_part_raw, category='JAV_UNCEN')
         return ui_code_final
 
 
@@ -2148,7 +2354,7 @@ class SiteAvBase:
             entity.premiered = value
             entity.year = int(value[:4])
         if data.get("actors", []):
-            entity.actor = [EntityActor(a["name"]) for a in data["actors"]]
+            entity.actor = [EntityActor(name_org=a["name"]) for a in data["actors"]]
         return entity
 
 
@@ -2367,33 +2573,25 @@ class SiteAvBase:
         try:
             import html
 
-            # 1. <br> 태그를 줄바꿈(\n)으로 변환
+            # macOS 자모 분리(NFD) 및 유니코드 깨짐 방지를 위한 NFC 정규화
+            text = unicodedata.normalize('NFC', str(text))
+
+            # <br> 태그를 줄바꿈(\n)으로 변환
             text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=re.I)
 
-            # 2. 스크립트(<script>)와 스타일(<style>) 태그는 그 안의 내용물까지 통째로 삭제
+            # 스크립트와 스타일 태그 삭제
             text = re.sub(r'<\s*script[^>]*>.*?<\s*/\s*script\s*>', '', text, flags=re.I | re.DOTALL)
             text = re.sub(r'<\s*style[^>]*>.*?<\s*/\s*style\s*>', '', text, flags=re.I | re.DOTALL)
 
-            # 3. HTML 엔티티(&lt;, &gt;, &amp;, &nbsp; 등)를 일반 문자로 1차 변환
+            # HTML 엔티티 변환
             text = html.unescape(text)
 
-            # 4. HTML 태그 제거
-            # 4-1. 커스텀 태그 강제 삭제 (FC2 비디오 플레이어 등)
+            # 커스텀 태그 및 표준 태그 제거
             text = re.sub(r'</?\s*FC2_VideoPlayer[^>]*>', '', text, flags=re.I)
             text = re.sub(r'</?\s*fc2-video-player[^>]*>', '', text, flags=re.I)
+            text = re.sub(r'</?[a-zA-Z]+[1-6]?(?:>|\s[^>]*>)', '', text)
 
-            # 4-2. 표준 HTML 태그만 골라서 껍데기 삭제 (내용 보존)
-            # </?       : 시작 태그(<)나 종료 태그(</)로 시작
-            # [a-zA-Z]+ : 반드시 영문 알파벳으로 시작해야 함
-            # [1-6]?    : h1 ~ h6 처리
-            # (?:>|\s[^>]*>) : 바로 닫히거나(>), 공백 뒤에 속성값이 붙고 닫히는 경우(\s[^>]*>)
-            html_tag_pattern = r'</?[a-zA-Z]+[1-6]?(?:>|\s[^>]*>)'
-            text = re.sub(html_tag_pattern, '', text)
-
-            # 5. 한 번 더 엔티티 디코딩 (이중 인코딩 방어)
             text = html.unescape(text)
-
-            # 6. 여러 줄바꿈을 2개로 제한하고 양쪽 끝 공백 제거
             text = re.sub(r'(\s*\n\s*){3,}', '\n\n', text).strip()
 
             return text
@@ -2403,9 +2601,9 @@ class SiteAvBase:
 
 
     @classmethod
-    def _save_image_as_jpeg(cls, image_data_bytesio: BytesIO, save_path: str) -> bool:
+    def _save_image_data(cls, image_data_bytesio: BytesIO, save_path: str) -> bool:
         """
-        이미지 바이너리 데이터를 받아, 필요할 때만 JPEG로 변환하여 저장합니다.
+        이미지 바이너리 데이터를 설정에 따라 원본 또는 JPEG로 저장합니다.
         성공 시 True, 실패 시 False를 반환합니다.
         """
         try:
@@ -2415,31 +2613,21 @@ class SiteAvBase:
             
             # Pillow로 이미지 열어 포맷과 모드 확인
             with Image.open(temp_buffer) as img:
-                is_jpeg = img.format == 'JPEG'
-                is_compatible_mode = img.mode in ('RGB', 'L')
-
-                # 조건 1: 이미 JPEG이고, 호환되는 모드(RGB, L)인 경우
-                if is_jpeg and is_compatible_mode:
-                    # 재압축 없이 원본 바이너리 데이터를 그대로 저장
-                    logger.debug(f"Saving to {save_path}")
+                if cls.config.get('image_save_mode', 'jpeg').lower() in ('original', 'source', 'raw'):
+                    logger.debug(f"Saving original image data to {save_path}")
                     image_data_bytesio.seek(0) # 원본 버퍼 포인터 리셋
                     with open(save_path, 'wb') as f:
                         f.write(image_data_bytesio.read())
                     return True
                 
-                # 조건 2: 그 외의 모든 경우 (PNG, WEBP, RGBA/CMYK JPEG 등)
+                logger.debug(f"Image format '{img.format}'. Converting to JPEG for {save_path}")
+                if img.mode not in ('RGB', 'L'):
+                    rgb_img = img.convert('RGB')
+                    rgb_img.save(save_path, 'JPEG', quality=95)
+                    rgb_img.close()
                 else:
-                    logger.debug(f"Image format '{img.format}'. Converting to JPEG for {save_path}")
-                    # RGB로 변환
-                    if img.mode not in ('RGB', 'L'):
-                        rgb_img = img.convert('RGB')
-                        # 변환된 이미지 저장
-                        rgb_img.save(save_path, 'JPEG', quality=95)
-                        rgb_img.close()
-                    else:
-                        # 모드는 정상이지만 포맷이 다른 경우 (PNG, WEBP 등)
-                        img.save(save_path, 'JPEG', quality=95)
-                    return True
+                    img.save(save_path, 'JPEG', quality=95)
+                return True
 
         except UnidentifiedImageError:
             # Pillow가 이미지로 인식하지 못하는 경우, 원본 데이터라도 저장
@@ -2459,7 +2647,7 @@ class SiteAvBase:
         """
         배우 이미지를 로컬에 저장하고 entity_actor.thumb를 업데이트합니다.
         """
-        # 1. 정보 추출 (객체/딕셔너리 호환)
+        # 정보 추출 (객체/딕셔너리 호환)
         thumb_url = None
         kor_name = ""
         jpn_name = ""
@@ -2467,18 +2655,18 @@ class SiteAvBase:
 
         if isinstance(entity_actor, dict):
             thumb_url = entity_actor.get('thumb')
-            kor_name = entity_actor.get('name', '')
-            jpn_name = entity_actor.get('originalname', '')
+            kor_name = entity_actor.get('name_ko', '')
+            jpn_name = entity_actor.get('name_org', '')
             actor_idx = entity_actor.get('actor_idx', '')
         else:
             thumb_url = getattr(entity_actor, 'thumb', None)
-            kor_name = getattr(entity_actor, 'name', '')
-            jpn_name = getattr(entity_actor, 'originalname', '')
+            kor_name = getattr(entity_actor, 'name_ko', '')
+            jpn_name = getattr(entity_actor, 'name_org', '')
             actor_idx = getattr(entity_actor, 'actor_idx', '')
-        
+
         if not thumb_url or not actor_idx: return
 
-        # 2. 설정 가져오기
+        # 설정 가져오기
         root_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
         actor_sub_path = cls.MetadataSetting.get('jav_censored_image_server_actor_path') or '/jav/actor'
         server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
@@ -2486,7 +2674,7 @@ class SiteAvBase:
 
         if not root_path or not server_url: return
 
-        # 3. URL 파싱 (프록시 URL인 경우 원본 추출)
+        # URL 파싱 (프록시 URL인 경우 원본 추출)
         real_thumb_url = thumb_url
         if 'jav_image' in thumb_url and 'url=' in thumb_url:
             try:
@@ -2498,30 +2686,32 @@ class SiteAvBase:
             except Exception as e:
                 logger.error(f"Failed to parse proxy URL: {e}")
 
-        # 4. 파일명 및 경로 생성
+        # 파일명 및 경로 생성
         def clean_name(n):
             return re.sub(r'\s+', '_', str(n).strip())
         
-        filename_base = f"{clean_name(kor_name)}"
-        if jpn_name:
-            filename_base += f"_({clean_name(jpn_name)})"
-        filename_base += f"_A{actor_idx}.jpg"
+        name_part = clean_name(kor_name) or clean_name(jpn_name)
+        if jpn_name and clean_name(jpn_name) != clean_name(kor_name):
+            name_part += f"_({clean_name(jpn_name)})"
 
-        first_char = kor_name[0] if kor_name else 'A'
+        clean_actor_idx = clean_name(actor_idx)
+        filename_base = f"{name_part}_{clean_actor_idx}.jpg" if clean_actor_idx else f"{name_part}.jpg"
+
+        first_char = kor_name[0] if kor_name else (jpn_name[0] if jpn_name else '#')
         sub_folder = cls._get_actor_folder_name(first_char)
-        
+
         relative_path = f"{actor_sub_path.strip('/')}/{sub_folder}/{filename_base}"
         full_path = os.path.join(root_path, relative_path)
-        
-        # 5. 이미지 다운로드 및 저장
+
+        # 이미지 다운로드 및 저장
         if rewrite or not os.path.exists(full_path):
             try:
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
                 
-                # [중요] 원본 URL로 요청
+                # 원본 URL로 요청
                 res = cls.get_response(real_thumb_url)
                 if res and res.status_code == 200:
-                    if not cls._save_image_as_jpeg(BytesIO(res.content), full_path):
+                    if not cls._save_image_data(BytesIO(res.content), full_path):
                         with open(full_path, 'wb') as f: f.write(res.content)
                 else:
                     logger.warning(f"Failed to download actor image. Status: {res.status_code if res else 'None'}")
@@ -2530,13 +2720,134 @@ class SiteAvBase:
                 logger.error(f"Failed to save actor image: {e}")
                 return
 
-        # 6. URL 업데이트 (성공 시에만)
+        # URL 업데이트
         new_url = f"{server_url.rstrip('/')}/{relative_path}"
-        
+        pure_sub_rel = f"{sub_folder}/{filename_base}"
+
         if isinstance(entity_actor, dict):
             entity_actor['thumb'] = new_url
+            if not entity_actor.get('extra_info'): entity_actor['extra_info'] = {}
+            entity_actor['extra_info']['local_img_path'] = pure_sub_rel
+            entity_actor['extra_info']['site_img_url'] = real_thumb_url
+            entity_actor['local_img_path'] = pure_sub_rel
+            entity_actor['site_img_url'] = real_thumb_url
         else:
             entity_actor.thumb = new_url
+            if not hasattr(entity_actor, 'extra_info') or not entity_actor.extra_info:
+                entity_actor.extra_info = {}
+            entity_actor.extra_info['local_img_path'] = pure_sub_rel
+            entity_actor.extra_info['site_img_url'] = real_thumb_url
+            setattr(entity_actor, 'local_img_path', pure_sub_rel)
+            setattr(entity_actor, 'site_img_url', real_thumb_url)
+
+
+    @staticmethod
+    def _get_actor_folder_name_western(char):
+        """서양 배우 첫 글자 폴더명 반환 (# 또는 A-Z)"""
+        if not char:
+            return "#"
+        first_char = str(char).strip()[0].upper()
+        if 'A' <= first_char <= 'Z':
+            return first_char
+        return "#"
+
+    @classmethod
+    def save_western_actor_image(cls, entity_actor):
+        """서양 배우 프로필 이미지를 이미지 서버 경로(#/A-Z)에 무손실 저장 ({Name}_{actor_idx}.jpg)"""
+        thumb_url = None
+        actor_name = ""
+        actor_idx = ""
+
+        if isinstance(entity_actor, dict):
+            thumb_url = entity_actor.get('thumb')
+            actor_name = entity_actor.get('name_org') or entity_actor.get('name_en', '')
+            actor_idx = entity_actor.get('actor_idx', '')
+        else:
+            thumb_url = getattr(entity_actor, 'thumb', None)
+            actor_name = getattr(entity_actor, 'name_org', '') or getattr(entity_actor, 'name_en', '')
+            actor_idx = getattr(entity_actor, 'actor_idx', '')
+
+        if not thumb_url or not actor_name:
+            return
+
+        root_path = (
+            cls.MetadataSetting.get('western_image_server_local_path') or
+            cls.MetadataSetting.get('jav_censored_image_server_local_path') or
+            "/data/images"
+        )
+        actor_sub_path = cls.MetadataSetting.get('western_image_server_actor_path') or '/western/actors'
+        server_url = (
+            cls.MetadataSetting.get('western_image_server_url') or
+            cls.MetadataSetting.get('jav_censored_image_server_url') or
+            f"{F.SystemModelSetting.get('ddns')}/images"
+        ).rstrip('/')
+        rewrite = cls.MetadataSetting.get_bool('jav_censored_image_server_rewrite')
+
+        if not root_path or not server_url:
+            return
+
+        real_thumb_url = thumb_url
+        if 'jav_image' in thumb_url and 'url=' in thumb_url:
+            try:
+                from urllib.parse import parse_qs, urlparse
+                parsed = urlparse(thumb_url)
+                qs_dict = parse_qs(parsed.query)
+                if 'url' in qs_dict:
+                    real_thumb_url = qs_dict['url'][0]
+            except Exception:
+                pass
+
+        def clean_name(n):
+            return re.sub(r'[^\w\s가-힣-]', '', str(n).strip()).replace(' ', '_')
+
+        clean_base_name = clean_name(actor_name)
+        if not clean_base_name:
+            return
+
+        clean_idx = clean_name(actor_idx)
+        filename_base = f"{clean_base_name}_{clean_idx}" if clean_idx else clean_base_name
+        filename = f"{filename_base}.jpg"
+
+        sub_folder = cls._get_actor_folder_name_western(actor_name)
+
+        relative_path = f"{actor_sub_path.strip('/')}/{sub_folder}/{filename}"
+        full_path = os.path.join(root_path, relative_path)
+
+        if rewrite or not os.path.exists(full_path):
+            try:
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                res = cls.get_response(real_thumb_url, timeout=15)
+                if res and res.status_code == 200:
+                    if not cls._save_image_data(BytesIO(res.content), full_path):
+                        with open(full_path, 'wb') as f:
+                            f.write(res.content)
+                else:
+                    return
+            except Exception as e:
+                logger.debug(f"[Western] 배우 이미지 다운로드 실패 ({actor_name}): {e}")
+                return
+
+        new_url = f"{server_url.rstrip('/')}/{relative_path}"
+        pure_sub_rel = f"{sub_folder}/{filename}"
+
+        if isinstance(entity_actor, dict):
+            entity_actor['thumb'] = new_url
+            if not entity_actor.get('extra_info'):
+                entity_actor['extra_info'] = {}
+            entity_actor['extra_info']['local_img_path'] = pure_sub_rel
+            entity_actor['extra_info']['local_img_url'] = new_url
+            entity_actor['extra_info']['site_img_url'] = real_thumb_url
+            entity_actor['local_img_path'] = pure_sub_rel
+            entity_actor['site_img_url'] = real_thumb_url
+        else:
+            entity_actor.thumb = new_url
+            if not hasattr(entity_actor, 'extra_info') or not entity_actor.extra_info:
+                entity_actor.extra_info = {}
+            entity_actor.extra_info['local_img_path'] = pure_sub_rel
+            entity_actor.extra_info['local_img_url'] = new_url
+            entity_actor.extra_info['site_img_url'] = real_thumb_url
+            setattr(entity_actor, 'local_img_path', pure_sub_rel)
+            setattr(entity_actor, 'site_img_url', real_thumb_url)
 
 
     @staticmethod
@@ -3648,11 +3959,12 @@ class SiteAvBase:
     # region Video Fingerprint Calculation (OSHash / pHash)
     # -------------------------------------------------------------------------
 
+    _fingerprint_cache = {}
+
     @classmethod
     def calculate_oshash(cls, filepath: str) -> str:
         """
-        Stash/OpenSubtitles 공식 OSHash 알고리즘
-        파일 크기 + 앞 64KB(8192개 64비트 정수) + 뒤 64KB(8192개 64비트 정수) Little-Endian 합산
+        Stash/OpenSubtitles 공식 OSHash 알고리즘 (인메모리 캐시 적용)
         """
         if not filepath:
             logger.debug("[Fingerprint:OSHASH] 파일 경로가 전달되지 않았습니다.")
@@ -3663,9 +3975,15 @@ class SiteAvBase:
             return None
 
         try:
+            file_stat = os.stat(filepath)
+            cache_key = f"oshash_{filepath}_{file_stat.st_mtime}_{file_stat.st_size}"
+            if cache_key in cls._fingerprint_cache:
+                logger.debug(f"[Fingerprint:OSHASH] 캐시 히트: {cls._fingerprint_cache[cache_key]} ({os.path.basename(filepath)})")
+                return cls._fingerprint_cache[cache_key]
+
             import struct
             t_start = time.time()
-            size = os.path.getsize(filepath)
+            size = file_stat.st_size
             
             if size < 65536 * 2:
                 logger.debug(f"[Fingerprint:OSHASH] 파일 크기가 너무 작아(128KB 미만) 계산을 건너뜁니다: {size} bytes ({os.path.basename(filepath)})")
@@ -3678,13 +3996,11 @@ class SiteAvBase:
             hash_val = size
 
             with open(filepath, 'rb') as f:
-                # 앞 64KB 고속 통언패킹
                 head_bytes = f.read(chunk_size)
                 if len(head_bytes) == chunk_size:
                     head_ints = struct.unpack(f'<{num_uint64}Q', head_bytes)
                     hash_val = (hash_val + sum(head_ints)) & 0xFFFFFFFFFFFFFFFF
 
-                # 뒤 64KB 고속 통언패킹
                 f.seek(max(0, size - chunk_size), 0)
                 tail_bytes = f.read(chunk_size)
                 if len(tail_bytes) == chunk_size:
@@ -3692,6 +4008,7 @@ class SiteAvBase:
                     hash_val = (hash_val + sum(tail_ints)) & 0xFFFFFFFFFFFFFFFF
 
             oshash_str = f"{hash_val:016x}"
+            cls._fingerprint_cache[cache_key] = oshash_str
             elapsed = time.time() - t_start
             logger.debug(f"[Fingerprint:OSHASH] 계산 완료: {oshash_str} (소요시간: {elapsed:.4f}초)")
             return oshash_str
@@ -4177,4 +4494,3 @@ class SiteAvBase:
     # ---------------------------------------------------------
     # endregion Selenium Common Methods (Legacy)
     # ---------------------------------------------------------
-

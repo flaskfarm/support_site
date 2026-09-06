@@ -238,10 +238,10 @@ class SiteUtilAv:
             logger.warning(f"save_image_to_server_path: 이미지 열기/로드 실패: {log_source_info}")
             return None
 
-        try:
-            # 3. 실제 처리 대상 이미지 준비 (초기에는 원본과 동일)
-            im_to_process = im_opened_original
+        # 3. 실제 처리 대상 이미지 준비 (초기에는 원본과 동일)
+        im_to_process = im_opened_original
 
+        try:
             # 4. 레터박스 제거 (image_type='p' 또는 'ps' 이고 crop_mode가 있을 때, 4:3 비율이면 시도)
             # 원본 코드에서는 image_type == 'p' 조건만 있었으나, 'ps'도 포스터이므로 포함 고려. 여기서는 원본 유지.
             if image_type == 'p' and crop_mode:

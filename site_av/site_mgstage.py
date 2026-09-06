@@ -1,7 +1,7 @@
 import re
 from lxml import html
 
-from ..constants import MGS_CODE_LEN, MGS_LABEL_MAP, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO
+from ..constants import AV_STUDIO, MGS_CODE_LEN, MGS_LABEL_MAP, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from ..setup import P, logger
@@ -58,7 +58,7 @@ class SiteMgstage(SiteAvBase):
                         if mapped_keyword not in search_keywords_to_try:
                             search_keywords_to_try.append(mapped_keyword)
             
-            logger.debug(f"MGStage Search: Keywords to try: {search_keywords_to_try}")
+            logger.debug(f"MGS Search: Keywords to try: {search_keywords_to_try}")
 
             final_data = []
             for search_keyword in search_keywords_to_try:
@@ -66,7 +66,7 @@ class SiteMgstage(SiteAvBase):
                 data = cls.__search(search_keyword, normalized_ui_code, do_trans, manual)
                 if data:
                     # 결과를 찾았으면, 더 이상 검색하지 않고 루프 종료
-                    logger.debug(f"MGStage Search: Found results with keyword '{search_keyword}'.")
+                    logger.debug(f"MGS Search: Found results with keyword '{search_keyword}'.")
                     final_data = data
                     break
         except Exception as exception:
@@ -82,11 +82,11 @@ class SiteMgstage(SiteAvBase):
     def __search(cls, keyword_for_url, original_ui_code, do_trans, manual):
 
         url = f"{SITE_BASE_URL}/search/cSearch.php?search_word={keyword_for_url}&x=0&y=0&type=top"
-        logger.debug(f"MGStage Search URL: {url}")
+        logger.debug(f"MGS Search URL: {url}")
 
         tree = cls.get_tree(url)
         if tree is None:
-            logger.warning(f"MGStage Search ({cls.module_char}): Failed to get tree for URL: {url}")
+            logger.warning(f"MGS Search ({cls.module_char}): Failed to get tree for URL: {url}")
             return []
 
         lists = tree.xpath('//div[@class="search_list"]/div/ul/li')
@@ -178,18 +178,26 @@ class SiteMgstage(SiteAvBase):
     # region INFO
     
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         ret = {}
-        entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans, is_validating=is_validating, is_rescued=is_rescued).as_dict()
-            if entity_result_val_final: 
+            entity_obj = cls.__info(code, keyword=keyword, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
-            else: 
+            else:
                 ret["ret"] = "error"
                 ret["data"] = f"Failed to get MGStage info for {code}"
-        except Exception as e: 
+        except Exception as e:
             ret["ret"] = "exception"
             ret["data"] = str(e)
             logger.exception(f"MGStage info error: {e}")
@@ -197,30 +205,39 @@ class SiteMgstage(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def __info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         cached_data = cls._ps_url_cache.get(code, {}) 
         ps_url_from_search_cache = cached_data.get('ps')
 
         url = SITE_BASE_URL + f"/product/product_detail/{code[2:]}/"
         tree = cls.get_tree(url)
         if tree is None:
-            logger.error(f"MGStage info error: Failed to get page tree for {code}. URL: {url}")
+            logger.error(f"MGS info error: Failed to get page tree for {code}. URL: {url}")
             return None
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"; entity.tag = []
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         entity.original = {}
+        entity.extra_info['info_url'] = url
 
         mgs_special_poster_filepath = None
 
         try:
-            # === 2. 메타데이터 파싱 ===
+            # 메타데이터 파싱
             h1_tags = tree.xpath('//h1[@class="tag"]/text()')
             if h1_tags:
                 h1_text_raw = h1_tags[0]
                 for ptn in PTN_TEXT_SUB: h1_text_raw = ptn.sub("", h1_text_raw)
                 original_tagline = cls.A_P(h1_text_raw.strip())
+                entity.original['title'] = entity.originaltitle
                 entity.original['tagline'] = original_tagline
                 if skip_trans:
                     entity.tagline = original_tagline
@@ -250,7 +267,7 @@ class SiteMgstage(SiteAvBase):
                         else:
                             entity.plot = cls.trans_by_llm(cleaned_plot)
             except Exception as e_plot:
-                logger.error(f"MGStage: Failed to parse plot for {code}: {e_plot}")
+                logger.error(f"MGS: Failed to parse plot for {code}: {e_plot}")
 
             info_table_xpath = '//div[@class="detail_data"]//tr'
             tr_nodes = tree.xpath(info_table_xpath)
@@ -301,7 +318,7 @@ class SiteMgstage(SiteAvBase):
                     studio_name = (value_node_instance.xpath("./a/text()")[0] if value_node_instance.xpath("./a/text()") else value_text_content).strip()
                     if studio_name: 
                         entity.original['studio'] = studio_name
-                        entity.studio = cls.trans(studio_name)
+                        entity.studio = AV_STUDIO.get(studio_name, studio_name)
                 elif "ジャンル" in key_text:
                     if entity.genre is None: entity.genre = []
                     if 'genre' not in entity.original: 
@@ -332,7 +349,7 @@ class SiteMgstage(SiteAvBase):
                     entity.premiered = parsed_date.strftime('%Y-%m-%d')
                     entity.year = parsed_date.year
                 except Exception as e:
-                    logger.warning(f"MGStage: Failed to parse valid date string '{premiered_str}': {e}")
+                    logger.warning(f"MGS: Failed to parse valid date string '{premiered_str}': {e}")
 
             rating_nodes = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
             if rating_nodes:
@@ -345,19 +362,19 @@ class SiteMgstage(SiteAvBase):
                     except Exception: pass
 
             if not entity.ui_code:
-                logger.error(f"MGStage ({cls.module_char}): CRITICAL - Failed to parse identifier for {code}.")
+                logger.error(f"MGS ({cls.module_char}): CRITICAL - Failed to parse identifier for {code}.")
                 return None
         except Exception as e_meta:
-            logger.exception(f"MGStage ({cls.module_char}): Meta parsing error for {code}: {e_meta}")
+            logger.exception(f"MGS ({cls.module_char}): Meta parsing error for {code}: {e_meta}")
             return None
 
-        # 3. 이미지 처리: 모든 이미지 관련 로직을 공통 메서드에 위임
+        # 이미지 처리 위임
         try:
             raw_image_urls = cls.__img_urls(tree)
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, is_validating=is_validating, is_rescued=is_rescued)
+            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, extra_opts=opts)
 
         except Exception as e:
-            logger.exception(f"MGStage: Error during image processing delegation for {code}: {e}")
+            logger.exception(f"MGS: Error during image processing delegation for {code}: {e}")
 
         # 4. 예고편 및 Shiroutoname 보정 처리
         if cls.config['use_extras']:
@@ -370,19 +387,28 @@ class SiteMgstage(SiteAvBase):
                     api_headers_trailer['X-Requested-With'] = 'XMLHttpRequest'; api_headers_trailer['Accept'] = 'application/json, text/javascript, */*; q=0.01'
                     res_json_trailer = cls.get_response(api_url_trailer, headers=api_headers_trailer).json()
                     if res_json_trailer and res_json_trailer.get("url"):
-                        trailer_base = res_json_trailer["url"].split(".ism")[0]; 
-                        trailer_final_url = trailer_base + ".mp4"
-                        trailer_final_url = cls.make_video_url(trailer_final_url)
+                        trailer_base = res_json_trailer["url"].split(".ism")[0]
+                        raw_trailer_url = trailer_base + ".mp4"
+
+                        if not hasattr(entity, 'original') or entity.original is None:
+                            entity.original = {}
+                        entity.original['extras'] = [{
+                            'content_url': raw_trailer_url,
+                            'content_type': 'trailer'
+                        }]
+
+                        trailer_final_url = cls.make_video_url(raw_trailer_url)
                         trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
                         entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
+
             except Exception as e_trailer_proc_dvd:
-                logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
+                logger.exception(f"MGS ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
 
         if entity.originaltitle:
             try:
                 entity = cls.shiroutoname_info(entity)
             except Exception as e_shirouto:
-                logger.exception(f"MGStage (Ama): Shiroutoname error: {e_shirouto}")
+                logger.exception(f"MGS (Ama): Shiroutoname error: {e_shirouto}")
 
         try:
             if getattr(entity, 'genre', None) is None:
@@ -413,7 +439,7 @@ class SiteMgstage(SiteAvBase):
         else:
             entity.extra_info['ai_translator'] = "Default (FF)"
 
-        logger.debug(f"MGStage ({cls.module_char}): __info finished for {code}. UI Code: {entity.ui_code}")
+        logger.debug(f"MGS ({cls.module_char}): __info finished for {code}. UI Code: {entity.ui_code}")
         return entity
 
 
@@ -446,7 +472,7 @@ class SiteMgstage(SiteAvBase):
             "arts": all_sample_images
         }
 
-        logger.debug(f"MGStage __img_urls collected: PL='{ret['pl']}', SpecificCandidates={len(ret['specific_poster_candidates'])}, Total Sample Arts={len(ret['arts'])}")
+        logger.debug(f"MGS __img_urls collected: PL='{ret['pl']}', SpecificCandidates={len(ret['specific_poster_candidates'])}, Total Sample Arts={len(ret['arts'])}")
         return ret
 
 

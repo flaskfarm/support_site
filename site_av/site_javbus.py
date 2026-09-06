@@ -4,7 +4,7 @@ from ..entity_av import EntityAVSearch
 from ..entity_base import EntityMovie, EntityActor, EntityThumb
 from ..setup import P, logger
 from .site_av_base import SiteAvBase
-from ..constants import AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
+from ..constants import AV_STUDIO, AV_GENRE_IGNORE_JA, AV_GENRE, AV_GENRE_IGNORE_KO
 
 
 SITE_BASE_URL = "https://www.javbus.com"
@@ -115,12 +115,20 @@ class SiteJavbus(SiteAvBase):
     # region INFO
 
     @classmethod
-    def info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
         ret = {}
-        entity_result_val_final = None
         try:
-            entity_result_val_final = cls.__info(code, keyword=keyword, fp_meta_mode=fp_meta_mode, skip_trans=skip_trans, is_validating=is_validating, is_rescued=is_rescued).as_dict()
-            if entity_result_val_final:
+            entity_obj = cls.__info(code, keyword=keyword, extra_opts=opts)
+            if entity_obj:
+                entity_result_val_final = entity_obj.as_dict()
+                if hasattr(entity_obj, 'original') and entity_obj.original:
+                    entity_result_val_final['original'] = entity_obj.original
+                if hasattr(entity_obj, 'extra_info') and entity_obj.extra_info:
+                    entity_result_val_final['extra_info'] = entity_obj.extra_info
+
                 ret["ret"] = "success"
                 ret["data"] = entity_result_val_final
             else:
@@ -134,11 +142,18 @@ class SiteJavbus(SiteAvBase):
 
 
     @classmethod
-    def __info(cls, code, keyword=None, fp_meta_mode=False, skip_trans=False, is_validating=False, is_rescued=False):
+    def __info(cls, code, keyword=None, extra_opts=None, **kwargs):
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+
+        skip_trans = opts.get('skip_trans', False)
+        is_validating = opts.get('is_validating', False)
+        is_rescued = opts.get('is_rescued', False)
+
         try:
-            # === 1. 페이지 로딩 및 기본 Entity 생성 ===
             original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
             url = f"{SITE_BASE_URL}/{original_code_for_url}"
+
             tree = cls.get_tree(url)
 
             if tree is None or not tree.xpath("//div[@class='container']//div[@class='row movie']"):
@@ -149,8 +164,9 @@ class SiteJavbus(SiteAvBase):
             entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
             entity.thumb = []; entity.fanart = []; entity.tag = []; entity.actor = []
             entity.original = {}
+            entity.extra_info['info_url'] = url
 
-            # === 2. 메타데이터 파싱 ===
+            # 메타데이터 파싱
             info_node = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")[0]
 
             # 페이지 내 품번을 최우선으로 사용, 키워드는 폴백으로 사용
@@ -184,14 +200,13 @@ class SiteJavbus(SiteAvBase):
                 else:
                     original_tagline = cleaned_h3_text
 
+            entity.original['title'] = entity.originaltitle
             entity.original['tagline'] = original_tagline
+
             if skip_trans:
                 entity.tagline = original_tagline
             else:
                 entity.tagline = cls.trans_by_llm(original_tagline)
-
-            if not entity.plot and entity.tagline and entity.tagline != entity.ui_code:
-                entity.plot = entity.tagline
 
             all_p_tags_in_info = info_node.xpath("./p")
             genre_header_p_node = actor_header_p_node = None
@@ -239,10 +254,10 @@ class SiteJavbus(SiteAvBase):
                 elif key == "導演": entity.director = value
                 elif key == "製作商":
                     entity.original['studio'] = value
-                    entity.studio = cls.trans(value)
+                    entity.studio = AV_STUDIO.get(value, value)
                 elif key == "發行商" and not entity.studio:
                     entity.original['studio'] = value
-                    entity.studio = cls.trans(value)
+                    entity.studio = AV_STUDIO.get(value, value)
                 elif key == "系列":
                     entity.original['series'] = value
                     trans_series = cls.trans(value)
@@ -267,7 +282,7 @@ class SiteJavbus(SiteAvBase):
                     actor_name = actor_span.xpath("string(.)").strip()
                     if actor_name and actor_name != "暫無出演者資訊":
                         if entity.actor is None: entity.actor = [] # 방어 코드
-                        if not any(act.name == actor_name for act in entity.actor):
+                        if not any((act.name_ko or act.name_org) == actor_name for act in entity.actor):
                             entity.actor.append(EntityActor(actor_name))
 
             if entity.ui_code:
@@ -275,20 +290,17 @@ class SiteJavbus(SiteAvBase):
                 if label not in entity.tag:
                     entity.tag.append(label)
 
-            # === 3. 이미지 URL 수집 및 처리 위임 ===
+            # 이미지 처리 위임
             ps_url_from_search_cache = cls._ps_url_cache.get(code, {}).get('ps')
 
             try:
-                # 3-1. 페이지에서 모든 원본 이미지 URL 수집
                 raw_image_urls = cls.__img_urls(tree)
-
-                # 3-2. fp_meta_mode에 따른 분기 처리
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, is_validating=is_validating, is_rescued=is_rescued)
+                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, extra_opts=opts)
 
             except Exception as e:
                 logger.exception(f"JavBus: Error during image processing for {code}: {e}")
 
-            # === 4. Shiroutoname 보정 처리 ===
+            # Shiroutoname 보정 처리
             if entity.originaltitle:
                 try:
                     entity = cls.shiroutoname_info(entity)

@@ -75,7 +75,7 @@ class SiteWatcha(object):
             for item in data['credits']['result']:
                 try:
                     actor = EntityActor('', site=cls.site_name)
-                    actor.name = item['person']['name']
+                    actor.name_org = item['person']['name']
                     if item['person']['photo']:
                         actor.thumb = item['person']['photo']['medium']
                     credit_types = item.get('type', '').split('::')

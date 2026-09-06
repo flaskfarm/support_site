@@ -146,7 +146,7 @@ class SiteTvdbTv(SiteTvdb):
             except: pass
             try:
                 for item in series['_actors']:
-                    entity.actor.append(EntityActor2(name=item['name'], role=item['role'], image=item['image']))
+                    entity.actor.append(EntityActor2(name_ko=item['name'], role=item['role'], image=item['image']))
             except:
                 logger.debug('actor...not load')
             if 'fanart' in series['_banners']:

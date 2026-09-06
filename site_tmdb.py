@@ -368,7 +368,7 @@ class SiteTmdbTv(SiteTmdb):
                     kor_name = None
                 flag_find = False
                 for actor in show['actor']:
-                    if actor['name'] == kor_name:
+                    if (actor.get('name_ko') or actor.get('name_org')) == kor_name:
                         flag_find = True
                         actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                         break
@@ -749,14 +749,14 @@ class SiteTmdbMovie(SiteTmdb):
                     #except: pass
 
                     actor = EntityActor('', site=cls.site_name)
-                    actor.name = name
+                    actor.name_org = name
                     actor.tmdb_id = tmdb_item['id']
-                    actor.originalname = tmdb_item.get('original_name') or ''
+                    actor.name_org = tmdb_item.get('original_name') or actor.name_org
                     actor.role = tmdb_item['character']
                     try:
                         try:
                             if SiteUtil.is_include_hangul(name) == False:
-                                actor.name = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
+                                actor.name_ko = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
                             if SiteUtil.is_include_hangul(tmdb_item['character']) == False:
                                 actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
                         except Exception:
@@ -875,7 +875,7 @@ class SiteTmdbMovie(SiteTmdb):
 
                 #logger.debug(tmdb_item)
                 for actor in show['actor']:
-                    if actor['name'] == kor_name:
+                    if (actor.get('name_ko') or actor.get('name_org')) == kor_name:
                         flag_find = True
                         actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                         break
@@ -1124,16 +1124,8 @@ class SiteTmdbFtv(SiteTmdb):
                 actor.tmdb_id = tmdb_item.get('id')
                 actor.order = tmdb_item.get('order', 0)
                 actor.tmdb_credit_id = tmdb_item.get('credit_id') or ''
-                actor.name = tmdb_item.get('name') or ''
-                actor.name_original = tmdb_item.get('original_name') or actor.name
-                #if SiteUtil.is_include_hangul(actor.name_original):
-                #    actor.name = actor.name_ko = actor.name_original
-                #else:
-                #    people_info = tmdbsimple.People(actor.tmdb_id).info()
-                #    for tmp in people_info['also_known_as']:
-                #        if SiteUtil.is_include_hangul(tmp):
-                #            actor.name = actor.name_ko = tmp
-                #            break
+                actor.name_ko = tmdb_item.get('name') or ''
+                actor.name_org = tmdb_item.get('original_name') or actor.name_ko
                 actor.role = tmdb_item.get('character') or ''
                 if profile_path := tmdb_item.get('profile_path'):
                     actor.image = cls.get_image_url(profile_path, 'profile')
