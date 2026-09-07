@@ -587,7 +587,7 @@ class SiteAvBase:
     # 리턴타입: redirect 
     @classmethod
     def jav_image(cls, url=None, mode=None, site=None, path=None):
-        # 1. 로컬 파일 요청 처리
+        # 로컬 파일 요청 처리
         if site == 'system' and path:
             try:
                 allowed_path = os.path.join(path_data, "tmp")
@@ -599,8 +599,30 @@ class SiteAvBase:
             except Exception:
                 abort(500)
 
-        # 2. 원격 URL에 대한 기본 처리
-        # mode가 'crop_...' 이거나 None인 경우만 처리됨
+        # 내 이미지 서버 URL인 경우 HTTP 요청 대신 로컬 디스크에서 직접 검증 및 서빙
+        local_root = (cls.config.get('image_server_local_path') if cls.config else '') or ''
+        server_url = (cls.config.get('image_server_url') if cls.config else '') or ''
+        server_url_clean = server_url.rstrip('/')
+
+        if url and local_root and server_url_clean and url.startswith(server_url_clean):
+            rel_path = url[len(server_url_clean):].lstrip('/\\')
+            disk_path = os.path.join(local_root, rel_path.replace('/', os.path.sep))
+
+            # 비동기 파일 저장 타이밍 이슈 방어: 파일이 생성되고 크기가 유효해질 때까지 대기 확인 (최대 1.6초)
+            for _ in range(8):
+                if os.path.exists(disk_path) and os.path.getsize(disk_path) > 0:
+                    break
+                time.sleep(0.2)
+
+            if os.path.exists(disk_path) and os.path.getsize(disk_path) > 0:
+                if not mode:
+                    return send_file(disk_path, mimetype='image/jpeg')
+                # 크롭 모드가 지정되어 있으면 로컬 파일 이미지를 직접 열어 처리
+                im = cls.imopen(disk_path)
+                if im is not None:
+                    return cls.default_jav_image(disk_path, mode=mode)
+
+        # 원격 외부 URL에 대한 기본 처리
         return cls.default_jav_image(url, mode)
 
 
@@ -2019,6 +2041,13 @@ class SiteAvBase:
                             save_success = True
                         else:
                             logger.warning(f"Failed to download landscape for {code_lower} from {landscape_source}")
+
+                    # 디스크 쓰기 완료 및 파일 유효성 즉시 검증 대기
+                    if save_success:
+                        for _ in range(5):
+                            if os.path.exists(system_landscape_path) and os.path.getsize(system_landscape_path) > 0:
+                                break
+                            time.sleep(0.1)
 
                     if save_success or os.path.exists(system_landscape_path):
                         saved_pl_url = f"{server_url_prefix}/{code_lower}_pl.jpg"
