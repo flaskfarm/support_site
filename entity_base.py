@@ -77,14 +77,33 @@ class EntityActor(object):
         self.actor_idx = actor_idx or ''
         self.gender = gender or ''
 
+    @property
+    def name(self):
+        return self.name_ko or self.name_org or ''
+
+    @name.setter
+    def name(self, val):
+        self.name_org = val
+
+    @property
+    def originalname(self):
+        return self.name_org or self.name_ko or ''
+
+    @originalname.setter
+    def originalname(self, val):
+        self.name_org = val
+
     def as_dict(self):
+        name_val = self.name_ko or self.name_org or ''
         return {
+            'name' : name_val,
             'name_org' : self.name_org,
             'name_ko' : self.name_ko,
             'name_en' : self.name_en,
             'role' : self.role,
             'order' : self.order,
             'thumb' : self.thumb,
+            'originalname' : self.name_org or name_val,
             'site' : self.site,
             'type' : self.type,
             'tmdb_id' : self.tmdb_id,
@@ -790,8 +809,18 @@ class EntityActor2(object):
         self.image_source = ''
         self.tvdb = None
 
+    @property
+    def name(self):
+        return self.name_ko or self.name_org or ''
+
+    @name.setter
+    def name(self, val):
+        self.name_org = val
+
     def as_dict(self):
+        name_val = self.name_ko or self.name_org or ''
         return {
+            'name' : name_val,
             'site' : self.site,
             'name_org' : self.name_org,
             'name_en' : self.name_en,
