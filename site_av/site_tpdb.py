@@ -694,6 +694,11 @@ class SiteTpdb(SiteAvBase):
                 except Exception as e_crop:
                     logger.error(f"[{cls.site_name}] 스마트 크롭 시도 중 오류: {e_crop}")
 
+            # 세로 포스터가 없고 크롭이 실패/미적용된 경우 가로 커버를 포스터로 폴백 지정
+            if not poster_url and landscape_cover_url:
+                poster_url = landscape_cover_url
+                logger.debug(f"[{cls.site_name}] 세로 포스터 부재/크롭 실패 -> 가로 커버를 포스터로 폴백 지정")
+
             raw_image_urls['poster'] = poster_url
             raw_image_urls['pl'] = landscape_cover_url
 
