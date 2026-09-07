@@ -757,6 +757,11 @@ class SiteFc2com(SiteAvBase):
                 except Exception as e:
                     logger.error(f"[{cls.site_name}] Smart Crop Error: {e}")
 
+            # 크롭 실패 또는 미적용 시 가로 커버(PL)를 포스터로 폴백 지정
+            if not raw_image_urls.get('poster') and raw_image_urls.get('pl'):
+                raw_image_urls['poster'] = raw_image_urls['pl']
+                logger.debug(f"[{cls.site_name}] 포스터 미생성 -> PL을 포스터로 폴백 지정")
+
             entity.original['thumb'] = {
                 'poster': '',
                 'landscape': raw_image_urls.get('pl') or ''
