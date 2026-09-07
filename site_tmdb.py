@@ -749,18 +749,19 @@ class SiteTmdbMovie(SiteTmdb):
                     #except: pass
 
                     actor = EntityActor('', site=cls.site_name)
-                    actor.name_org = name
                     actor.tmdb_id = tmdb_item['id']
-                    actor.name_org = tmdb_item.get('original_name') or actor.name_org
+                    actor.name_org = tmdb_item.get('original_name') or name
                     actor.role = tmdb_item['character']
-                    try:
+                    if SiteUtil.is_include_hangul(name):
+                        actor.name_ko = name
+                    else:
                         try:
-                            if SiteUtil.is_include_hangul(name) == False:
-                                actor.name_ko = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else name
-                            if SiteUtil.is_include_hangul(tmdb_item['character']) == False:
-                                actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
+                            actor.name_ko = SiteUtil.trans(name, source='en', target='ko').replace(' ', '') if trans else ''
                         except Exception:
-                            pass
+                            actor.name_ko = ''
+                    try:
+                        if SiteUtil.is_include_hangul(tmdb_item['character']) == False:
+                            actor.role = SiteUtil.trans(tmdb_item['character'], source='en', target='ko').replace(' ', '') if trans else tmdb_item['character']
                     except Exception:
                         pass
                     if tmdb_item['profile_path'] is not None:
