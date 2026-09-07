@@ -83,7 +83,13 @@ class EntityActor(object):
 
     @name.setter
     def name(self, val):
-        self.name_org = val
+        if val:
+            if not self.name_org:
+                self.name_org = val
+            if not self.name_ko:
+                self.name_ko = val
+        else:
+            self.name_org = ''
 
     @property
     def originalname(self):
@@ -815,7 +821,21 @@ class EntityActor2(object):
 
     @name.setter
     def name(self, val):
-        self.name_org = val
+        if val:
+            if not self.name_org:
+                self.name_org = val
+            if not self.name_ko:
+                self.name_ko = val
+        else:
+            self.name_org = ''
+
+    @property
+    def thumb(self):
+        return self.image or ''
+
+    @thumb.setter
+    def thumb(self, val):
+        self.image = val or ''
 
     def as_dict(self):
         name_val = self.name_ko or self.name_org or ''
@@ -827,6 +847,8 @@ class EntityActor2(object):
             'name_ko' : self.name_ko,
             'role' : self.role,
             'image' : self.image,
+            'thumb' : self.image or '',
+            'originalname' : self.name_org or name_val,
             'tmdb_id' : self.tmdb_id,
             'tmdb_credit_id': self.tmdb_credit_id,
             'order' : self.order,

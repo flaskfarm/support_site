@@ -227,12 +227,15 @@ class SiteUtil(object):
         data['cast'] = []
         if 'actor' in data and data['actor'] is not None:
             for item in data['actor']:
+                if not isinstance(item, dict):
+                    continue
                 entity = {}
                 entity['type'] = 'actor'
-                entity['role'] = item['role']
-                entity['name'] = item['name']
-                entity['thumbnail'] = item['thumb']
+                entity['role'] = item.get('role', '')
+                entity['name'] = item.get('name') or item.get('name_ko') or item.get('name_org', '')
+                entity['thumbnail'] = item.get('thumb') or item.get('image', '')
                 data['cast'].append(entity)
+
         if 'art' in data and data['art'] is not None:
             for item in data['art']:
                 if item['aspect'] == 'landscape':
