@@ -7,6 +7,7 @@ import shutil
 import difflib
 import json
 import requests
+import traceback
 from io import BytesIO
 from PIL import Image
 
@@ -419,7 +420,7 @@ class SiteStashdb(SiteAvBase):
                     logger.debug(f"[{cls.site_name}] 1단계 OSHash 조회 시작: {oshash}")
                     matched_scenes = query_stash_fingerprints([{"algorithm": "OSHASH", "hash": oshash}])
                     if matched_scenes:
-                        logger.info(f"[{cls.site_name}] ★★★ StashDB OSHash 초고속 매칭 성공! (pHash 생략) ★★★")
+                        logger.info(f"[{cls.site_name}] StashDB OSHash 초고속 매칭 성공! (pHash 생략)")
                         return matched_scenes
 
             # 2단계: pHash 지연 평가 (PHASH 모드이거나, BOTH 모드에서 OSHash 매칭에 실패한 경우에만 실행)
@@ -432,7 +433,7 @@ class SiteStashdb(SiteAvBase):
                     logger.debug(f"[{cls.site_name}] 2단계 pHash 조회 시작: {phash}")
                     matched_scenes = query_stash_fingerprints([{"algorithm": "PHASH", "hash": phash}])
                     if matched_scenes:
-                        logger.info(f"[{cls.site_name}] ★★★ StashDB pHash 시각 지문 매칭 성공! ★★★")
+                        logger.info(f"[{cls.site_name}] StashDB pHash 시각 지문 매칭 성공!")
                         return matched_scenes
 
         except Exception as e_fp:
@@ -447,10 +448,46 @@ class SiteStashdb(SiteAvBase):
         scenes_list = []
         is_fp_match = False
 
-        # 0순위: 비디오 지문(Fingerprint) Fast-Path 탐색 (미디어 경로 존재 시)
+        # 0순위: 비디오 지문(Fingerprint) 탐색
         target_video = media_path or filename
         if not target_video and os.path.isabs(keyword) and os.path.exists(keyword):
             target_video = keyword
+
+        # 로컬 Meta DB 전용 B-Tree 지문 인덱스 0순위 초고속 확인
+        if target_video and os.path.exists(target_video) and not manual:
+            local_oshash = cls.calculate_oshash(target_video)
+            if local_oshash:
+                from ..setup import F
+                meta_plugin = F.PluginManager.get_plugin_instance('metadata')
+                if meta_plugin:
+                    meta_db_mod = meta_plugin.get_module('meta_db')
+                    if meta_db_mod:
+                        local_db_items = meta_db_mod.search_by_fingerprint('WESTERN', 'OSHASH', local_oshash, preferred_site=cls.site_name)
+                        if local_db_items:
+                            hit_results = []
+                            for idx, local_db_item in enumerate(local_db_items):
+                                jd = local_db_item.get('json_data', {})
+                                site_key = local_db_item.get('site') or cls.site_name
+                                hit_item = EntityAVSearch(site_key)
+                                hit_item.code = local_db_item.get('code')
+                                hit_item.ui_code = jd.get('ui_code') or local_db_item.get('originaltitle') or hit_item.code
+                                
+                                title_prefix = "📁 [DB 지문일치]" if local_db_item.get('has_item') else "🌐 [지문일치-원격수집]"
+                                hit_item.title = f"{title_prefix} {local_db_item.get('title')}"
+                                hit_item.title_ko = hit_item.title
+                                hit_item.year = int(jd.get('year') or 1900)
+                                hit_item.image_url = local_db_item.get('poster_url') or ''
+                                hit_item.desc = f"[지문 히트 #{idx+1}] {local_oshash} | 스튜디오: {jd.get('studio') or '정보없음'}"
+                                hit_item.score = max(90, 100 - idx)
+
+                                hit_dict = hit_item.as_dict()
+                                hit_dict['site_key'] = site_key
+                                hit_dict['is_db_cached'] = local_db_item.get('has_item', True)
+                                hit_dict['is_priority_label_site'] = True
+                                hit_results.append(hit_dict)
+
+                            logger.info(f"[{cls.site_name}] 로컬 DB 지문 B-Tree 색인 히트 ({len(hit_results)}건 중 최우선 채택: {hit_results[0]['code']})")
+                            return {'ret': 'success', 'data': hit_results}
 
         if target_video:
             fp_scenes = cls.search_by_fingerprint(media_path=target_video)
@@ -683,19 +720,42 @@ class SiteStashdb(SiteAvBase):
         if not hasattr(entity, 'extra_info') or entity.extra_info is None:
             entity.extra_info = {}
 
-        fps = list(item_data.get('fingerprints') or [])
+        site_fps = []
+        raw_fps = item_data.get('fingerprints') or []
+        for rf in raw_fps:
+            if isinstance(rf, dict) and rf.get('hash'):
+                site_fps.append({
+                    'algorithm': str(rf.get('algorithm') or 'OSHASH').upper(),
+                    'hash': str(rf.get('hash')).lower(),
+                    'source': 'site'
+                })
+
+        user_fps = []
         if media_path and os.path.exists(media_path):
+            # info 단계에서는 이미 계산되어 캐싱된 지문만 재활용하고 불필요한 pHash 신규 계산(FFmpeg 캡처) 방지
             local_fps = cls.get_video_fingerprints(
                 media_path,
-                fp_type=cls.config.get("fingerprint_type") or "BOTH",
-                ffmpeg_path=cls.config.get("ffmpeg_path") or "ffmpeg"
+                fp_type=cls.config.get("fingerprint_type") or "OSHASH",
+                ffmpeg_path=cls.config.get("ffmpeg_path") or "ffmpeg",
+                force_phash=False
             )
             for l_fp in local_fps:
-                if not any(f.get('hash', '').lower() == l_fp.get('hash', '').lower() for f in fps):
-                    fps.append(l_fp)
+                h_val = l_fp.get('hash', '').lower()
+                algo_val = l_fp.get('algorithm', 'OSHASH').upper()
+                user_fps.append({
+                    'algorithm': algo_val,
+                    'hash': h_val,
+                    'source': 'user'
+                })
 
-        if fps:
-            entity.extra_info['fingerprints'] = fps
+        entity.original['fingerprints'] = site_fps
+        all_fps = list(site_fps)
+        for uf in user_fps:
+            if not any(f.get('hash') == uf['hash'] and f.get('algorithm') == uf['algorithm'] for f in all_fps):
+                all_fps.append(uf)
+
+        if all_fps:
+            entity.extra_info['fingerprints'] = all_fps
 
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
         raw_title = str(item_data.get('title') or entity.ui_code).strip()

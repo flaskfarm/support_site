@@ -325,6 +325,42 @@ class SiteTpdb(SiteAvBase):
         if not target_video and os.path.isabs(keyword) and os.path.exists(keyword):
             target_video = keyword
 
+        # 로컬 Meta DB 전용 B-Tree 지문 인덱스 0순위 확인
+        if target_video and os.path.exists(target_video) and not manual:
+            local_oshash = cls.calculate_oshash(target_video)
+            if local_oshash:
+                from ..setup import F
+                meta_plugin = F.PluginManager.get_plugin_instance('metadata')
+                if meta_plugin:
+                    meta_db_mod = meta_plugin.get_module('meta_db')
+                    if meta_db_mod:
+                        local_db_items = meta_db_mod.search_by_fingerprint('WESTERN', 'OSHASH', local_oshash, preferred_site=cls.site_name)
+                        if local_db_items:
+                            hit_results = []
+                            for idx, local_db_item in enumerate(local_db_items):
+                                jd = local_db_item.get('json_data', {})
+                                site_key = local_db_item.get('site') or cls.site_name
+                                hit_item = EntityAVSearch(site_key)
+                                hit_item.code = local_db_item.get('code')
+                                hit_item.ui_code = jd.get('ui_code') or local_db_item.get('originaltitle') or hit_item.code
+                                
+                                title_prefix = "📁 [DB 지문일치]" if local_db_item.get('has_item') else "🌐 [지문일치-원격수집]"
+                                hit_item.title = f"{title_prefix} {local_db_item.get('title')}"
+                                hit_item.title_ko = hit_item.title
+                                hit_item.year = int(jd.get('year') or 1900)
+                                hit_item.image_url = local_db_item.get('poster_url') or ''
+                                hit_item.desc = f"[지문 히트 #{idx+1}] {local_oshash} | 스튜디오: {jd.get('studio') or '정보없음'}"
+                                hit_item.score = max(90, 100 - idx)
+
+                                hit_dict = hit_item.as_dict()
+                                hit_dict['site_key'] = site_key
+                                hit_dict['is_db_cached'] = local_db_item.get('has_item', True)
+                                hit_dict['is_priority_label_site'] = True
+                                hit_results.append(hit_dict)
+
+                            logger.info(f"[{cls.site_name}] 로컬 DB 지문 B-Tree 색인 히트 ({len(hit_results)}건 중 최우선 채택: {hit_results[0]['code']})")
+                            return {'ret': 'success', 'data': hit_results}
+
         oshash = None
         if target_video and os.path.exists(target_video):
             oshash = cls.calculate_oshash(target_video)
@@ -540,6 +576,55 @@ class SiteTpdb(SiteAvBase):
         if entity.actor is None: entity.actor = []
         entity.director = ""
         entity.original = {}
+        if not hasattr(entity, 'extra_info') or entity.extra_info is None:
+            entity.extra_info = {}
+
+        # TPDB 사이트 공식 해시 및 로컬 소장 파일 지문 수집
+        site_fps = []
+        raw_hashes = item_data.get('hashes') or item_data.get('hash') or []
+        if isinstance(raw_hashes, str):
+            raw_hashes = [{'algorithm': 'OSHASH', 'hash': raw_hashes}]
+        elif isinstance(raw_hashes, list):
+            formatted_hashes = []
+            for h_item in raw_hashes:
+                if isinstance(h_item, dict) and h_item.get('hash'):
+                    formatted_hashes.append({
+                        'algorithm': str(h_item.get('type') or h_item.get('algorithm') or 'OSHASH').upper(),
+                        'hash': str(h_item['hash']).lower(),
+                        'source': 'site'
+                    })
+                elif isinstance(h_item, str) and h_item.strip():
+                    formatted_hashes.append({'algorithm': 'OSHASH', 'hash': h_item.strip().lower(), 'source': 'site'})
+            raw_hashes = formatted_hashes
+
+        site_fps.extend([h for h in raw_hashes if isinstance(h, dict)])
+
+        user_fps = []
+        if media_path and os.path.exists(media_path):
+            # info 단계에서는 캐시된 지문을 재활용하고 무거운 pHash 신규 계산 방지
+            local_fps = cls.get_video_fingerprints(
+                media_path,
+                fp_type=cls.config.get("fingerprint_type") or "OSHASH",
+                ffmpeg_path=cls.config.get("ffmpeg_path") or "ffmpeg",
+                force_phash=False
+            )
+            for l_fp in local_fps:
+                h_val = l_fp.get('hash', '').lower()
+                algo_val = l_fp.get('algorithm', 'OSHASH').upper()
+                user_fps.append({
+                    'algorithm': algo_val,
+                    'hash': h_val,
+                    'source': 'user'
+                })
+
+        entity.original['fingerprints'] = site_fps
+        all_fps = list(site_fps)
+        for uf in user_fps:
+            if not any(f.get('hash') == uf['hash'] and f.get('algorithm') == uf['algorithm'] for f in all_fps):
+                all_fps.append(uf)
+
+        if all_fps:
+            entity.extra_info['fingerprints'] = all_fps
 
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
         raw_title = str(item_data.get('title', entity.ui_code)).strip()
