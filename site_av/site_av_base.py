@@ -4050,8 +4050,8 @@ class SiteAvBase:
     @classmethod
     def calculate_phash(cls, filepath: str, ffmpeg_path: str = "ffmpeg") -> str:
         """
-        Stash 공식 5x5 Sprite Collage 비디오 pHash 알고리즘
-        클라우드 마운트 최적화: 전체 스트림 순차 디코딩을 배제하고 25개 지점만 고속 키프레임 점프(-ss before -i)하여 메모리 합성
+        Stash 공식 5x5 Sprite Collage 비디오 pHash 알고리즘 (인메모리 캐시 적용)
+        클라우드 마운트 최적화: 25개 지점 고속 키프레임 점프 및 인메모리 캐싱
         """
         if not filepath:
             logger.debug("[Fingerprint:PHASH] 파일 경로가 전달되지 않았습니다.")
@@ -4062,6 +4062,12 @@ class SiteAvBase:
             return None
 
         try:
+            file_stat = os.stat(filepath)
+            cache_key = f"phash_{filepath}_{file_stat.st_mtime}_{file_stat.st_size}"
+            if cache_key in cls._fingerprint_cache:
+                logger.debug(f"[Fingerprint:PHASH] 캐시 히트: {cls._fingerprint_cache[cache_key]} ({os.path.basename(filepath)})")
+                return cls._fingerprint_cache[cache_key]
+
             import subprocess
             from io import BytesIO
             t_start = time.time()
@@ -4155,6 +4161,8 @@ class SiteAvBase:
                 sprite_image.close()
 
             elapsed = time.time() - t_start
+            if phash_str:
+                cls._fingerprint_cache[cache_key] = phash_str
             logger.debug(f"[Fingerprint:PHASH] 계산 완료: {phash_str} (소요시간: {elapsed:.2f}초)")
             return phash_str
 
@@ -4165,36 +4173,33 @@ class SiteAvBase:
 
 
     @classmethod
-    def get_video_fingerprints(cls, filepath: str, fp_type: str = "OSHASH", ffmpeg_path: str = "ffmpeg") -> list:
+    def get_video_fingerprints(cls, filepath: str, fp_type: str = "OSHASH", ffmpeg_path: str = "ffmpeg", force_phash: bool = False) -> list:
         """
-        지문 방식 설정에 따라 fingerprints 리스트를 구성합니다.
-        반환: [{'algorithm': 'OSHASH', 'hash': '...'}, {'algorithm': 'PHASH', 'hash': '...'}]
+        지문 방식 설정에 따라 fingerprints 리스트 구성.
+        인메모리 캐시를 최우선 조회하며, force_phash가 False일 때는 이미 OSHASH가 있으면 불필요한 pHash 신규 계산을 건너뜀.
         """
         fingerprints = []
-        if not filepath:
-            logger.debug("[Fingerprint] get_video_fingerprints: 전달된 경로가 없습니다.")
-            return fingerprints
-
-        if not os.path.exists(filepath):
-            logger.debug(f"[Fingerprint] get_video_fingerprints: 파일이 존재하지 않습니다: '{filepath}'")
+        if not filepath or not os.path.exists(filepath):
             return fingerprints
 
         fp_type_upper = (fp_type or "OSHASH").upper()
-        logger.debug(f"[Fingerprint] 지문 추출 파이프라인 시작 -> 파일: '{os.path.basename(filepath)}', 요청 방식: {fp_type_upper}")
 
-        # 1. OSHash 계산
-        if fp_type_upper in ["OSHASH", "BOTH"]:
-            oshash = cls.calculate_oshash(filepath)
-            if oshash:
-                fingerprints.append({"algorithm": "OSHASH", "hash": oshash})
+        # 1. OSHash 계산/캐시 조회 (초고속)
+        oshash = cls.calculate_oshash(filepath)
+        if oshash:
+            fingerprints.append({"algorithm": "OSHASH", "hash": oshash})
 
-        # 2. pHash 계산
-        if fp_type_upper in ["PHASH", "BOTH"]:
+        # 2. pHash 확인: 이미 캐시에 있거나, 명시적으로 pHash를 요구(force_phash=True)한 경우에만 실행
+        file_stat = os.stat(filepath)
+        phash_cache_key = f"phash_{filepath}_{file_stat.st_mtime}_{file_stat.st_size}"
+
+        if phash_cache_key in cls._fingerprint_cache:
+            fingerprints.append({"algorithm": "PHASH", "hash": cls._fingerprint_cache[phash_cache_key]})
+        elif force_phash and fp_type_upper in ["PHASH", "BOTH"]:
             phash = cls.calculate_phash(filepath, ffmpeg_path=ffmpeg_path)
             if phash:
                 fingerprints.append({"algorithm": "PHASH", "hash": phash})
 
-        logger.debug(f"[Fingerprint] 최종 추출된 지문 개수: {len(fingerprints)}개 -> {fingerprints}")
         return fingerprints
 
     @classmethod
