@@ -196,10 +196,40 @@ class SitePaco(SiteAvBase):
                 entity.plot = cls.trans_by_llm(entity.original['plot'])
 
         if json_data.get('Duration'):
-            entity.runtime = int(json_data['Duration']) // 60
+            entity.runtime = int(json_data.get('Duration')) // 60
 
-        if json_data.get('ActressesJa'):
-            entity.actor = [EntityActor(name) for name in json_data['ActressesJa']]
+        entity.actor = []
+        actresses_list_obj = json_data.get('ActressesList')
+
+        if isinstance(actresses_list_obj, dict) and actresses_list_obj:
+            for a_id, a_info in actresses_list_obj.items():
+                if not isinstance(a_info, dict): continue
+                name_ja = a_info.get('NameJa') or a_info.get('NameEn') or ''
+                if not name_ja: continue
+                act_obj = EntityActor(name_ja)
+                act_obj.name_en = a_info.get('NameEn') or ''
+                act_obj.extra_info = {
+                    'site_actor_id': str(a_id).strip(),
+                    'site_actor_url': f"{cls.site_base_url}/search/?a={a_id}"
+                }
+                entity.actor.append(act_obj)
+        else:
+            actresses = json_data.get('ActressesJa') or []
+            actor_ids = json_data.get('ActorID') or []
+            if not isinstance(actor_ids, list):
+                actor_ids = [actor_ids] if actor_ids else []
+
+            if isinstance(actresses, list):
+                for idx, name in enumerate(actresses):
+                    if not name: continue
+                    act_obj = EntityActor(str(name).strip())
+                    if idx < len(actor_ids) and actor_ids[idx]:
+                        act_id = str(actor_ids[idx]).strip()
+                        act_obj.extra_info = {
+                            'site_actor_id': act_id,
+                            'site_actor_url': f"{cls.site_base_url}/search/?a={act_id}"
+                        }
+                    entity.actor.append(act_obj)
 
         if json_data.get('UCNAME'):
             for tag in json_data['UCNAME']:

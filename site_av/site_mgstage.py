@@ -1,5 +1,6 @@
 import re
 from lxml import html
+import urllib.parse as py_urllib_parse
 
 from ..constants import AV_STUDIO, MGS_CODE_LEN, MGS_LABEL_MAP, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO
 from ..entity_av import EntityAVSearch
@@ -303,7 +304,24 @@ class SiteMgstage(SiteAvBase):
                     rt_match = re.search(r'(\d+)', value_text_content)
                     if rt_match: entity.runtime = int(rt_match.group(1))
                 elif "出演" in key_text:
-                    entity.actor = [EntityActor(act.strip().split(" ", 1)[0]) for act in value_node_instance.xpath("./a/text()") if act.strip()]
+                    actors_list = []
+                    for a_node in value_node_instance.xpath("./a"):
+                        act_name = a_node.text_content().strip().split(" ", 1)[0]
+                        if not act_name:
+                            continue
+                        act_obj = EntityActor(act_name)
+                        href_raw = a_node.attrib.get('href', '').strip()
+                        if href_raw:
+                            full_mgs_url = href_raw if href_raw.startswith('http') else f"{SITE_BASE_URL}{href_raw}"
+                            # actor[] 파라미터에서 URL 디코딩하여 '이름_숫자' 고유키 추출
+                            mgs_id_match = re.search(r'actor(?:%5B%5D|\[\])=([^&]+)', href_raw)
+                            mgs_actor_id = py_urllib_parse.unquote(mgs_id_match.group(1)) if mgs_id_match else act_name
+                            act_obj.extra_info = {
+                                'site_actor_id': mgs_actor_id,
+                                'site_actor_url': full_mgs_url
+                            }
+                        actors_list.append(act_obj)
+                    entity.actor = actors_list
                 elif "監督" in key_text: 
                     entity.director = value_text_content.strip() or None
                 elif "シリーズ" in key_text:

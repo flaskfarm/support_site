@@ -344,8 +344,26 @@ class SiteHeyzo(SiteAvBase):
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
+        entity.actor = []
+        heyzo_act_id = None
+
+        if m_html:
+            actor_container_match = re.search(r'<strong class="name">(.*?)</strong>', m_html, re.DOTALL)
+            if actor_container_match:
+                container_html = actor_container_match.group(1)
+                match_act_link = re.search(r'/listpages/actor_(\d+)_', container_html)
+                if match_act_link:
+                    heyzo_act_id = match_act_link.group(1)
+
         for actor_name in tmp.get('actor', []):
-            entity.actor.append(EntityActor(actor_name))
+            if not actor_name: continue
+            act_obj = EntityActor(actor_name)
+            if heyzo_act_id:
+                act_obj.extra_info = {
+                    'site_actor_id': heyzo_act_id,
+                    'site_actor_url': f"https://www.heyzo.com/listpages/actor_{heyzo_act_id}_1.html"
+                }
+            entity.actor.append(act_obj)
 
         entity.tag.append('HEYZO')
 

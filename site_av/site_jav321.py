@@ -265,13 +265,23 @@ class SiteJav321(SiteAvBase):
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
                         actor_a_tags = b_tag_key_node.xpath("./following-sibling::a[contains(@href, '/star/')]")
-                        temp_actor_names = set()
                         for actor_link in actor_a_tags:
                             actor_name_cleaned = cls._clean_value(actor_link.text_content().strip())
-                            if actor_name_cleaned: temp_actor_names.add(actor_name_cleaned)
-                        for name_item in temp_actor_names:
-                            if not any((ea_item.name_ko or ea_item.name_org) == name_item for ea_item in entity.actor):
-                                entity.actor.append(EntityActor(name_item))
+                            if not actor_name_cleaned:
+                                continue
+                            if not any((ea_item.name_ko or ea_item.name_org) == actor_name_cleaned for ea_item in entity.actor):
+                                act_obj = EntityActor(actor_name_cleaned)
+                                href = actor_link.attrib.get('href', '').strip()
+                                star_match = re.search(r'/star/([^/?]+)', href)
+                                if star_match:
+                                    s_id = star_match.group(1).strip()
+                                    full_321_url = href if href.startswith('http') else f"{SITE_BASE_URL}{href}"
+                                    act_obj.extra_info = {
+                                        'site_actor_id': s_id,
+                                        'site_actor_url': full_321_url
+                                    }
+                                entity.actor.append(act_obj)
+
                     elif current_key == "メーカー":
                         studio_name_raw = (b_tag_key_node.xpath("./following-sibling::a[1][contains(@href, '/company/')]/text()") or [""])[0]
                         if not studio_name_raw: studio_name_raw = (b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]") or [""])[0]

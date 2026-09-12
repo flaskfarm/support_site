@@ -63,7 +63,7 @@ class EntityArt(object):
 """
 
 class EntityActor(object):
-    def __init__(self, name_org='', site='', name_ko='', name_en='', thumb='', actor_idx='', role='', gender=''):
+    def __init__(self, name_org='', site='', name_ko='', name_en='', thumb='', actor_idx='', role='', gender='', extra_info=None):
         self.name_org = name_org or ''
         self.name_ko = name_ko or ''
         self.name_en = name_en or ''
@@ -76,6 +76,7 @@ class EntityActor(object):
         self.ppkey = ''
         self.actor_idx = actor_idx or ''
         self.gender = gender or ''
+        self.extra_info = extra_info if isinstance(extra_info, dict) else {}
 
     @property
     def name(self):
@@ -116,7 +117,9 @@ class EntityActor(object):
             'ppkey' : self.ppkey,
             'actor_idx' : self.actor_idx,
             'gender' : self.gender,
+            'extra_info' : self.extra_info,
         }
+
 
 
 class EntityExtra(object):

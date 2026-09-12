@@ -780,14 +780,21 @@ class SiteDmm(SiteAvBase):
                     amateur_actress_obj = content.get('amateurActress')
                     if amateur_actress_obj:
                         actors_list_raw.append(amateur_actress_obj)
-                else:  # videoa, vr
+                else:
                     actors_list_raw = content.get('actresses', [])
 
                 if actors_list_raw:
                     actors = []
                     for actress in actors_list_raw:
                         if isinstance(actress, dict) and actress.get('name'):
-                            actors.append(EntityActor(actress['name']))
+                            act_obj = EntityActor(actress['name'])
+                            if actress.get('id'):
+                                a_id = str(actress['id']).strip()
+                                act_obj.extra_info = {
+                                    'site_actor_id': a_id,
+                                    'site_actor_url': f"https://video.dmm.co.jp/av/list/?actress={a_id}"
+                                }
+                            actors.append(act_obj)
                     entity.actor = actors
 
                 directors_list = content.get('directors')
@@ -864,9 +871,24 @@ class SiteDmm(SiteAvBase):
                         m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd)
                         if m_rt_dvd: entity.runtime = int(m_rt_dvd.group(1))
                     elif "出演者" in key_dvd:
-                        actors_dvd = [a.strip() for a in value_node_dvd.xpath('.//a/text()') if a.strip()]
-                        if actors_dvd: entity.actor = [EntityActor(name) for name in actors_dvd]
-                        elif value_text_all_dvd != '----': entity.actor = [EntityActor(n.strip()) for n in value_text_all_dvd.split('/') if n.strip()]
+                        actors_dvd = []
+                        for a_tag in value_node_dvd.xpath('.//a'):
+                            act_name = a_tag.text_content().strip()
+                            if not act_name: continue
+                            act_obj = EntityActor(act_name)
+                            href_val = a_tag.attrib.get('href', '').strip()
+                            m_id = re.search(r'(?:article=actress/id=|actress=)(\d+)', href_val)
+                            if m_id:
+                                a_id = m_id.group(1)
+                                act_obj.extra_info = {
+                                    'site_actor_id': a_id,
+                                    'site_actor_url': f"https://video.dmm.co.jp/av/list/?actress={a_id}"
+                                }
+                            actors_dvd.append(act_obj)
+                        if actors_dvd:
+                            entity.actor = actors_dvd
+                        elif value_text_all_dvd != '----':
+                            entity.actor = [EntityActor(n.strip()) for n in value_text_all_dvd.split('/') if n.strip()]
                     elif "監督" in key_dvd:
                         directors_dvd = [d.strip() for d in value_node_dvd.xpath('.//a/text()') if d.strip()]
                         if directors_dvd: entity.director = directors_dvd[0] 

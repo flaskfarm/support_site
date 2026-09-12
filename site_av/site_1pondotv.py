@@ -328,10 +328,38 @@ class Site1PondoTv(SiteAvBase):
             entity.tagline = cls.trans_by_llm(original_tagline)
 
         # actor
-        actresses = json_data.get('ActressesJa', [])
-        if isinstance(actresses, list):
-            for actor in actresses:
-                entity.actor.append(EntityActor(actor))
+        entity.actor = []
+        actresses_list_obj = json_data.get('ActressesList')
+
+        if isinstance(actresses_list_obj, dict) and actresses_list_obj:
+            for a_id, a_info in actresses_list_obj.items():
+                if not isinstance(a_info, dict): continue
+                name_ja = a_info.get('NameJa') or a_info.get('NameEn') or ''
+                if not name_ja: continue
+                act_obj = EntityActor(name_ja)
+                act_obj.name_en = a_info.get('NameEn') or ''
+                act_obj.extra_info = {
+                    'site_actor_id': str(a_id).strip(),
+                    'site_actor_url': f"{SITE_BASE_URL}/search/?a={a_id}"
+                }
+                entity.actor.append(act_obj)
+        else:
+            actresses = json_data.get('ActressesJa') or []
+            actor_ids = json_data.get('ActorID') or []
+            if not isinstance(actor_ids, list):
+                actor_ids = [actor_ids] if actor_ids else []
+
+            if isinstance(actresses, list):
+                for idx, actor in enumerate(actresses):
+                    if not actor: continue
+                    act_obj = EntityActor(str(actor).strip())
+                    if idx < len(actor_ids) and actor_ids[idx]:
+                        act_id = str(actor_ids[idx]).strip()
+                        act_obj.extra_info = {
+                            'site_actor_id': act_id,
+                            'site_actor_url': f"{SITE_BASE_URL}/search/?a={act_id}"
+                        }
+                    entity.actor.append(act_obj)
 
         entity.tag.append('1Pondo')
 

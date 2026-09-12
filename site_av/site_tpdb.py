@@ -714,6 +714,8 @@ class SiteTpdb(SiteAvBase):
                     'debut': str(act_extras.get('career_start_year') or '').strip(),
                     'country': str(act_extras.get('birthplace_code') or act_extras.get('nationality') or '').strip(),
                     'info_url': f"https://theporndb.net/performers/{actor_id}" if actor_id else '',
+                    'site_actor_id': actor_id,
+                    'site_actor_url': f"https://theporndb.net/performers/{actor_id}" if actor_id else '',
                     'site_img_url': primary_img,
                     'site_img_urls': all_tpdb_photos,
                     'aliases': p_target.get('aliases') or []

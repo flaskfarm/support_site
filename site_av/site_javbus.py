@@ -278,12 +278,24 @@ class SiteJavbus(SiteAvBase):
                         entity.genre.append(trans_genre)
 
             if actor_header_p_node is not None:
+                if entity.actor is None: entity.actor = []
                 for actor_span in actor_header_p_node.xpath("./following-sibling::p[1]//span[@class='genre']"):
                     actor_name = actor_span.xpath("string(.)").strip()
                     if actor_name and actor_name != "暫無出演者資訊":
-                        if entity.actor is None: entity.actor = [] # 방어 코드
                         if not any((act.name_ko or act.name_org) == actor_name for act in entity.actor):
-                            entity.actor.append(EntityActor(actor_name))
+                            act_obj = EntityActor(actor_name)
+                            a_link_nodes = actor_span.xpath(".//a/@href")
+                            if a_link_nodes:
+                                href = a_link_nodes[0].strip()
+                                star_match = re.search(r'/star/([^/?]+)', href)
+                                if star_match:
+                                    s_id = star_match.group(1).strip()
+                                    full_bus_url = href if href.startswith('http') else f"{SITE_BASE_URL}{href}"
+                                    act_obj.extra_info = {
+                                        'site_actor_id': s_id,
+                                        'site_actor_url': full_bus_url
+                                    }
+                            entity.actor.append(act_obj)
 
             if entity.ui_code:
                 label = entity.ui_code.split('-')[0]
