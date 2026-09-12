@@ -845,6 +845,8 @@ class SiteStashdb(SiteAvBase):
                         'debut': str(p_dict.get('career_start_year') or '').strip(),
                         'country': str(p_dict.get('country') or '').strip(),
                         'info_url': f"https://stashdb.org/performers/{actor_id}" if actor_id else '',
+                        'site_actor_id': actor_id,
+                        'site_actor_url': f"https://stashdb.org/performers/{actor_id}" if actor_id else '',
                         'site_img_url': act_img,
                         'site_img_urls': all_site_photos,
                         'aliases': p_dict.get('aliases') or []

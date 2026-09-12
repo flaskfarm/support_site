@@ -236,9 +236,32 @@ class SiteCarib(SiteAvBase):
             else:
                 entity.tagline = cls.trans_by_llm(cleaned_tagline)
 
-        actor_nodes = tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec"]//span[@itemprop="name"]/text()')
-        for actor in actor_nodes:
-            entity.actor.append(EntityActor(str(actor).strip()))
+        entity.actor = []
+        spec_actor_nodes = tree.xpath('//div[@class="movie-info section"]//li[@class="movie-spec" and (contains(., "出演") or .//span[contains(text(), "出演")])]')
+
+        if spec_actor_nodes:
+            actor_links = spec_actor_nodes[0].xpath('.//a[contains(@href, "search_act")]')
+            if actor_links:
+                for a_node in actor_links:
+                    name_span = a_node.xpath('.//span[@itemprop="name"]/text()')
+                    act_name = str(name_span[0]).strip() if name_span else a_node.text_content().strip()
+                    if not act_name: continue
+                    act_obj = EntityActor(act_name)
+                    href_val = a_node.attrib.get('href', '').strip()
+                    if href_val:
+                        full_carib_url = f"{SITE_BASE_URL}{href_val}" if href_val.startswith('/') else href_val
+                        match_act_id = re.search(r'/search_act/(\d+)/', href_val)
+                        if match_act_id:
+                            c_act_id = match_act_id.group(1)
+                            act_obj.extra_info = {
+                                'site_actor_id': c_act_id,
+                                'site_actor_url': full_carib_url
+                            }
+                    entity.actor.append(act_obj)
+            else:
+                for text_val in spec_actor_nodes[0].xpath('.//span[@itemprop="name"]/text() | .//text()'):
+                    clean_t = str(text_val).replace("出演", "").replace(":", "").strip()
+                    if clean_t: entity.actor.append(EntityActor(clean_t))
 
         entity.tag.append('carib')
 

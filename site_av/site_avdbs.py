@@ -61,16 +61,40 @@ class SiteAvdbs(SiteAvBase):
                 return None
 
             for search_name in name_variations_to_search:
-                results = meta_db_mod.person_search(search_name, domain="JAV")
-                if results:
-                    best = results[0]
-                    logger.debug(f"AVDBS MetaPerson Match: '{search_name}' -> {best.get('name_ko') or best.get('name_org')} ({best.get('name_en', '')})")
+                clean_target = str(search_name or '').strip()
+                if not clean_target:
+                    continue
+
+                results = meta_db_mod.person_search(clean_target, domain="JAV")
+                if not results:
+                    continue
+
+                matched_item = None
+                target_lower = clean_target.lower()
+
+                for cand in results:
+                    cand_org = str(cand.get('name_org') or '').strip().lower()
+                    cand_ko = str(cand.get('name_ko') or '').strip().lower()
+                    cand_en = str(cand.get('name_en') or '').strip().lower()
+                    cand_aliases = [str(a).strip().lower() for a in (cand.get('aliases') or []) if str(a).strip()]
+
+                    # 원문명, 한국어명, 영문명, 별칭과 100% 일치하거나 DB other_names의 괄호 안 원문명과 일치할 때만 승인
+                    is_matched = (target_lower in (cand_org, cand_ko, cand_en) or target_lower in cand_aliases)
+                    if not is_matched and cand.get('other_names'):
+                        is_matched = cls._parse_and_match_other_names(cand['other_names'], clean_target)
+
+                    if is_matched:
+                        matched_item = cand
+                        break
+
+                if matched_item:
+                    logger.debug(f"AVDBS MetaPerson 100% Match: '{clean_target}' -> {matched_item.get('name_ko') or matched_item.get('name_org')} ({matched_item.get('person_idx')})")
                     return {
-                        "name_org": best.get("name_org", ""),
-                        "name_ko": best.get("name_ko", ""),
-                        "name_en": best.get("name_en", ""),
-                        "thumb": best.get("thumb", ""),
-                        "actor_idx": best.get("person_idx", ""),
+                        "name_org": matched_item.get("name_org", ""),
+                        "name_ko": matched_item.get("name_ko", ""),
+                        "name_en": matched_item.get("name_en", ""),
+                        "thumb": matched_item.get("thumb", ""),
+                        "actor_idx": matched_item.get("person_idx", ""),
                         "site": "meta_person_db"
                     }
         except Exception as e:
@@ -438,15 +462,11 @@ class SiteAvdbs(SiteAvBase):
 
     @classmethod
     def _parse_name_variations(cls, originalname):
-        """입력된 이름에서 검색할 이름 변형 목록을 생성합니다."""
-        variations = {originalname}
-        match = re.match(r'^(.*?)\s*[（\(]([^）\)]+)[）\)]\s*$', originalname)
-        if match:
-            before_paren = match.group(1).strip(); inside_paren = match.group(2).strip()
-            if before_paren: variations.add(before_paren)
-            if inside_paren: variations.add(inside_paren)
-        # logger.debug(f"원본 이름 '{originalname}'에 대한 검색 변형 생성: {list(variations)}")
-        return list(variations)
+        """이름에서 임의로 괄호를 자르지 않고, 가공되지 않은 100% 원문 이름만을 반환합니다."""
+        if not originalname:
+            return []
+        clean_name = str(originalname).strip()
+        return [clean_name] if clean_name else []
 
 
     # endregion 유틸

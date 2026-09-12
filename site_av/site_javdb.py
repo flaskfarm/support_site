@@ -359,6 +359,15 @@ class SiteJavdb(SiteAvBase):
                         actor_name = actor_node.xpath('string()').strip()
                         if actor_name and actor_name.lower() not in ['n/a', '暂无', '暫無'] and not any((act.name_ko or act.name_org) == actor_name for act in entity.actor):
                             actor_entity = EntityActor(actor_name)
+                            href = actor_node.attrib.get('href', '').strip()
+                            actor_match = re.search(r'/actors/([^/?]+)', href)
+                            if actor_match:
+                                jdb_id = actor_match.group(1).strip()
+                                full_jdb_url = href if href.startswith('http') else f"{SITE_BASE_URL}{href}"
+                                actor_entity.extra_info = {
+                                    'site_actor_id': jdb_id,
+                                    'site_actor_url': full_jdb_url
+                                }
                             entity.actor.append(actor_entity)
 
         ps_url_from_search_cache = None
