@@ -77,13 +77,13 @@ class SiteDmm(SiteAvBase):
         search_url = f"{SITE_BASE_URL}/search/=/searchstr={quote(keyword_for_url)}/limit=120/sort=rankprofile/"
         logger.debug(f"DMM Search URL: {search_url}")
 
-        search_headers = cls.get_request_headers(referer=FANZA_AV_URL)
         tree = None
         try:
-            tree = cls.get_tree(search_url, headers=search_headers, allow_redirects=True)
+            tree = cls.get_tree(search_url, headers={'Referer': FANZA_AV_URL}, allow_redirects=True)
             if tree is None: 
                 logger.warning(f"DMM Search: Search tree is None for '{original_keyword}'. URL: {search_url}")
                 return []
+
             title_tags_check = tree.xpath('//title/text()')
             if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]: 
                 logger.error(f"DMM Search: Age page received for '{original_keyword}'.")
@@ -706,10 +706,9 @@ class SiteDmm(SiteAvBase):
             logger.debug(f"DMM Info (HTML): Getting info for {code} (type: {entity.content_type})")
             detail_url = SITE_BASE_URL + f"/mono/dvd/-/detail/=/cid={cid_part}/"
             referer = SITE_BASE_URL + "/mono/dvd/"
-            headers = cls.get_request_headers(referer=referer)
             try:
                 logger.info(f"DMM INFO URL: {detail_url}")
-                tree = cls.get_tree(detail_url, headers=headers, timeout=30, verify=False)
+                tree = cls.get_tree(detail_url, headers={'Referer': referer}, timeout=30, verify=False)
                 if tree is None: 
                     logger.error(f"DMM Info (DVD): Failed to get page tree for {code}."); return None
             except Exception as e_gt_info_dmm: 
@@ -1252,8 +1251,9 @@ class SiteDmm(SiteAvBase):
             player_page_url = f"https://www.dmm.co.jp/service/digitalapi/-/html5_player/=/cid={cid_part}"
             logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing player page: {player_page_url}")
 
-            player_page_text = cls.get_text(player_page_url, headers=cls.get_request_headers(referer=detail_url_for_referer))
-            
+            headers = {'Referer': detail_url_for_referer} if detail_url_for_referer else None
+            player_page_text = cls.get_text(player_page_url, headers=headers)
+
             if player_page_text:
                 match = re.search(r'const\s+args\s*=\s*(\{.*?\});', player_page_text, re.DOTALL)
                 if match:
@@ -1288,7 +1288,8 @@ class SiteDmm(SiteAvBase):
         try:
             vr_player_page_url = f"{SITE_BASE_URL}/digital/-/vr-sample-player/=/cid={cid_part}/"
             logger.debug(f"DMM VR Trailer: Accessing player page: {vr_player_page_url}")
-            vr_player_html = cls.get_text(vr_player_page_url, headers=cls.get_request_headers(referer=detail_url_for_referer))
+            headers = {'Referer': detail_url_for_referer} if detail_url_for_referer else None
+            vr_player_html = cls.get_text(vr_player_page_url, headers=headers)
             if vr_player_html:
                 match_js_var = re.search(r'var\s+sampleUrl\s*=\s*["\']([^"\']+)["\']', vr_player_html)
                 if match_js_var:
@@ -1373,14 +1374,6 @@ class SiteDmm(SiteAvBase):
         return keyword_for_url, label_part_for_retry, num_part_for_retry
 
 
-    # 기본헤더에서 Referer를 설정하여 요청 헤더를 반환하는 메서드
-    # 복사 불필요
-    @classmethod
-    def get_request_headers(cls, referer=None):
-        cls.default_headers['Referer'] = referer
-        return cls.default_headers
-
-
     # 인증확인.
     @classmethod
     def _ensure_age_verified(cls):
@@ -1401,7 +1394,7 @@ class SiteDmm(SiteAvBase):
             confirm_response = cls.get_response( 
                 urljoin(SITE_BASE_URL, f"/age_check/=/declared=yes/?rurl={quote(FANZA_AV_URL, safe='')}"), 
                 method='GET', 
-                headers=cls.get_request_headers(referer=SITE_BASE_URL + "/"), 
+                headers={'Referer': SITE_BASE_URL + "/"}, 
                 allow_redirects=False, verify=False
             )
             if confirm_response.status_code == 302 and 'age_check_done=1' in confirm_response.headers.get('Set-Cookie', ''):

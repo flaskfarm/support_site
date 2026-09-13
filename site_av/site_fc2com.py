@@ -42,6 +42,7 @@ class SiteFc2com(SiteAvBase):
             "use_javten_web": db.get_bool(f"jav_uncensored_{cls.site_name}_use_javten_web"),
             "use_javten_proxy": db.get_bool(f"jav_uncensored_{cls.site_name}_use_javten_proxy"),
             "javten_proxy_url": db.get(f"jav_uncensored_{cls.site_name}_javten_proxy_url"),
+            "use_javten_flaresolverr": db.get_bool(f"jav_uncensored_{cls.site_name}_use_javten_flaresolverr"),
             
             "main_image_server_url": db.get("jav_censored_image_server_url"),
             "main_image_mode": db.get("jav_censored_image_mode"),
@@ -188,17 +189,25 @@ class SiteFc2com(SiteAvBase):
         headers['Cookie'] = 'wei6H=1; GDPRCHECK=true'
         
         info = {'poster': None, 'video': None}
+        max_attempts = 3
         
-        try:
-            res = cls.get_response_cffi(api_url, headers=headers)
-            if res and res.status_code == 200:
-                data = res.json()
-                if data.get('poster_image_path'):
-                    info['poster'] = cls._process_fc2_image_url(data['poster_image_path'], target_size='original')
-                if data.get('path'):
-                    info['video'] = cls._process_fc2_image_url(data['path'], target_size=None)
-        except Exception as e:
-            logger.debug(f"[{cls.site_name}] Video API fetch failed: {e}")
+        for attempt in range(max_attempts):
+            try:
+                res = cls.get_response_cffi(api_url, headers=headers)
+                if res and res.status_code == 200:
+                    data = res.json()
+                    if data.get('poster_image_path'):
+                        info['poster'] = cls._process_fc2_image_url(data['poster_image_path'], target_size='original')
+                    if data.get('path'):
+                        info['video'] = cls._process_fc2_image_url(data['path'], target_size=None)
+                    break
+                elif attempt < max_attempts - 1:
+                    time.sleep(1.5)
+            except Exception as e:
+                if attempt < max_attempts - 1:
+                    time.sleep(1.5)
+                else:
+                    logger.debug(f"[{cls.site_name}] Video API fetch failed after {max_attempts} attempts: {e}")
             
         return info
 
@@ -221,37 +230,58 @@ class SiteFc2com(SiteAvBase):
         search_url = f"https://javten.com/search?kw={code_part}"
         proxies = cls._get_javten_proxies()
 
+        javten_proxy_url = cls.config.get('javten_proxy_url') if cls.config.get('use_javten_proxy') else (cls.config.get('proxy_url') if cls.config.get('use_proxy') else None)
+        use_fs = cls.config.get('use_javten_flaresolverr')
+
         detail_url = None
         tree = None
 
         try:
-            # 1. 검색 요청 (리디렉션 자동 처리)
-            res = cls.get_response_cffi(search_url, allow_redirects=True, proxies=proxies)
-            if not res or res.status_code != 200:
-                return None
-
-            # 리디렉션된 최종 URL이 상세 페이지인지 확인
-            # 성공 시 URL 예: https://javten.com/video/2032177/id4823969/...
-            if '/video/' in res.url and f"id{code_part}" in res.url:
-                detail_url = res.url
-                tree = html.fromstring(res.text)
+            if use_fs:
+                logger.debug(f"[{cls.site_name}] FlareSolverr is enabled for Javten. Requesting: {search_url}")
+                tree, _, solution_url = cls._get_page_content_flaresolverr(search_url, proxy_url=javten_proxy_url, return_solution_url=True)
+                if tree is not None and solution_url:
+                    if '/video/' in solution_url and f"id{code_part}" in solution_url:
+                        detail_url = solution_url
+                    else:
+                        for item in tree.xpath('//div[contains(@class, "padding-item")]'):
+                            title_el = item.xpath('.//h4[contains(@class, "card-title")]')
+                            if title_el and code_part in title_el[0].text_content():
+                                link_el = item.xpath('.//a[contains(@class, "stretched-link")]/@href')
+                                if link_el:
+                                    detail_url = urljoin("https://javten.com", link_el[0])
+                                    tree_detail, _, _ = cls._get_page_content_flaresolverr(detail_url, proxy_url=javten_proxy_url, return_solution_url=True)
+                                    if tree_detail is not None:
+                                        tree = tree_detail
+                                    break
             else:
-                # 리디렉션 안 됨 -> 검색 결과 목록 페이지일 가능성
-                # 여기서 정확한 품번을 다시 찾아야 함
-                temp_tree = html.fromstring(res.text)
-                # 검색 결과 아이템 중 제목에 품번이 포함된 링크 찾기 (card-title 등)
-                # 예: <h4 class="card-title">FC2-PPV-4823969</h4>
-                for item in temp_tree.xpath('//div[contains(@class, "padding-item")]'):
-                    title_el = item.xpath('.//h4[contains(@class, "card-title")]')
-                    if title_el and code_part in title_el[0].text_content():
-                        link_el = item.xpath('.//a[contains(@class, "stretched-link")]/@href')
-                        if link_el:
-                            detail_url = urljoin("https://javten.com", link_el[0])
-                            # 상세 페이지 재요청
-                            res_detail = cls.get_response_cffi(detail_url, proxies=proxies)
-                            if res_detail and res_detail.status_code == 200:
-                                tree = html.fromstring(res_detail.text)
-                            break
+                # 1. 검색 요청 (리디렉션 자동 처리)
+                res = cls.get_response_cffi(search_url, allow_redirects=True, proxies=proxies)
+                if not res or res.status_code != 200:
+                    return None
+
+                # 리디렉션된 최종 URL이 상세 페이지인지 확인
+                # 성공 시 URL 예: https://javten.com/video/2032177/id4823969/...
+                if '/video/' in res.url and f"id{code_part}" in res.url:
+                    detail_url = res.url
+                    tree = html.fromstring(res.text)
+                else:
+                    # 리디렉션 안 됨 -> 검색 결과 목록 페이지일 가능성
+                    # 여기서 정확한 품번을 다시 찾아야 함
+                    temp_tree = html.fromstring(res.text)
+                    # 검색 결과 아이템 중 제목에 품번이 포함된 링크 찾기 (card-title 등)
+                    # 예: <h4 class="card-title">FC2-PPV-4823969</h4>
+                    for item in temp_tree.xpath('//div[contains(@class, "padding-item")]'):
+                        title_el = item.xpath('.//h4[contains(@class, "card-title")]')
+                        if title_el and code_part in title_el[0].text_content():
+                            link_el = item.xpath('.//a[contains(@class, "stretched-link")]/@href')
+                            if link_el:
+                                detail_url = urljoin("https://javten.com", link_el[0])
+                                # 상세 페이지 재요청
+                                res_detail = cls.get_response_cffi(detail_url, proxies=proxies)
+                                if res_detail and res_detail.status_code == 200:
+                                    tree = html.fromstring(res_detail.text)
+                                break
         except Exception as e:
             logger.error(f"[{cls.site_name}] Javten Web Search Error: {e}")
             return None

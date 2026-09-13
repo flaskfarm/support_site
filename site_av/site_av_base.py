@@ -96,6 +96,50 @@ class SiteAvBase:
     config = None
     MetadataSetting = None
 
+    @classmethod
+    def get_base_default_headers(cls):
+        """site_util의 최신 브라우저 헤더를 로드하여 기본 공통 헤더로 반환"""
+        try:
+            from ..site_util import default_headers as su_default_headers, _get_default_headers
+            if su_default_headers and isinstance(su_default_headers, dict):
+                return su_default_headers.copy()
+            fetched = _get_default_headers()
+            if fetched and isinstance(fetched, dict):
+                return fetched.copy()
+        except Exception as e:
+            logger.debug(f"[SiteAvBase] site_util 헤더 로드 예외 (기본값 사용): {e}")
+        return cls.base_default_headers.copy()
+
+    @classmethod
+    def sync_site_default_headers(cls):
+        """site_util의 최신 기본 헤더와 사이트별 특화 헤더(Referer, Cookie 등)를 병합하여 일원화"""
+        base_headers = cls.get_base_default_headers()
+        current_headers = cls.default_headers.copy() if cls.default_headers else {}
+
+        # 사이트별 보존 대상 특화 헤더 식별
+        special_keys = {
+            'referer', 'cookie', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+            'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+            'upgrade-insecure-requests', 'dnt', 'cache-control', 'connection', 'x-requested-with'
+        }
+
+        special_headers = {}
+        for k, v in current_headers.items():
+            k_lower = k.lower()
+            if k_lower in special_keys or (k_lower not in ('user-agent', 'accept', 'accept-language') and not k_lower.startswith('sec-')):
+                special_headers[k] = v
+
+        # 최신 브라우저 공통 헤더 위에 사이트 특화 헤더 덮어쓰기
+        merged_headers = base_headers.copy()
+        for k, v in special_headers.items():
+            k_lower = k.lower()
+            for existing_k in list(merged_headers.keys()):
+                if existing_k.lower() == k_lower:
+                    merged_headers.pop(existing_k, None)
+            merged_headers[k] = v
+
+        cls.default_headers = merged_headers
+
     _cf_cookies = {}
     _cf_cookie_timestamp = 0
     CF_COOKIE_EXPIRY = 3600
@@ -122,11 +166,11 @@ class SiteAvBase:
                     content_type = response.headers.get('Content-Type', '').lower()
                     if 'video/' in content_type:
                         return False
-                    url_lower = response.request.url.lower()
-                    if url_lower.endswith(('.mp4', '.m4v', '.mkv', '.webm', '.m3u8', '.ts', '.ism')):
+                    url_clean = response.request.url.lower().split('?')[0]
+                    if url_clean.endswith(('.mp4', '.m4v', '.mkv', '.webm', '.m3u8', '.ts', '.ism')):
                         return False
-                    if '/pv/' in url_lower or '/sample/' in url_lower:
-                        if any(ext in url_lower for ext in ['.mp4', '.m3u8', 'sample']):
+                    if '/pv/' in url_clean or '/sample/' in url_clean or '/up/' in url_clean:
+                        if any(ext in url_clean for ext in ['.mp4', '.m3u8', 'sample']):
                             return False
                     return True
 
@@ -179,6 +223,7 @@ class SiteAvBase:
             from .site_mgstage import SiteMgstage
             CONTEXT_SWITCH_RULES = {
                 'dmm.co.jp': SiteDmm,
+                'dmm.com': SiteDmm,
                 'mgstage.com': SiteMgstage,
                 'r18.com': SiteMgstage,
             }
@@ -191,15 +236,22 @@ class SiteAvBase:
             p_url = cls.config.get('proxy_url')
             if p_url: proxies = {"http": p_url, "https": p_url}
 
-        request_headers = kwargs.pop("headers", cls.default_headers.copy() if cls.default_headers else cls.base_default_headers.copy())
+        # 기본 공통 헤더를 바탕으로 호출부 전달 헤더를 안전하게 병합
+        base_req_headers = cls.default_headers.copy() if cls.default_headers else cls.get_base_default_headers()
+        passed_headers = kwargs.pop("headers", None)
+        request_headers = base_req_headers.copy()
+        if passed_headers and isinstance(passed_headers, dict):
+            request_headers.update(passed_headers)
 
-        # 스위치 모듈 로직
+        # 스위치 모듈 로직: 대상 CDN 도메인 감지 시 해당 사이트의 프록시/헤더로 강제 오버라이드
         for domain, expert_module in CONTEXT_SWITCH_RULES.items():
             if domain in url:
                 if expert_module and cls.site_name != expert_module.site_name:
-                    if not proxies and expert_module.config and expert_module.config.get('use_proxy', False):
+                    if expert_module.config and expert_module.config.get('use_proxy', False):
                         p_url = expert_module.config.get('proxy_url')
-                        if p_url: proxies = {"http": p_url, "https": p_url}
+                        proxies = {"http": p_url, "https": p_url} if p_url else None
+                    else:
+                        proxies = None
                     
                     if expert_module.default_headers:
                         request_headers.update(expert_module.default_headers)
@@ -256,6 +308,7 @@ class SiteAvBase:
             from .site_mgstage import SiteMgstage
             CONTEXT_SWITCH_RULES = {
                 'dmm.co.jp': SiteDmm,
+                'dmm.com': SiteDmm,
                 'mgstage.com': SiteMgstage,
                 'r18.com': SiteMgstage,
             }
@@ -268,7 +321,12 @@ class SiteAvBase:
             p_url = cls.config.get('proxy_url')
             if p_url: proxies = {"http": p_url, "https": p_url}
 
-        request_headers = kwargs.pop("headers", cls.default_headers.copy() if cls.default_headers else cls.base_default_headers.copy())
+        # 기본 공통 헤더를 바탕으로 호출부 전달 헤더를 안전하게 병합
+        base_req_headers = cls.default_headers.copy() if cls.default_headers else cls.get_base_default_headers()
+        passed_headers = kwargs.pop("headers", None)
+        request_headers = base_req_headers.copy()
+        if passed_headers and isinstance(passed_headers, dict):
+            request_headers.update(passed_headers)
 
         # FlareSolverr가 뚫어놓은 쿠키가 있다면 cffi 요청에 강제 주입
         if getattr(cls, '_cf_cookies', None) and (time.time() - getattr(cls, '_cf_cookie_timestamp', 0) < getattr(cls, 'CF_COOKIE_EXPIRY', 3600)):
@@ -277,13 +335,15 @@ class SiteAvBase:
             kwargs['cookies'] = current_cookies
             logger.debug(f"[{cls.site_name}] Injected CF clearance cookies into request.")
 
-        # 스위치 모듈 로직
+        # 스위치 모듈 로직: 대상 CDN 도메인 감지 시 해당 사이트의 프록시/헤더로 강제 오버라이드
         for domain, expert_module in CONTEXT_SWITCH_RULES.items():
             if domain in url:
                 if expert_module and cls.site_name != expert_module.site_name:
-                    if not proxies and expert_module.config and expert_module.config.get('use_proxy', False):
+                    if expert_module.config and expert_module.config.get('use_proxy', False):
                         p_url = expert_module.config.get('proxy_url')
-                        if p_url: proxies = {"http": p_url, "https": p_url}
+                        proxies = {"http": p_url, "https": p_url} if p_url else None
+                    else:
+                        proxies = None
                     
                     if expert_module.default_headers:
                         request_headers.update(expert_module.default_headers)
@@ -629,11 +689,13 @@ class SiteAvBase:
     @classmethod
     def jav_video(cls, url):
         try:
+            from flask import request
             try:
                 from .site_dmm import SiteDmm
                 from .site_mgstage import SiteMgstage
                 CONTEXT_SWITCH_RULES = {
                     'dmm.co.jp': SiteDmm,
+                    'dmm.com': SiteDmm,
                     'mgstage.com': SiteMgstage,
                     'r18.com': SiteMgstage,
                 }
@@ -659,27 +721,81 @@ class SiteAvBase:
                         request_headers.update(expert_module.default_headers)
                         if expert_module.site_name == 'dmm':
                             request_headers['Referer'] = 'https://www.dmm.co.jp/'
+                            request_headers['Cookie'] = 'age_check_done=1'
                         elif expert_module.site_name == 'mgstage':
                             request_headers['Referer'] = 'https://www.mgstage.com/'
+                            request_headers['Cookie'] = "coc=1;mgs_agef=1;"
                     break
 
-            req = cls.session.get(url, proxies=proxies, headers=request_headers, stream=True, timeout=(10, 120))
-            req.raise_for_status()
+            if 'fc2.com' in url:
+                request_headers['Referer'] = 'https://adult.contents.fc2.com/'
+                request_headers['Cookie'] = 'wei6H=1; GDPRCHECK=true'
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"jav_video: Failed to get video stream for {url}. Error: {e}")
+            # 클라이언트(Plex/브라우저/다운로더)의 부분 재생 Range 헤더 포워딩
+            client_range = request.headers.get('Range')
+            if client_range:
+                request_headers['Range'] = client_range
+
+            # 캐시 DB 개입을 원천 차단하기 위해 순수 독립 requests 세션 사용
+            stream_session = requests.Session()
+
+            req = None
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    req = stream_session.get(
+                        url,
+                        proxies=proxies,
+                        headers=request_headers,
+                        stream=True,
+                        timeout=(15, 60),
+                        verify=False
+                    )
+                    if req.status_code in [200, 206]:
+                        break
+                    elif attempt < max_attempts - 1:
+                        logger.warning(f"jav_video: HTTP {req.status_code} 실패 ({attempt + 1}/{max_attempts}회): {url}. 2초 후 재시도...")
+                        time.sleep(2)
+                    else:
+                        logger.error(f"jav_video: 스트림 연결 실패 (HTTP {req.status_code}, {max_attempts}회 시도 초과): {url}")
+                        stream_session.close()
+                        return abort(req.status_code if req.status_code >= 400 else 500)
+                except (requests.exceptions.RequestException, Exception) as e_req:
+                    if attempt < max_attempts - 1:
+                        logger.warning(f"jav_video: 연결 오류 ({attempt + 1}/{max_attempts}회): {url}. 2초 후 재시도... 사유: {e_req}")
+                        time.sleep(2)
+                    else:
+                        logger.error(f"jav_video: 연결 실패 ({max_attempts}회 시도 초과): {url}. 사유: {e_req}")
+                        stream_session.close()
+                        return abort(500)
+
+        except Exception as e:
+            logger.error(f"jav_video: 처리 예외 ({url}): {e}")
             return abort(500)
 
+
         def generate_content():
-            for chunk in req.iter_content(chunk_size=8192):
-                yield chunk
+            try:
+                for chunk in req.iter_content(chunk_size=65536):
+                    if chunk:
+                        yield chunk
+            except Exception as e_stream:
+                logger.debug(f"jav_video: 전송 중단 ({url}): {e_stream}")
+            finally:
+                req.close()
+                stream_session.close()
 
         response_headers = {
             'Content-Type': req.headers.get('Content-Type', 'video/mp4'),
-            'Content-Length': req.headers.get('Content-Length'),
             'Accept-Ranges': 'bytes',
         }
-        return Response(generate_content(), headers=response_headers)
+        if 'Content-Length' in req.headers:
+            response_headers['Content-Length'] = req.headers['Content-Length']
+        if 'Content-Range' in req.headers:
+            response_headers['Content-Range'] = req.headers['Content-Range']
+
+        status_code = req.status_code if req.status_code in [200, 206] else 200
+        return Response(generate_content(), status=status_code, headers=response_headers)
 
 
     _yaml_settings = {}
@@ -852,6 +968,8 @@ class SiteAvBase:
 
     @classmethod
     def set_config(cls, db):
+        cls.sync_site_default_headers()
+
         if cls.session is None:
             cls.session = cls.get_session()
         else:
@@ -1141,118 +1259,6 @@ class SiteAvBase:
 
             im = processed_im
 
-        return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
-
-
-    @classmethod
-    def default_jav_image_cs(cls, image_url, mode=None):
-        """
-        default_jav_image와 동일하지만, get_response_cs를 사용하는 버전.
-        """
-        # get_response_cs를 사용하여 이미지 데이터를 가져옴
-        res = cls.get_response_cs(image_url, verify=False) 
-
-        # --- 응답 검증 추가 ---
-        if res is None:
-            P.logger.error(f"image_proxy: SiteUtil.get_response returned None for URL: {image_url}")
-            abort(404) # 또는 적절한 에러 응답
-            return # 함수 종료
-        
-        if res.status_code != 200:
-            P.logger.warning(f"image_proxy: Received status code {res.status_code} for URL: {image_url}. Content: {res.text[:200]}")
-            abort(res.status_code if res.status_code >= 400 else 500)
-            return
-
-        content_type_header = res.headers.get('Content-Type', '').lower()
-        if not content_type_header.startswith('image/'):
-            P.logger.error(f"image_proxy: Expected image Content-Type, but got '{content_type_header}' for URL: {image_url}. Content: {res.text[:200]}")
-            abort(400) # 잘못된 요청 또는 서버 응답 오류
-            return
-        # --- 응답 검증 끝 ---
-
-        try:
-            bytes_im = BytesIO(res.content)
-            im = Image.open(bytes_im)
-            im.load()
-            imformat = im.format
-            if imformat is None: # Pillow가 포맷을 감지 못하는 경우 (드물지만 발생 가능)
-                P.logger.warning(f"image_proxy: Pillow could not determine format for image from URL: {image_url}. Attempting to infer from Content-Type.")
-                if 'jpeg' in content_type_header or 'jpg' in content_type_header:
-                    imformat = 'JPEG'
-                elif 'png' in content_type_header:
-                    imformat = 'PNG'
-                elif 'webp' in content_type_header:
-                    imformat = 'WEBP'
-                elif 'gif' in content_type_header:
-                    imformat = 'GIF'
-                else:
-                    P.logger.error(f"image_proxy: Could not infer image format from Content-Type '{content_type_header}'. URL: {image_url}")
-                    abort(400)
-                    return
-            mimetype = im.get_format_mimetype()
-            if mimetype is None: # 위에서 imformat을 강제로 설정한 경우 mimetype도 설정
-                if imformat == 'JPEG': mimetype = 'image/jpeg'
-                elif imformat == 'PNG': mimetype = 'image/png'
-                elif imformat == 'WEBP': mimetype = 'image/webp'
-                elif imformat == 'GIF': mimetype = 'image/gif'
-                else:
-                    P.logger.error(f"image_proxy: Could not determine mimetype for inferred format '{imformat}'. URL: {image_url}")
-                    abort(400)
-                    return
-
-        except UnidentifiedImageError as e: # PIL.UnidentifiedImageError 명시적 임포트 필요
-            P.logger.error(f"image_proxy: PIL.UnidentifiedImageError for URL: {image_url}. Response Content-Type: {content_type_header}")
-            P.logger.error(f"image_proxy: Error details: {e}")
-            # 디버깅을 위해 실패한 이미지 데이터 일부 저장 (선택적)
-            try:
-                failed_image_path = os.path.join(path_data, "tmp", f"failed_image_{time.time()}.bin")
-                with open(failed_image_path, 'wb') as f:
-                    f.write(res.content)
-                P.logger.info(f"image_proxy: Content of failed image saved to: {failed_image_path}")
-            except Exception as save_err:
-                P.logger.error(f"image_proxy: Could not save failed image content: {save_err}")
-            abort(400) # 잘못된 이미지 파일
-            return
-        except Exception as e_pil:
-            P.logger.error(f"image_proxy: General PIL error for URL: {image_url}: {e_pil}")
-            P.logger.error(traceback.format_exc())
-            abort(500)
-            return
-
-        if mode is not None and mode.startswith("crop_"):
-            operations = mode.replace("crop_", "").split('_')
-            aspect_ratio = 1.4225
-            if operations and operations[-1].replace('.', '', 1).isdigit():
-                try:
-                    aspect_ratio = float(operations.pop())
-                except ValueError:
-                    pass
-
-            processed_im = im
-            is_first_op = True
-            num_ops = len(operations)
-
-            for op in operations:
-                new_im = None
-                if op in ['r', 'l'] and is_first_op and num_ops > 1:
-                    width, height = processed_im.size
-                    box = (width / 2, 0, width, height) if op == 'r' else (0, 0, width / 2, height)
-                    new_im = processed_im.crop(box)
-                else:
-                    new_im = SiteUtilAv.imcrop(processed_im, position=op, aspect_ratio=aspect_ratio)
-
-                if processed_im is not im:
-                    processed_im.close()
-                processed_im = new_im
-
-                if processed_im is None:
-                    logger.warning(f"Cropping failed at operation '{op}' for mode '{mode}'. Using original image.")
-                    if im.fp: im.fp.seek(0)
-                    processed_im = im
-                    break
-
-                is_first_op = False
-            im = processed_im
         return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
 
 
@@ -3916,14 +3922,14 @@ class SiteAvBase:
     # ---------------------------------------------------------
 
     @classmethod
-    def _get_page_content_flaresolverr(cls, url, validator=None):
+    def _get_page_content_flaresolverr(cls, url, validator=None, proxy_url=None, return_solution_url=False):
         """
         FlareSolverr를 사용하여 페이지 내용을 가져옵니다.
         """
         flaresolverr_url = cls.config.get('flaresolverr_url', '').rstrip('/')
         if not flaresolverr_url: 
             logger.error(f"[{cls.site_name}] FlareSolverr URL is not configured!")
-            return None, None
+            return (None, None, None) if return_solution_url else (None, None)
         
         api_url = f"{flaresolverr_url}/v1"
         payload = {
@@ -3932,9 +3938,10 @@ class SiteAvBase:
             "maxTimeout": 60000,
         }
         
-        # 사이트에 프록시가 설정되어 있으면 FlareSolverr에게도 프록시를 태우게 지시
-        if cls.config.get('use_proxy') and cls.config.get('proxy_url'):
-            payload["proxy"] = {"url": cls.config['proxy_url']}
+        # 호출 시 지정된 프록시가 있거나 설정에 프록시가 켜져 있으면 전달
+        target_proxy = proxy_url or (cls.config.get('proxy_url') if cls.config.get('use_proxy') else None)
+        if target_proxy:
+            payload["proxy"] = {"url": target_proxy}
 
         for attempt in range(3):
             # 기존 통과 쿠키가 있다면 재사용
@@ -3957,6 +3964,7 @@ class SiteAvBase:
                     data = res.json()
                     if data.get('status') == 'ok':
                         html_source = data['solution']['response']
+                        solution_url = data['solution'].get('url') or url
                         tree = html.fromstring(html_source)
                         
                         # 뚫어낸 세션 쿠키 갱신
@@ -3966,12 +3974,13 @@ class SiteAvBase:
                             cls._cf_cookie_timestamp = time.time()
 
                         if validator:
-                            if validator(tree): return tree, html_source
+                            if validator(tree):
+                                return (tree, html_source, solution_url) if return_solution_url else (tree, html_source)
                             else:
                                 logger.debug(f"[{cls.site_name}] FlareSolverr Success but validation failed. Retrying...")
                                 time.sleep(2)
                                 continue
-                        return tree, html_source
+                        return (tree, html_source, solution_url) if return_solution_url else (tree, html_source)
                     else:
                         logger.warning(f"[{cls.site_name}] FlareSolverr returned error status: {data.get('message', data)}")
                 else:
@@ -3981,7 +3990,7 @@ class SiteAvBase:
             
             time.sleep(2)
         
-        return None, None
+        return (None, None, None) if return_solution_url else (None, None)
 
 
     # =========================================================================
@@ -4237,130 +4246,6 @@ class SiteAvBase:
     # ---------------------------------------------------------
     # region Selenium Common Methods (Legacy)
     # ---------------------------------------------------------
-
-    @classmethod
-    def get_tree_cs(cls, url, **kwargs):
-        text = cls.get_text_cs(url, **kwargs)
-        if text is None:
-            return text
-        return html.fromstring(text)
-
-
-    @classmethod
-    def get_text_cs(cls, url, **kwargs):
-        res = cls.get_response_cs(url, **kwargs)
-        if res is None: return None
-        return res.text
-
-
-    @classmethod
-    def get_cloudscraper_instance(cls, new_instance=False, no_verify=False):
-        """
-        cloudscraper 인스턴스를 반환합니다.
-        no_verify=True일 경우, SSL 인증서 검증을 비활성화한 별도의 인스턴스를 반환합니다.
-        """
-        if no_verify:
-            if new_instance or cls._cs_scraper_no_verify_instance is None:
-                try:
-                    # 1. 커스텀 SSLContext 생성
-                    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-
-                    # 2. 커스텀 HTTPAdapter 정의
-                    class NoVerifyAdapter(HTTPAdapter):
-                        def init_poolmanager(self, *args, **kwargs):
-                            kwargs['ssl_context'] = context
-                            super().init_poolmanager(*args, **kwargs)
-
-                        def proxy_manager_for(self, *args, **kwargs):
-                            kwargs['ssl_context'] = context
-                            return super().proxy_manager_for(*args, **kwargs)
-
-                    # 3. requests.Session 객체를 만들고 어댑터 마운트
-                    custom_session = requests.Session()
-                    custom_session.mount('https://', NoVerifyAdapter())
-
-                    # 4. create_scraper에 직접 세션 객체 전달
-                    cls._cs_scraper_no_verify_instance = cloudscraper.create_scraper(
-                        sess=custom_session,
-                        delay=5
-                    )
-                    logger.debug("Created new cloudscraper instance with SSL verification DISABLED.")
-                except Exception as e_cs_create:
-                    logger.error(f"Failed to create no-verify cloudscraper instance: {e_cs_create}")
-                    logger.error(traceback.format_exc())
-                    return None
-            return cls._cs_scraper_no_verify_instance
-        else:
-            # 기본 인스턴스
-            if new_instance or cls._cs_scraper_instance is None:
-                try:
-                    cls._cs_scraper_instance = cloudscraper.create_scraper(sess=cls.session, delay=5)
-                    logger.debug("Created new cloudscraper instance.")
-                except Exception as e_cs_create:
-                    logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
-                    return None
-            return cls._cs_scraper_instance
-
-
-    @classmethod
-    def get_response_cs(cls, url, **kwargs):
-        """cloudscraper를 사용하여 HTTP GET 요청을 보내고 응답 객체를 반환합니다."""
-        method = kwargs.pop("method", "GET").upper()
-        post_data = kwargs.pop("post_data", None)
-        if post_data:
-            method = "POST"
-
-        proxies = kwargs.pop("proxies", None)
-        proxy_url = None
-
-        if proxies is None:
-            if cls.config and cls.config.get('use_proxy', False):
-                proxy_url = cls.config.get('proxy_url')
-                if proxy_url:
-                    proxies = {"http": proxy_url, "https": proxy_url}
-        else:
-            proxy_url = proxies.get("http", proxies.get("https"))
-
-        kwargs.pop("cookies", None) 
-
-        headers = kwargs.pop("headers", cls.default_headers)
-        verify = kwargs.pop("verify", True)
-
-        scraper = cls.get_cloudscraper_instance(no_verify=(not verify))
-        if scraper is None:
-            logger.error("SiteUtil.get_response_cs: Failed to get cloudscraper instance.")
-            return None
-
-        if headers: 
-            scraper.headers.update(headers)
-
-        try:
-            if method == "POST":
-                res = scraper.post(url, data=post_data, proxies=proxies, **kwargs)
-            else: # GET
-                res = scraper.get(url, proxies=proxies, **kwargs)
-
-            if res.status_code == 429:
-                return res
-
-            if res.status_code != 200:
-                logger.warning(f"SiteUtil.get_response_cs: Received status code {res.status_code} for URL='{url}'. Proxy='{proxy_url}'.")
-                if res.status_code == 403:
-                    logger.error(f"SiteUtil.get_response_cs: Received 403 Forbidden for URL='{url}'. Proxy='{proxy_url}'. Response text: {res.text[:500]}")
-                return None
-
-            return res
-        except requests.exceptions.RequestException as e_req:
-            logger.error(f"SiteUtil.get_response_cs: RequestException (not related to status code) for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
-            logger.error(traceback.format_exc())
-            return None
-        except Exception as e_general:
-            logger.error(f"SiteUtil.get_response_cs: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
-            logger.error(traceback.format_exc())
-            return None
-
 
     @classmethod
     def _get_selenium_driver(cls):
