@@ -956,7 +956,8 @@ class SiteAvBase:
                             request_headers['Cookie'] = "coc=1;mgs_agef=1;"
                     break
 
-            if 'fc2.com' in url:
+            # FC2 및 LAXD Video CDN 헤더 보정
+            if 'fc2.com' in url or 'laxd.com' in url:
                 request_headers['Referer'] = 'https://adult.contents.fc2.com/'
                 request_headers['Cookie'] = 'wei6H=1; GDPRCHECK=true'
 
@@ -969,7 +970,11 @@ class SiteAvBase:
             stream_session = requests.Session()
 
             req = None
+            first_chunk = None
+            chunk_iter = None
             max_attempts = 3
+            retry_delay = 2
+
             for attempt in range(max_attempts):
                 try:
                     req = stream_session.get(
@@ -977,10 +982,43 @@ class SiteAvBase:
                         proxies=proxies,
                         headers=request_headers,
                         stream=True,
-                        timeout=(15, 60),
+                        timeout=(10, 30),
                         verify=False
                     )
+
                     if req.status_code in [200, 206]:
+                        content_type = req.headers.get('Content-Type', '').lower()
+                        is_html_type = 'text/html' in content_type or 'text/plain' in content_type
+
+                        # 응답 본문 첫 청크 검사 (HTML 에러 페이지 여부 확인)
+                        chunk_iter = req.iter_content(chunk_size=65536)
+                        first_chunk = next(chunk_iter, None)
+
+                        is_error_page = False
+                        if is_html_type:
+                            is_error_page = True
+                        elif first_chunk:
+                            first_chunk_trimmed = first_chunk.lstrip()[:200].lower()
+                            first_chunk_sample = first_chunk[:2048].lower()
+                            if (first_chunk_trimmed.startswith((b'<!doctype', b'<html', b'<?xml')) or
+                                b'laxd video' in first_chunk_sample or
+                                '動画へアクセスできません'.encode('utf-8') in first_chunk_sample):
+                                is_error_page = True
+
+                        if is_error_page or not first_chunk:
+                            req.close()
+                            first_chunk = None
+                            chunk_iter = None
+                            if attempt < max_attempts - 1:
+                                logger.warning(f"jav_video: 동영상이 아닌 HTML/에러 페이지 응답 감지 ({attempt + 1}/{max_attempts}회): {url}. {retry_delay}초 후 재시도...")
+                                time.sleep(retry_delay)
+                                continue
+                            else:
+                                logger.error(f"jav_video: 동영상 스트림 접근 불가 (에러 페이지 응답, {max_attempts}회 시도 초과): {url}")
+                                stream_session.close()
+                                return abort(404)
+
+                        # 정상 동영상 스트림 확인 완료
                         break
                     elif attempt < max_attempts - 1:
                         logger.warning(f"jav_video: HTTP {req.status_code} 실패 ({attempt + 1}/{max_attempts}회): {url}. 2초 후 재시도...")
@@ -1002,20 +1040,35 @@ class SiteAvBase:
             logger.error(f"jav_video: 처리 예외 ({url}): {e}")
             return abort(500)
 
+        # 전체 스트리밍/다운로드 누적 전송 최대 허용 시간 (3분 = 180초)
+        max_stream_duration = 180
 
         def generate_content():
+            stream_start_time = time.time()
             try:
-                for chunk in req.iter_content(chunk_size=65536):
-                    if chunk:
-                        yield chunk
+                if first_chunk:
+                    yield first_chunk
+                if chunk_iter:
+                    for chunk in chunk_iter:
+                        # 누적 전송 시간이 제한을 초과하면 연결 강제 종료
+                        if time.time() - stream_start_time > max_stream_duration:
+                            logger.warning(f"jav_video: 전체 전송 허용 시간({max_stream_duration}초) 초과로 스트림 중단: {url}")
+                            break
+                        if chunk:
+                            yield chunk
             except Exception as e_stream:
                 logger.debug(f"jav_video: 전송 중단 ({url}): {e_stream}")
             finally:
-                req.close()
+                if req:
+                    req.close()
                 stream_session.close()
 
+        detected_content_type = req.headers.get('Content-Type', '')
+        if not detected_content_type or not detected_content_type.lower().startswith('video/'):
+            detected_content_type = 'video/mp4'
+
         response_headers = {
-            'Content-Type': req.headers.get('Content-Type', 'video/mp4'),
+            'Content-Type': detected_content_type,
             'Accept-Ranges': 'bytes',
         }
         if 'Content-Length' in req.headers:

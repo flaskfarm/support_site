@@ -4542,6 +4542,7 @@ MGS_LABEL_MAP = {
     "JD": ["101JD", "212JD"],
     "JDGA": ["077JDGA"],
     "JDGE": ["077JDGE"],
+    "JDH": ["908JDH"],
     "JDL": ["019JDL"],
     "JDR": ["437JDR"],
     "JEP": ["077JEP"],
