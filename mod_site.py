@@ -102,15 +102,97 @@ class ModuleSite(PluginModuleBase):
         elif command == 'wavve_login':
             try:
                 from . import SupportWavve
-                P.ModelSetting.set('site_wavve_credentials', arg1)
+                accounts_config = json.loads(arg1)
+                lock_passwords = {}
+                for name, account_config in accounts_config.items():
+                    lock_passwords[name] = account_config.pop('lock_password', None)
+                P.ModelSetting.set(
+                    'site_wavve_credentials',
+                    json.dumps(accounts_config, ensure_ascii=False, separators=(',', ':'), indent=2),
+                )
+                self.__wavve_init()
+
+                def login_with_lock(account, lock_password):
+                    headers = {}
+                    if account.device_id:
+                        headers['wavve-device-id'] = account.device_id
+                    response = account.session.request(
+                        'POST',
+                        f'{SupportWavve.api.account_url}/v1/signin/wavve',
+                        headers=headers,
+                        json={
+                            'type': 'wavve',
+                            'id': account.id,
+                            'password': account.password,
+                            'device': 'pc',
+                        },
+                    )
+                    if not 200 <= response.status_code < 300:
+                        logger.error('Wavve 1단계 로그인 실패: %s', response.status_code)
+                        return False
+                    data = response.json()
+                    phase1_credential = data.get('credential')
+                    if data.get('device_id'):
+                        account.device_id = data['device_id']
+                    if not all((phase1_credential, account.device_id)):
+                        logger.error('Wavve 2단계 로그인에 필요한 정보 부족')
+                        return False
+                    response = account.session.request(
+                        'POST',
+                        f'{SupportWavve.api.account_url}/v1/signin',
+                        headers={'wavve-device-id': account.device_id},
+                        params={'credential': phase1_credential},
+                        json={
+                            'type': 'credential',
+                            'id': phase1_credential,
+                            'profile': account.profile or '0',
+                            'device': 'pc',
+                            'profile_lock_password': lock_password,
+                        },
+                    )
+                    if not 200 <= response.status_code < 300:
+                        try:
+                            error_data = response.json()
+                            detail = error_data.get('data') or {}
+                            logger.error(
+                                'Wavve 잠금 프로필 로그인 실패: status=%s code=%s detail=%s',
+                                response.status_code,
+                                detail.get('code') or error_data.get('code'),
+                                detail.get('description') or error_data.get('message'),
+                            )
+                        except Exception:
+                            logger.error('Wavve 잠금 프로필 로그인 실패: %s', response.status_code)
+                        return False
+                    data = response.json()
+                    if not data.get('credential'):
+                        logger.error('Wavve 잠금 프로필 credential 없음')
+                        return False
+                    account.credential = data['credential']
+                    if data.get('device_id'):
+                        account.device_id = data['device_id']
+                    return True
+
                 success = []
                 failed = []
-                for name in SupportWavve.api.accounts:
-                    if SupportWavve.do_login(name):
+                for name, account in SupportWavve.api.accounts.items():
+                    lock_password = lock_passwords.get(name)
+                    logged_in = (
+                        login_with_lock(account, lock_password)
+                        if lock_password
+                        else SupportWavve.do_login(name)
+                    )
+                    if logged_in:
                         success.append(name)
+                        accounts_config[name]['credential'] = account.credential
+                        accounts_config[name]['device_id'] = account.device_id
                     else:
                         failed.append(name)
-                ret['credentials'] = P.ModelSetting.get('site_wavve_credentials')
+                saved_credentials = json.dumps(
+                    accounts_config, ensure_ascii=False, separators=(',', ':'), indent=2
+                )
+                P.ModelSetting.set('site_wavve_credentials', saved_credentials)
+                self.__wavve_init()
+                ret['credentials'] = saved_credentials
                 msg = f"성공: {','.join(success)}<br>실패: {','.join(failed)}"
                 ret['ret'] = 'success'
                 ret['msg'] = msg
