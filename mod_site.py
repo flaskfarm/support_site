@@ -4,6 +4,24 @@ import sqlite3
 from .setup import *
 
 
+def _patch_wavve_profile_lock_session(account, lock_password):
+    if not lock_password or getattr(account.session, '_profile_lock_patched', False):
+        return
+    original_request = account.session.request
+
+    def request_with_profile_lock(method, url, **kwargs):
+        if method.upper() == 'POST' and url.rstrip('/').endswith('/v1/signin'):
+            payload = kwargs.get('json')
+            if isinstance(payload, dict) and payload.get('type') == 'credential':
+                payload = dict(payload)
+                payload.setdefault('profile_lock_password', lock_password)
+                kwargs['json'] = payload
+        return original_request(method, url, **kwargs)
+
+    account.session.request = request_with_profile_lock
+    account.session._profile_lock_patched = True
+
+
 class ModuleSite(PluginModuleBase):
     db_default = {
         'db_version' : '1.2',
@@ -103,9 +121,10 @@ class ModuleSite(PluginModuleBase):
             try:
                 from . import SupportWavve
                 accounts_config = json.loads(arg1)
-                lock_passwords = {}
-                for name, account_config in accounts_config.items():
-                    lock_passwords[name] = account_config.pop('lock_password', None)
+                lock_passwords = {
+                    name: account_config.get('lock_password')
+                    for name, account_config in accounts_config.items()
+                }
                 P.ModelSetting.set(
                     'site_wavve_credentials',
                     json.dumps(accounts_config, ensure_ascii=False, separators=(',', ':'), indent=2),
@@ -287,19 +306,31 @@ class ModuleSite(PluginModuleBase):
 
     def __wavve_init(self):
         from . import SupportWavve
+        accounts_config = json.loads(P.ModelSetting.get('site_wavve_credentials') or '{}')
+        lock_passwords = {
+            name: account_config.get('lock_password')
+            for name, account_config in accounts_config.items()
+        }
+        runtime_accounts = json.loads(json.dumps(accounts_config))
+        for account_config in runtime_accounts.values():
+            account_config.pop('lock_password', None)
+        credential_auto_refresh = P.ModelSetting.get_bool('site_wavve_credential_auto_refresh')
         SupportWavve.initialize(
-            P.ModelSetting.get('site_wavve_credentials'),
+            json.dumps(runtime_accounts, ensure_ascii=False, separators=(',', ':')),
             P.ModelSetting.get_list('site_wavve_patterns_episode'),
             P.ModelSetting.get_list('site_wavve_patterns_title'),
             P.ModelSetting.get_list('site_wavve_patterns_season'),
             P.ModelSetting.get('site_wavve_headers'),
             P.ModelSetting.get('site_common_headers'),
-            P.ModelSetting.get_bool('site_wavve_credential_auto_refresh'),
+            False,
             P.ModelSetting.get_int('site_wavve_credential_ttl'),
             P.ModelSetting.get_int('site_wavve_credential_cooldown'),
             P.ModelSetting.get_bool('site_wavve_use_cache'),
             P.ModelSetting.get_int('site_wavve_cache_expiry')
         )
+        for name, account in SupportWavve.api.accounts.items():
+            _patch_wavve_profile_lock_session(account, lock_passwords.get(name))
+        SupportWavve.api.credential_auto_refresh = credential_auto_refresh
         from .site_wavve import SiteWavve
         SiteWavve.initialize(
             P.ModelSetting.get_bool('site_wavve_use_cache'),
