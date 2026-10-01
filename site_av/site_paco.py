@@ -240,23 +240,6 @@ class SitePaco(SiteAvBase):
                 trans_tag = cls.get_translated_tag(tag)
                 if trans_tag not in entity.genre: entity.genre.append(trans_tag)
 
-        # 이미지 서버 경로 사전 설정
-        image_mode = cls.MetadataSetting.get('jav_censored_image_mode')
-        if image_mode == 'image_server':
-            try:
-                local_path = cls.MetadataSetting.get('jav_censored_image_server_local_path')
-                server_url = cls.MetadataSetting.get('jav_censored_image_server_url')
-                base_save_format = cls.MetadataSetting.get('jav_uncensored_image_server_save_format')
-                
-                base_path_part = base_save_format.format(label=entity.label)
-                year_part = str(entity.year) if entity.year else "0000"
-                final_relative_folder_path = os.path.join(base_path_part.strip('/\\'), year_part)
-                
-                entity.image_server_target_folder = os.path.join(local_path, final_relative_folder_path)
-                entity.image_server_url_prefix = f"{server_url.rstrip('/')}/{final_relative_folder_path.replace(os.path.sep, '/')}"
-            except Exception as e:
-                logger.error(f"[{cls.site_name}] Failed to set custom image server path: {e}")
-
         # === 이미지 처리 섹션 ===
         def format_url(path):
             if path and isinstance(path, str):

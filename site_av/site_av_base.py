@@ -1089,15 +1089,15 @@ class SiteAvBase:
 
 
     DEFAULT_UNCEN_IMAGE_RULES = [
-        {'이름': 'uncen_year4', '모듈': 'uncensored', '레이블': r'(1pon|10mu|carib|paco)', '폴더포맷': '{label}/{year4}'},
-        {'이름': 'uncen_num_3_7', '모듈': 'uncensored', '레이블': r'(fc2)', '폴더포맷': '{label}/{num_3_7}'},
-        {'이름': 'uncen_num_2_4', '모듈': 'uncensored', '레이블': r'(heyzo)', '폴더포맷': '{label}/{num_2_4}'},
+        {'이름': 'uncen_year4', '모듈': 'uncensored', '레이블': r'(1pon|10mu|carib|paco)', '서브경로': '{year4}', '폴더포맷': '{label}/{year4}'},
+        {'이름': 'uncen_num_3_7', '모듈': 'uncensored', '레이블': r'(fc2)', '서브경로': '{num_3_7}', '폴더포맷': '{label}/{num_3_7}'},
+        {'이름': 'uncen_num_2_4', '모듈': 'uncensored', '레이블': r'(heyzo)', '서브경로': '{num_2_4}', '폴더포맷': '{label}/{num_2_4}'},
     ]
 
     @classmethod
     def get_server_folder_and_prefix(cls, domain, category, stem, studio="", year=1900, label="", entity=None):
         """
-        카테고리/도메인 및 yaml 커스텀 설정(meta_custom_path)을 기반으로
+        카테고리/도메인 및 UI 설정을 기반으로
         실제 로컬 저장 폴더 경로와 서빙 URL Prefix를 단일 소스에서 결정합니다.
         """
         if not category:
@@ -1174,60 +1174,32 @@ class SiteAvBase:
                 for y in range(1, 10):
                     data_tokens[f'num_{x}_{y}'] = main_number_part.zfill(y)[:x]
 
-        rel_dir = ""
-
-        # yaml 커스텀 설정(meta_custom_path) 전 카테고리 최우선 검사
-        matched_folder_format = None
-        custom_path_cfg = cls._yaml_settings.get('meta_custom_path', {}) if isinstance(cls._yaml_settings, dict) else {}
-        if custom_path_cfg.get('enable'):
-            rules_list = custom_path_cfg.get('규칙', []) or custom_path_cfg.get('rules', []) or []
-            for rule in rules_list:
-                if not isinstance(rule, dict):
-                    continue
-                rule_mod = str(rule.get('모듈') or rule.get('module') or '').lower()
-                is_mod_match = False
-                if target_cat == 'JAV_UNCEN' and rule_mod in ['uncensored', 'jav_uncensored', 'jav_uncen']:
-                    is_mod_match = True
-                elif target_cat == 'JAV_CEN' and rule_mod in ['censored', 'jav_censored', 'jav_cen']:
-                    is_mod_match = True
-                elif target_cat == 'WESTERN' and rule_mod in ['western', 'west']:
-                    is_mod_match = True
-                elif not rule_mod or rule_mod in ['all', 'common']:
-                    is_mod_match = True
-
-                if is_mod_match:
-                    rule_label_pattern = rule.get('레이블') or rule.get('label') or ''
-                    if rule_label_pattern and re.search(rule_label_pattern, base_label, re.IGNORECASE):
-                        candidate_fmt = (
-                            rule.get('폴더포맷') or
-                            rule.get('포맷') or
-                            rule.get('폴더') or
-                            rule.get('폴더_포맷') or
-                            rule.get('폴더구조') or
-                            rule.get('folder_format') or
-                            rule.get('format') or
-                            rule.get('path')
-                        )
-                        if candidate_fmt and str(candidate_fmt).strip():
-                            matched_folder_format = str(candidate_fmt).strip()
-                            break
-
-        # 카테고리별 기본 포맷 결정
+        # 카테고리별 포맷 결정 (일반 파일용 meta_custom_path는 제외하고 UI 설정과 조합)
         if target_cat == 'JAV_CEN':
-            default_fmt = "jav/cen/{label_1}/{label}"
-            save_fmt = matched_folder_format or setting_source.get("jav_censored_image_server_save_format") or default_fmt
+            save_fmt = setting_source.get("jav_censored_image_server_save_format") or "jav/cen/{label_1}/{label}"
+
         elif target_cat == 'JAV_UNCEN':
-            matched_uncen = None
-            if not matched_folder_format:
-                for def_rule in cls.DEFAULT_UNCEN_IMAGE_RULES:
-                    if re.search(def_rule['레이블'], base_label, re.IGNORECASE):
-                        matched_uncen = def_rule['폴더포맷']
-                        break
-            default_fmt = matched_uncen or "jav/uncen/{label}"
-            save_fmt = matched_folder_format or setting_source.get("jav_uncensored_image_server_save_format") or default_fmt
+            uncen_base_fmt = setting_source.get("jav_uncensored_image_server_save_format") or "jav/uncen/{label}"
+            clean_uncen_fmt = uncen_base_fmt.strip('/\\').replace('\\', '/')
+
+            # 레이블별 하위 특화 서브 경로 규칙 탐색
+            matched_sub_path = None
+            for def_rule in cls.DEFAULT_UNCEN_IMAGE_RULES:
+                if re.search(def_rule['레이블'], base_label, re.IGNORECASE):
+                    matched_sub_path = def_rule.get('서브경로')
+                    if not matched_sub_path and def_rule.get('폴더포맷') and '{label}' in def_rule['폴더포맷']:
+                        matched_sub_path = def_rule['폴더포맷'].split('{label}', 1)[1].lstrip('/\\')
+                    break
+
+            # UI 설정 포맷이 {label}로 끝날 경우 하위 특화 서브 경로와 조합
+            if clean_uncen_fmt.endswith('{label}') and matched_sub_path:
+                save_fmt = f"{clean_uncen_fmt}/{matched_sub_path}"
+                # logger.debug(f"[SiteAvBase] Uncensored 이미지 포맷 조합 적용: {clean_uncen_fmt} + /{matched_sub_path} -> {save_fmt}")
+            else:
+                save_fmt = clean_uncen_fmt
+
         elif target_cat == 'WESTERN':
-            default_fmt = "western/scenes/{studio_1}/{studio}"
-            save_fmt = matched_folder_format or setting_source.get("western_image_server_save_format") or default_fmt
+            save_fmt = setting_source.get("western_image_server_save_format") or "western/scenes/{studio_1}/{studio}"
         elif target_cat == 'MOVIE':
             save_fmt = "movie/{year4}"
         elif target_cat in ['KTV', 'FTV']:
@@ -1236,7 +1208,6 @@ class SiteAvBase:
             save_fmt = f"{domain}/{target_cat.lower()}"
 
         rel_dir = save_fmt.format_map(data_tokens).strip('/\\').replace('\\', '/')
-
         rel_dir = rel_dir.replace('\\', '/').strip('/')
         target_folder = os.path.join(local_root, rel_dir.replace('/', os.path.sep))
         server_url_prefix = f"{server_url.rstrip('/')}/{rel_dir}"
