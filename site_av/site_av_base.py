@@ -876,6 +876,19 @@ class SiteAvBase:
     # 리턴타입: redirect 
     @classmethod
     def jav_image(cls, url=None, mode=None, site=None, path=None):
+        # 중첩 프록시 URL 인입 시 순수 원본 이미지 주소 언래핑
+        if url and ('/metadata/normal/jav_image' in url or '/metadata/normal/jav_image_un' in url) and 'url=' in url:
+            try:
+                from urllib.parse import parse_qs, urlparse, unquote_plus
+                parsed_nested = urlparse(url)
+                qs = parse_qs(parsed_nested.query)
+                if 'url' in qs and qs['url']:
+                    url = unquote_plus(qs['url'][0])
+                if not site and 'site' in qs and qs['site']:
+                    site = qs['site'][0]
+            except Exception as e_unwrap:
+                logger.debug(f"[SiteAvBase] 중첩 프록시 URL 언래핑 예외: {e_unwrap}")
+
         # 로컬 파일 요청 처리
         if site == 'system' and path:
             try:
