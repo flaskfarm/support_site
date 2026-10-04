@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import urllib.parse
 
 from .setup import *
 
@@ -10,16 +11,72 @@ def _patch_wavve_profile_lock_session(account, lock_password):
     original_request = account.session.request
 
     def request_with_profile_lock(method, url, **kwargs):
-        if method.upper() == 'POST' and url.rstrip('/').endswith('/v1/signin'):
+        if method.upper() == 'POST' and urllib.parse.urlsplit(url).path.rstrip('/') == '/v1/signin':
             payload = kwargs.get('json')
             if isinstance(payload, dict) and payload.get('type') == 'credential':
                 payload = dict(payload)
-                payload.setdefault('profile_lock_password', lock_password)
+                if not payload.get('profile_lock_password'):
+                    payload['profile_lock_password'] = lock_password
                 kwargs['json'] = payload
         return original_request(method, url, **kwargs)
 
     account.session.request = request_with_profile_lock
     account.session._profile_lock_patched = True
+
+
+def _patch_wavve_profile_lock_refresh(api, lock_passwords):
+    """Wavve replaces account.session after login; patch each replacement too."""
+    if getattr(api, '_profile_lock_refresh_patched', False):
+        return
+    original_refresh = api.refresh_credential
+
+    def refresh_with_profile_lock(name, *args, **kwargs):
+        account = api.accounts.get(name)
+        lock_password = lock_passwords.get(name)
+        if account is not None:
+            _patch_wavve_profile_lock_session(account, lock_password)
+        try:
+            return original_refresh(name, *args, **kwargs)
+        finally:
+            account = api.accounts.get(name)
+            if account is not None:
+                _patch_wavve_profile_lock_session(account, lock_password)
+
+    api.refresh_credential = refresh_with_profile_lock
+    api._profile_lock_refresh_patched = True
+
+
+def _patch_wavve_profile_lock_settings(api, lock_passwords):
+    """Keep saved PINs when the native callback rebuilds account JSON."""
+    if not any(lock_passwords.values()) or getattr(api, '_profile_lock_settings_patched', False):
+        return
+
+    def restore_lock_passwords():
+        accounts_config = json.loads(P.ModelSetting.get('site_wavve_credentials') or '{}')
+        changed = False
+        for name, lock_password in lock_passwords.items():
+            account_config = accounts_config.get(name)
+            if lock_password and isinstance(account_config, dict) and account_config.get('lock_password') != lock_password:
+                account_config['lock_password'] = lock_password
+                changed = True
+        if changed:
+            P.ModelSetting.set(
+                'site_wavve_credentials',
+                json.dumps(accounts_config, ensure_ascii=False, separators=(',', ':'), indent=2),
+            )
+
+    original_update = getattr(api, '_update_account_callback', None)
+    if callable(original_update):
+        def update_with_profile_lock(*args, **kwargs):
+            try:
+                return original_update(*args, **kwargs)
+            finally:
+                restore_lock_passwords()
+
+        api._update_account_callback = update_with_profile_lock
+        api._profile_lock_settings_patched = True
+    # Initialization itself can invoke the native callback before hooks exist.
+    restore_lock_passwords()
 
 
 class ModuleSite(PluginModuleBase):
@@ -330,6 +387,8 @@ class ModuleSite(PluginModuleBase):
         )
         for name, account in SupportWavve.api.accounts.items():
             _patch_wavve_profile_lock_session(account, lock_passwords.get(name))
+        _patch_wavve_profile_lock_refresh(SupportWavve.api, lock_passwords)
+        _patch_wavve_profile_lock_settings(SupportWavve.api, lock_passwords)
         SupportWavve.api.credential_auto_refresh = credential_auto_refresh
         from .site_wavve import SiteWavve
         SiteWavve.initialize(
