@@ -264,6 +264,12 @@ class SiteAvBase:
         if 'dmm.co.jp' in url and cls.site_name == 'dmm':
             request_headers['Cookie'] = 'age_check_done=1'
 
+        if 'fc2.com' in url or 'laxd.com' in url:
+            if 'Referer' not in request_headers:
+                request_headers['Referer'] = 'https://adult.contents.fc2.com/'
+            if 'Cookie' not in request_headers:
+                request_headers['Cookie'] = 'wei6H=1; GDPRCHECK=true'
+
         method = kwargs.pop("method", "GET")
         post_data = kwargs.pop("post_data", None)
         if post_data:
@@ -363,6 +369,12 @@ class SiteAvBase:
 
         if 'dmm.co.jp' in url and cls.site_name == 'dmm':
             request_headers['Cookie'] = 'age_check_done=1'
+
+        if 'fc2.com' in url or 'laxd.com' in url:
+            if 'Referer' not in request_headers:
+                request_headers['Referer'] = 'https://adult.contents.fc2.com/'
+            if 'Cookie' not in request_headers:
+                request_headers['Cookie'] = 'wei6H=1; GDPRCHECK=true'
 
         method = kwargs.pop("method", "GET").upper()
         if "post_data" in kwargs:
@@ -1453,12 +1465,10 @@ class SiteAvBase:
             return
 
         if mode == 'smart_crop':
-            # 가로 이미지(Landscape)인 경우에만 세로 포스터로 크롭 시도
-            w, h = im.size
-            if w > h * 0.8:
-                cropped = cls._smart_crop_image(im)
-                if cropped:
-                    im = cropped
+            # 비율 판정 및 안전 가드는 _smart_crop_image 내부에서 통합 처리
+            cropped = cls._smart_crop_image(im)
+            if cropped:
+                im = cropped
             mode = None
 
         if mode is not None and mode.startswith("crop_"):
@@ -3830,6 +3840,16 @@ class SiteAvBase:
         elif pil_image.mode == 'RGBA': open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGBA2BGR)
         
         h, w = open_cv_image.shape[:2]
+        current_ratio = h / float(w) if w > 0 else 0
+
+        # 비율 판별 (가로형 vs 이미 적절한 세로 포스터 vs 핸드폰 촬영 등 초세로형)
+        is_landscape = (current_ratio < 1.25)
+        is_ultra_tall = (current_ratio >= 1.55)
+
+        # 이미 목표 비율(1.4225)과 유사한 일반 세로 포스터 범위는 크롭 불필요
+        if not is_landscape and not is_ultra_tall:
+            logger.debug(f"[{cls.site_name}] Smart Crop 건너뜀: 이미 포스터 규격 범위의 세로 이미지 ({w}x{h}, 비율:{current_ratio:.3f})")
+            return None
         
         # detect_image = cls._apply_clahe(open_cv_image) # 필터링이 오히려 해가 되는 경우가 있음...옵션화?
         detect_image = open_cv_image
@@ -3852,11 +3872,11 @@ class SiteAvBase:
                     
                     body = people_list[body_idx]
                     
-                    # (1) 크기 검증: 몸통 너비(tw)의 1.5배 OR 높이(th)의 0.6배 중 하나만 만족하면 OK
+                    # 크기 검증: 몸통 너비(tw)의 1.5배 OR 높이(th)의 0.6배 중 하나만 만족하면 OK
                     body_w = body['box'][2]; body_h = body['box'][3]
                     is_size_safe = (face['w'] < body_w * 1.5) or (face['w'] < body_h * 0.6)
 
-                    # (2) 거리 검증: 몸통 너비의 2.0배 이내 OR 높이의 0.5배 이내
+                    # 거리 검증: 몸통 너비의 2.0배 이내 OR 높이의 0.5배 이내
                     tx, ty, tw, th = body['box']
                     tcx, tcy = tx + tw//2, ty + th//2 
                     dist_y = abs(face['cy'] - tcy)
@@ -3888,7 +3908,7 @@ class SiteAvBase:
 
             valid_faces = rescued_list
 
-        # [Multi-face Filtering]
+        # Multi-face Filtering
         final_faces = []
         for f in valid_faces:
             if not f.get('is_virtual') or f.get('body_idx') == 0:
@@ -3903,9 +3923,31 @@ class SiteAvBase:
             logger.debug(f"[{cls.site_name}] No valid faces found after filtering.")
             return None
 
-        # Center Calculation Phase
-        final_center_x = None
         main_face = valid_faces[0]
+
+        # 세로로 아주 긴 이미지(핸드폰 세로 촬영 등)인 경우: 너비 100% 보존 및 높이 기준 인물 중심 크롭
+        if is_ultra_tall:
+            target_h = int(w * target_ratio)
+            logger.debug(f"[{cls.site_name}] Smart Crop: 초세로형 이미지 감지 ({w}x{h}, 비율:{current_ratio:.3f}). 너비 100% 보존 및 위아래 인물 중심 크롭 (목표높이:{target_h})")
+
+            face_cy = main_face.get('cy', h // 2)
+            face_h = main_face.get('h', 0)
+
+            # 포스터 상단 1/3 지점에 얼굴이 오도록 이상적 헤드룸 마진 산출
+            head_margin = int(face_h * 0.4)
+            ideal_y1 = face_cy - (target_h // 3) - head_margin
+
+            crop_y1 = max(0, ideal_y1)
+            crop_y2 = crop_y1 + target_h
+
+            if crop_y2 > h:
+                crop_y2 = h
+                crop_y1 = max(0, h - target_h)
+
+            return pil_image.crop((0, crop_y1, w, crop_y2))
+
+        # Center Calculation Phase (일반 가로 이미지에 대한 기존 가로 크롭 파이프라인)
+        final_center_x = None
         target_w = int(h / target_ratio)
         
         def get_face_weight(angle):
@@ -3918,11 +3960,8 @@ class SiteAvBase:
 
         shifted_cx = None
         is_multi_face = False
-        target_w = int(h / target_ratio) 
 
-        # [A] Multi-face Logic
-        shifted_cx = None
-        is_multi_face = False
+        # Multi-face Logic
         if len(valid_faces) > 1:
             for sub_face in valid_faces[1:]:
                 # 메인 얼굴과 서브 얼굴
@@ -3965,7 +4004,7 @@ class SiteAvBase:
         if shifted_cx:
             final_center_x = shifted_cx
         else:
-            # [B] Single Face Logic (Shift-based)
+            # Single Face Logic (Shift-based)
             main_body = None
             if main_face.get('body_idx') != -1 and people_list:
                 main_body = people_list[main_face['body_idx']]
@@ -3978,7 +4017,7 @@ class SiteAvBase:
             
             final_center_x = base_center
             
-            # 2. Calculate Shifts (S_face, S_limb, S_gaze)
+            # Calculate Shifts (S_face, S_limb, S_gaze)
             shift_face = 0
             shift_limb = 0
             shift_gaze = 0
@@ -3986,7 +4025,7 @@ class SiteAvBase:
             # [LOG] Shift Details
             log_details = []
 
-            # (1) Face Shift
+            # Face Shift
             if main_body:
                 fw_weight = get_face_weight(main_body['angle'])
                 if main_face.get('is_virtual'): 
@@ -3998,7 +4037,7 @@ class SiteAvBase:
                 shift_face = int((main_face['cx'] - main_body['cx']) * fw_weight)
                 log_details.append(f"Face:{shift_face}(W:{fw_weight:.2f})")
 
-            # (2) Limbs Shift
+            # Limbs Shift
             if main_body:
                 limbs = main_body.get('limbs_subset_x', [])
                 if limbs and len(limbs) >= 2:
@@ -4056,7 +4095,7 @@ class SiteAvBase:
 
                     log_details.append(f"Limb:{shift_limb}(Sz:{size_damp:.2f}, An:{angle_damp:.2f})")
 
-            # (3) Gaze Shift
+            # Gaze Shift
             face_yaw = main_face.get('yaw', 0.0)
             fw = main_face['w']
             
@@ -4094,7 +4133,7 @@ class SiteAvBase:
                     
                     log_details.append(f"Gaze:{shift_gaze}(Tr:{yaw_trust_factor:.1f}, Sz:{size_damp:.1f}, An:{angle_damp:.1f})")
 
-            # 3. Merge Shifts
+            # Merge Shifts
             shifts = [shift_face, shift_limb, shift_gaze]
             pos_shifts = [s for s in shifts if s > 0]
             neg_shifts = [s for s in shifts if s < 0]
@@ -4108,7 +4147,7 @@ class SiteAvBase:
             details_str = ", ".join(log_details)
             logger.debug(f"[{cls.site_name}] Shift Info: Base:{base_center} -> Final:{final_center_x} | {details_str}")
 
-            # 4. Tilt Correction
+            # Tilt Correction
             tilt_angle = main_face.get('angle', 0.0)
             if abs(tilt_angle) > 10:
                 eff_angle = abs(tilt_angle)
@@ -4118,7 +4157,7 @@ class SiteAvBase:
                 if tilt_angle > 0: final_center_x += shift_px
                 else: final_center_x -= shift_px
 
-            # 5. Safety: Torso Protection
+            # Safety: Torso Protection
             if main_body:
                 torso_cx = main_body['cx']
                 torso_w = main_body['box'][2]
@@ -4144,7 +4183,7 @@ class SiteAvBase:
         crop_x1 = final_center_x - half_crop
         crop_x2 = final_center_x + half_crop
         
-        # [Safety: Fit Face (Cosine S-Curve + Directional)]
+        # Safety: Fit Face (Cosine S-Curve + Directional)
         if not is_multi_face and main_face['w'] > 0:
             fx1, fx2, fw = main_face['x1'], main_face['x2'], main_face['w']
             if fw < target_w:
@@ -4192,8 +4231,13 @@ class SiteAvBase:
                     crop_x1 = safe_fx2 - target_w
                     logger.debug(f"[{cls.site_name}] Fit Face: RIGHT {diff}px (Base:{base_padding}, Extra:{extra_pad})")
 
-        if crop_x1 < 0: crop_x1 = 0; crop_x2 = target_w
-        elif crop_x2 > w: crop_x2 = w; crop_x1 = w - target_w
+        # 원본 너비 경계를 초과하지 않도록 안전 클램핑
+        if crop_x1 < 0:
+            crop_x1 = 0
+            crop_x2 = min(w, target_w)
+        elif crop_x2 > w:
+            crop_x2 = w
+            crop_x1 = max(0, w - target_w)
 
         return pil_image.crop((crop_x1, 0, crop_x2, h))
 
