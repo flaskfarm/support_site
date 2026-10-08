@@ -678,17 +678,22 @@ class SiteFc2com(SiteAvBase):
                     entity.plot = ''
 
                 # Date
-                date_xpath = '//p[contains(text(), "Sale Day") or contains(text(), "販売日")]/text()'
-                if date_text := tree.xpath(date_xpath):
-                    if match_date := re.search(r'(\d{4})[./-](\d{2})[./-](\d{2})', date_text[0]):
-                        entity.premiered = f"{match_date.group(1)}-{match_date.group(2)}-{match_date.group(3)}"
+                date_nodes = tree.xpath('//p[contains(., "Sale Day") or contains(., "販売日")]//text() | //div[contains(@class, "items_article_headerInfo")]//text()')
+                matched_premiered = None
+                for dt_str in date_nodes:
+                    if match_date := re.search(r'(\d{4})[./-](\d{2})[./-](\d{2})', dt_str):
+                        matched_premiered = f"{match_date.group(1)}-{match_date.group(2)}-{match_date.group(3)}"
+                        entity.premiered = matched_premiered
                         entity.year = int(match_date.group(1))
-                else:
+                        break
+
+                if not matched_premiered:
                     entity.year = 1900
 
-                # Seller / Studio
-                if seller := tree.xpath('//a[contains(@href, "/users/")]/text()'):
-                    val = seller[0].strip()
+                # Seller / Studio (users, profile 링크 및 헤더 영역 포괄 탐색)
+                seller_nodes = tree.xpath('//a[contains(@href, "/users/") or contains(@href, "/profile/")]/text() | //div[contains(@class, "items_article_headerInfo")]//a[contains(@href, "user")]/text()')
+                if seller_nodes:
+                    val = seller_nodes[0].strip()
                     entity.original['studio'] = val; entity.studio = val
                     entity.original['director'] = val; entity.director = val
 
@@ -718,10 +723,15 @@ class SiteFc2com(SiteAvBase):
                     if art_url:
                         raw_image_urls['arts'].append(art_url)
 
-                # Trailer (API 사용)
-                if cls.config['use_extras']:
-                    video_info = cls._fetch_video_api_info(code_part)
-                    if video_info and video_info.get('video'):
+                # Trailer 및 Video API 포스터 연동
+                video_info = cls._fetch_video_api_info(code_part)
+                if video_info:
+                    # HTML에서 PL 이미지를 못 찾았거나 유효하지 않은 경우, Video API의 고화질 포스터를 최우선 대체
+                    if not raw_image_urls.get('pl') and video_info.get('poster'):
+                        raw_image_urls['pl'] = video_info['poster']
+                        logger.debug(f"[{cls.site_name}] Video API 포스터를 PL로 채택: {raw_image_urls['pl']}")
+
+                    if cls.config.get('use_extras') and video_info.get('video'):
                         raw_sample_url = video_info['video']
                         if not hasattr(entity, 'original') or entity.original is None:
                             entity.original = {}
@@ -869,9 +879,14 @@ class SiteFc2com(SiteAvBase):
             has_image = bool(entity.thumb) or bool(entity.fanart)
             has_valid_year = entity.year != 1900
             has_seller = bool(entity.studio)
-            has_valid_title = entity.title and entity.title != entity.ui_code
-            
-            if not (has_image or has_valid_year or has_seller or has_valid_title):
+            has_valid_title = bool(
+                (entity.tagline and entity.tagline != entity.ui_code) or
+                (entity.original.get('tagline') and entity.original['tagline'] != entity.ui_code) or
+                (entity.title and entity.title != entity.ui_code)
+            )
+            has_valid_content = bool(entity.plot or entity.extras)
+
+            if not (has_image or has_valid_year or has_seller or has_valid_title or has_valid_content):
                 logger.warning(f"[{cls.site_name}] Info validation failed: Missing essential metadata for {code_part}. Marking as not found.")
                 return None
 
