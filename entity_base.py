@@ -118,6 +118,7 @@ class EntityActor(object):
             'actor_idx' : self.actor_idx,
             'gender' : self.gender,
             'extra_info' : self.extra_info,
+            **({'media_src': self.media_src} if isinstance(getattr(self, 'media_src', None), dict) else {}),
         }
 
 
@@ -170,6 +171,7 @@ class EntityMovie(object):
         self.site = site
         self.code = code  # uniqueid
 
+        self.ui_code = None
         self.title = None
         self.originaltitle = None
         self.sorttitle = None
@@ -211,6 +213,7 @@ class EntityMovie(object):
         return {
             'site' : self.site,
             'code' : self.code,
+            'ui_code' : getattr(self, 'ui_code', None) or self.originaltitle or self.code,
             'title' : self.title,
             'originaltitle' : self.originaltitle,
             'sorttitle' : self.sorttitle,

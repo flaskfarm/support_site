@@ -845,7 +845,10 @@ class SiteDmm(SiteAvBase):
                     title_text_raw = title_node_dvd[0].text_content().strip()
                     original_tagline_dvd = cls.A_P(title_text_raw)
                     entity.original['tagline'] = original_tagline_dvd
-                    entity.tagline = cls.trans_by_llm(original_tagline_dvd)
+                    if skip_trans:
+                        entity.tagline = original_tagline_dvd
+                    else:
+                        entity.tagline = cls.trans_by_llm(original_tagline_dvd)
                 info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
                 table_rows_dvd = tree.xpath(info_table_xpath_dvd)
                 premiered_shouhin_dvd, premiered_hatsubai_dvd, premiered_haishin_dvd = None, None, None   
@@ -968,7 +971,10 @@ class SiteDmm(SiteAvBase):
                     if plot_text_raw: 
                         original_plot_dvd = cls.A_P(plot_text_raw)
                         entity.original['plot'] = original_plot_dvd
-                        entity.plot = cls.trans_by_llm(original_plot_dvd)
+                        if skip_trans:
+                            entity.plot = original_plot_dvd
+                        else:
+                            entity.plot = cls.trans_by_llm(original_plot_dvd)
                 else: 
                     logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
 

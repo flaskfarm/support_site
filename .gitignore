@@ -8,3 +8,26 @@ kakaotv.py
 cppl.py
 dl_watcha.py
 tmp/
+
+# Agent-generated local tests, reports and temporary artifacts (not for distribution)
+/tests/
+/test-results/
+/playwright-report/
+/agent_tmp/
+/codex_tmp/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.tmp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+.DS_Store
