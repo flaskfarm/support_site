@@ -235,10 +235,10 @@ class SiteAvdbs(SiteAvBase):
         ).rstrip('/')
 
         for opt in parsed_order:
-            if opt == "google_fileid":
+            if opt in ["google_fileid", "gds"]:
                 val = str(r_dict.get('google_fileid') or '').strip()
                 if val and val.lower() not in ['null', 'none', '403', '404', 'deprecated', 'unavailable']:
-                    return f"https://drive.google.com/thumbnail?id={val}"
+                    return f"https://drive.google.com/thumbnail?id={val}&sz=s0"
 
             elif opt == "local_img_path":
                 path_val = str(r_dict.get('local_img_path') or '').strip()

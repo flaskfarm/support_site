@@ -124,9 +124,6 @@ class SiteStashdb(SiteAvBase):
             "movie_title_format": db.get(f"{prefix}_movie_title_format"),
 
             "image_mode": db.get(f"{prefix}_image_mode"),
-            "image_server_local_path": db.get(f"{prefix}_image_server_local_path"),
-            "image_server_url": db.get(f"{prefix}_image_server_url"),
-            "image_server_rewrite": db.get_bool(f"{prefix}_image_server_rewrite"),
             "western_image_format": db.get(f"{prefix}_image_server_save_format") or "/western/{studio_1}/{studio}",
 
             "use_smart_crop": db.get_bool("western_use_smart_crop"),

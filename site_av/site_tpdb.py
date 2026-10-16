@@ -88,9 +88,6 @@ class SiteTpdb(SiteAvBase):
             "movie_title_format": db.get(f"{prefix}_movie_title_format"),
 
             "image_mode": db.get(f"{prefix}_image_mode"),
-            "image_server_local_path": db.get(f"{prefix}_image_server_local_path"),
-            "image_server_url": db.get(f"{prefix}_image_server_url"),
-            "image_server_rewrite": db.get_bool(f"{prefix}_image_server_rewrite"),
             "western_image_format": db.get(f"{prefix}_image_server_save_format") or "/western/{studio}",   
 
             # Western 전용 Smart Crop 토글 (모델 경로 등은 super().set_config에서 이미 로드됨)
@@ -185,7 +182,7 @@ class SiteTpdb(SiteAvBase):
             merged_img.paste(img_back, (0, 0))
             merged_img.paste(img_front, (img_back.width, 0))
 
-            temp_filepath = cls.save_pil_to_temp(merged_img)
+            temp_filepath = cls.save_pil_to_temp(merged_img, image_format="JPEG")
             
             img_back.close()
             img_front.close()
@@ -801,35 +798,14 @@ class SiteTpdb(SiteAvBase):
             }
 
             if front_cover and back_cover:
-                merged_landscape_path = cls._merge_covers(back_cover, front_cover)
+                raw_image_urls['merge_covers'] = (back_cover, front_cover)
             
-            if merged_landscape_path:
-                raw_image_urls['pl'] = None 
-            else:
-                raw_image_urls['pl'] = front_cover
+            raw_image_urls['pl'] = front_cover
 
         # 고유 코드(WPS_ID / WPM_ID) 기반으로 이미지 저장
         entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
-
-        # 병합된 Landscape 이미지 로컬/서버 적용
-        if merged_landscape_path:
-            logger.debug(f"[{cls.site_name}] Applying merged landscape image...")
-            if image_mode == 'image_server' and getattr(entity, 'image_server_target_folder', None):
-                target_folder = entity.image_server_target_folder
-                url_prefix = entity.image_server_url_prefix
-                system_landscape_path = os.path.join(target_folder, f"{entity.ui_code.lower()}_pl.jpg")
-                
-                try:
-                    os.makedirs(target_folder, exist_ok=True)
-                    shutil.copy(merged_landscape_path, system_landscape_path)
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=f"{url_prefix}/{entity.ui_code.lower()}_pl.jpg"))
-                except Exception as e_copy:
-                    logger.error(f"[{cls.site_name}] Error copying merged image to server folder: {e_copy}")
-            else:
-                from urllib.parse import urlencode
-                param = urlencode({'site': 'system', 'path': merged_landscape_path})
-                url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{param}"
-                entity.thumb.append(EntityThumb(aspect="landscape", value=url))
+        if content_type == 'movie' and back_cover:
+            entity.original.setdefault('thumb', {})['back_cover'] = back_cover
 
         # 원래 UI Code 복구
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
