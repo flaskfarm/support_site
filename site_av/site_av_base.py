@@ -3006,66 +3006,44 @@ class SiteAvBase:
 
     @classmethod
     def get_translated_tag(cls, *args):
-        """
-        영구 사용자 사전({path_data}/db/av_tags.json) 단일 Flat 사전을 조회/갱신합니다.
-        우선순위: av_tags.json(유저 최우선) -> constants.py(AV_GENRE) -> 실시간 번역
-        """
+        """사용자 지정 JSON -> 표준 AV 사전 -> 자동 번역 캐시 -> 실시간 번역."""
         if not args:
             return ""
-        tag = args[-1] # 단일 인자 또는 (category, tag) 호출 모두 지원
+        tag = args[-1]
         if not tag or not isinstance(tag, str):
             return tag
 
-        tag = re.sub(r'^[#\s]+|[#\s]+$', '', tag.strip())
+        from ..av_tag_store import (
+            normalize_tag_text, canonical_tag_name, lookup_user_tag,
+            lookup_standard_tag, lookup_cached_tag, store_cached_tag,
+            translation_is_usable,
+        )
+        tag = normalize_tag_text(tag)
         if not tag:
             return tag
 
-        # 1. 이미 한글이 포함된 태그는 사전 조회/저장 없이 즉시 원문 반환
+        # User overrides (including an intentional empty value) always win.
+        translated = lookup_user_tag(path_data, tag)
+        if translated is not None:
+            return translated
+        translated = lookup_standard_tag(tag)
+        if translated is not None:
+            return translated
         if SiteUtilAv.is_include_hangul(tag):
             return tag
+        translated = lookup_cached_tag(path_data, tag)
+        if translated is not None:
+            return translated
 
-        # 2. 영구 사용자 사전({path_data}/db/av_tags.json) 로드
-        user_tags_path = os.path.join(path_data, 'db', 'av_tags.json')
-        tags = {}
-        if os.path.exists(user_tags_path):
-            try:
-                with open(user_tags_path, "r", encoding="utf8") as f:
-                    tags = json.load(f)
-            except Exception:
-                tags = {}
-
-        # 3. [1순위] 사용자 영구 사전(av_tags.json) 조회 -> 유저 커스텀 수정값 최우선 반영
-        if tag in tags:
-            return tags[tag]
-
-        # 4. [2순위] 개발자 표준 사전(AV_GENRE) 조회 -> 기본 사전 일치 시 즉시 반환 (중복 저장 방지)
-        try:
-            from ..constants import AV_GENRE
-            if tag in AV_GENRE:
-                return AV_GENRE[tag]
-        except Exception as e_const:
-            logger.debug(f"[{cls.site_name}] AV_GENRE 참조 오류: {e_const}")
-
-        # 5. [3순위] 두 사전 모두에 없는 신규 태그만 실시간 번역 수행
-        is_english = bool(re.match(r'^[a-zA-Z0-9\s\-_.,/&()]+$', tag))
-        source_lang = "en" if is_english else "ja"
-        trans_text = cls.trans(tag, source=source_lang, target="ko")
-
-        if trans_text:
-            trans_text = re.sub(r'\s+', '', trans_text)
-
-        # 6. 번역된 신규 단어만 사용자 사전(av_tags.json)에 추가 저장
-        if trans_text and trans_text != tag and SiteUtilAv.is_include_hangul(trans_text):
-            tags[tag] = trans_text
-            try:
-                os.makedirs(os.path.dirname(user_tags_path), exist_ok=True)
-                with open(user_tags_path, "w", encoding="utf8") as f:
-                    json.dump(tags, f, indent=4, ensure_ascii=False)
-            except Exception as e_write:
-                logger.error(f"[{cls.site_name}] av_tags.json 저장 실패: {e_write}")
-            return trans_text
-
-        return tag
+        # Auto detection also handles Chinese genre names from JAVDB/JavBus.
+        source_lang = 'en' if tag.isascii() and re.search('[A-Za-z]', tag) else 'auto'
+        translated = cls.trans(tag, source=source_lang, target='ko')
+        if isinstance(translated, str):
+            translated = re.sub(r'\s+', '', translated)
+        if not translation_is_usable(tag, translated):
+            logger.debug('[AV Tags] 번역 캐시 미등록: %s', tag)
+            return canonical_tag_name(tag)
+        return store_cached_tag(path_data, tag, translated, source_lang) or translated
 
 
     @classmethod
