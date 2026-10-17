@@ -206,11 +206,6 @@ class SiteCarib(SiteAvBase):
                 except Exception:
                     continue
 
-        # [3순위] PL (Jacket도 갤러리 세로도 없을 시)
-        if not poster_url:
-            poster_url = landscape_url
-            logger.debug(f"[{cls.site_name}] Fallback to PL(l_l.jpg).")
-
         entity.original['thumb'] = {
             'poster': jacket_url or '',
             'landscape': landscape_url or ''

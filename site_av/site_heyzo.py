@@ -324,10 +324,8 @@ class SiteHeyzo(SiteAvBase):
                     except Exception:
                         continue
 
-        # [4단계] 최후의 수단
         if not poster_url:
-            poster_url = tmp.get('json_poster') or tmp.get('mobile_poster') or landscape_url
-            logger.debug(f"[{cls.site_name}] Fallback to original poster/PL.")
+            poster_url = cls.select_portrait_source([tmp.get('json_poster'), tmp.get('mobile_poster')])
 
         entity.original['thumb'] = {
             'poster': tmp.get('json_poster') or tmp.get('mobile_poster') or '',
