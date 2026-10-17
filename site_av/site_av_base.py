@@ -3155,14 +3155,45 @@ class SiteAvBase:
             return text
 
 
+    @staticmethod
+    def parse_image_file_mode(value):
+        mode = str(value if value is not None else '').strip() or '0644'
+        if not re.fullmatch(r'0?[0-7]{3}', mode):
+            raise ValueError('이미지 파일 권한은 0644, 0664 같은 3~4자리 8진수로 입력하세요.')
+        return int(mode, 8)
+
+    @classmethod
+    def local_image_file_mode(cls, parent):
+        setting = cls.MetadataSetting
+        if setting is None:
+            # Storage-only batches may run before the first site's set_config().
+            try:
+                from metadata.setup import P as MetadataPlugin
+                setting = MetadataPlugin.ModelSetting
+            except ImportError:
+                pass
+        config = cls.config or {}
+        root = ((setting.get('jav_censored_image_server_local_path') if setting is not None else None)
+                or config.get('image_server_local_path') or os.path.join(path_data, 'images'))
+        if os.path.commonpath((os.path.realpath(parent), os.path.realpath(root))) != os.path.realpath(root):
+            return None
+        value = (setting.get('jav_censored_image_server_file_mode') if setting is not None
+                 else config.get('image_server_file_mode'))
+        return cls.parse_image_file_mode(value)
+
     @classmethod
     def publish_image_file(cls, source, destination):
         parent = os.path.dirname(os.path.abspath(destination))
+        mode = cls.local_image_file_mode(parent)
         os.makedirs(parent, exist_ok=True)
         fd, staging = tempfile.mkstemp(prefix='.image_', suffix='.tmp', dir=parent)
         os.close(fd)
         try:
             shutil.copyfile(source, staging)
+            # mkstemp creates mode 0600. Set the final mode before atomic publication,
+            # without changing the process-wide umask or exposing partial image data.
+            if mode is not None:
+                os.chmod(staging, mode)
             os.replace(staging, destination)
         finally:
             if os.path.exists(staging):
