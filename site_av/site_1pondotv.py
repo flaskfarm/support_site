@@ -299,10 +299,8 @@ class Site1PondoTv(SiteAvBase):
                     except Exception:
                         continue
 
-        # [4단계] Fallback (최후의 수단)
         if not poster_url:
-            poster_url = movie_thumb_url or landscape_url
-            logger.debug(f"[{cls.site_name}] Fallback to MovieThumb/PL.")
+            poster_url = cls.select_portrait_source([movie_thumb_url])
 
         entity.original['thumb'] = {
             'poster': movie_thumb_url or '',

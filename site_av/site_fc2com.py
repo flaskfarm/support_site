@@ -2,6 +2,7 @@
 import re
 import os
 import time
+import traceback
 from threading import Lock
 from lxml import html
 from urllib.parse import urljoin, urlencode
@@ -226,6 +227,16 @@ class SiteFc2com(SiteAvBase):
         return cls._fetch_video_api_info(match_id.group(1))
 
 
+    @staticmethod
+    def _extract_description_text(element):
+        # text_content() includes script/style bodies; remove them before flattening.
+        # Work on a copy so other metadata/image selectors can still use the page.
+        from copy import deepcopy
+        content = deepcopy(element)
+        for node in content.xpath('.//script | .//style | .//iframe | .//noscript | .//template'):
+            node.drop_tree()
+        return content.text_content().strip()
+
     @classmethod
     def _get_javten_web_content(cls, code_part):
         """Javten.com에서 품번으로 검색하고 상세 정보를 파싱합니다."""
@@ -240,22 +251,29 @@ class SiteFc2com(SiteAvBase):
         detail_url = None
         tree = None
 
+        def is_detail_url(url):
+            return bool(re.search(r'/video/[^?#]*id' + re.escape(str(code_part)) + r'(?!\d)', str(url or '')))
+
         try:
             if use_fs:
                 logger.debug(f"[{cls.site_name}] FlareSolverr is enabled for Javten. Requesting: {search_url}")
-                tree, _, solution_url = cls._get_page_content_flaresolverr(search_url, proxy_url=javten_proxy_url, return_solution_url=True)
-                if tree is not None and solution_url:
-                    if '/video/' in solution_url and f"id{code_part}" in solution_url:
+                search_tree, _, solution_url = cls._get_page_content_flaresolverr(search_url, proxy_url=javten_proxy_url, return_solution_url=True)
+                if search_tree is not None and solution_url:
+                    if is_detail_url(solution_url):
                         detail_url = solution_url
+                        tree = search_tree
                     else:
-                        for item in tree.xpath('//div[contains(@class, "padding-item")]'):
+                        for item in search_tree.xpath('//div[contains(@class, "padding-item")]'):
                             title_el = item.xpath('.//h4[contains(@class, "card-title")]')
                             if title_el and code_part in title_el[0].text_content():
                                 link_el = item.xpath('.//a[contains(@class, "stretched-link")]/@href')
                                 if link_el:
-                                    detail_url = urljoin("https://javten.com", link_el[0])
-                                    tree_detail, _, _ = cls._get_page_content_flaresolverr(detail_url, proxy_url=javten_proxy_url, return_solution_url=True)
-                                    if tree_detail is not None:
+                                    candidate_url = urljoin("https://javten.com", link_el[0])
+                                    if not is_detail_url(candidate_url):
+                                        continue
+                                    tree_detail, _, final_url = cls._get_page_content_flaresolverr(candidate_url, proxy_url=javten_proxy_url, return_solution_url=True)
+                                    if tree_detail is not None and is_detail_url(final_url):
+                                        detail_url = final_url
                                         tree = tree_detail
                                     break
             else:
@@ -263,7 +281,7 @@ class SiteFc2com(SiteAvBase):
                 if not res or res.status_code != 200:
                     return None
 
-                if '/video/' in res.url and f"id{code_part}" in res.url:
+                if is_detail_url(res.url):
                     detail_url = res.url
                     tree = html.fromstring(res.text)
                 else:
@@ -273,16 +291,24 @@ class SiteFc2com(SiteAvBase):
                         if title_el and code_part in title_el[0].text_content():
                             link_el = item.xpath('.//a[contains(@class, "stretched-link")]/@href')
                             if link_el:
-                                detail_url = urljoin("https://javten.com", link_el[0])
-                                res_detail = cls.get_response_cffi(detail_url, proxies=proxies)
-                                if res_detail and res_detail.status_code == 200:
+                                candidate_url = urljoin("https://javten.com", link_el[0])
+                                if not is_detail_url(candidate_url):
+                                    continue
+                                res_detail = cls.get_response_cffi(candidate_url, proxies=proxies)
+                                if res_detail and res_detail.status_code == 200 and is_detail_url(res_detail.url):
+                                    detail_url = res_detail.url
                                     tree = html.fromstring(res_detail.text)
                                 break
         except Exception as e:
             logger.error(f"[{cls.site_name}] Javten Web Search Error: {e}")
             return None
 
-        if tree is None: return None
+        if tree is None or not detail_url:
+            logger.debug(f"[{cls.site_name} - Javten] 작품 상세 검색 결과 없음: {code_part}")
+            return None
+        if any(re.match(r'^探す\s*[:：]', node.text_content().strip()) for node in tree.xpath('//h5')):
+            logger.debug(f"[{cls.site_name} - Javten] 검색 화면만 반환되어 매칭 제외: {code_part}")
+            return None
 
         ret = {'source': 'javten_web', 'detail_url': detail_url}
         try:
@@ -309,8 +335,10 @@ class SiteFc2com(SiteAvBase):
                         h_val, m_val = int(time_match.group(1)), int(time_match.group(2))
                         ret['runtime'] = h_val * 60 + m_val
 
-            if raw_title:
-                ret['tagline'] = raw_title
+            if not raw_title or re.fullmatch(r'(?:Javten(?:\.com)?|探す\s*[:：].*)', raw_title, flags=re.IGNORECASE):
+                logger.debug(f"[{cls.site_name} - Javten] 작품 제목 없는 페이지 매칭 제외: {code_part}")
+                return None
+            ret['tagline'] = raw_title
 
             # 출시일 및 연도 추출 (videos:published_time, published_time, release_date)
             date_candidates = tree.xpath('//meta[contains(@property, "published_time") or contains(@name, "published_time") or contains(@property, "release_date")]/@content')
@@ -372,7 +400,7 @@ class SiteFc2com(SiteAvBase):
             # 줄거리 본문
             plot_divs = tree.xpath('//div[contains(@class, "col") and contains(@class, "des")]')
             if plot_divs:
-                raw_plot = plot_divs[0].text_content()
+                raw_plot = cls._extract_description_text(plot_divs[0])
                 ret['plot'] = cls.A_P(raw_plot)
 
             return ret
@@ -662,7 +690,7 @@ class SiteFc2com(SiteAvBase):
                 
                 if not plot_text:
                     if plot_el := tree.xpath('//div[contains(@class, "items_article_Contents")]'):
-                        plot_text = plot_el[0].text_content().strip()
+                        plot_text = cls._extract_description_text(plot_el[0])
                 
                 if plot_text:
                     # Plot 맨 앞의 품번 제거 (FC2-PPV-xxxx)
@@ -860,11 +888,6 @@ class SiteFc2com(SiteAvBase):
                                 logger.debug(f"[{cls.site_name}] Smart Crop success.")
                 except Exception as e:
                     logger.error(f"[{cls.site_name}] Smart Crop Error: {e}")
-
-            # 크롭 실패 또는 미적용 시 가로 커버(PL)를 포스터로 폴백 지정
-            if not raw_image_urls.get('poster') and raw_image_urls.get('pl'):
-                raw_image_urls['poster'] = raw_image_urls['pl']
-                logger.debug(f"[{cls.site_name}] 포스터 미생성 -> PL을 포스터로 폴백 지정")
 
             entity.original['thumb'] = {
                 'poster': '',
