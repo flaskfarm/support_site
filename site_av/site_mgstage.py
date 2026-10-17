@@ -2,7 +2,8 @@ import re
 from lxml import html
 import urllib.parse as py_urllib_parse
 
-from ..constants import AV_STUDIO, MGS_CODE_LEN, MGS_LABEL_MAP, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO
+from ..constants import AV_STUDIO, AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO
+from ..mgs_constants import get_mgs_maps
 from ..entity_av import EntityAVSearch
 from ..entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from ..setup import P, logger
@@ -38,6 +39,7 @@ class SiteMgstage(SiteAvBase):
         try:
             # 1. 입력된 키워드를 전역 파서로 우선 정규화
             normalized_ui_code, _, _ = cls._parse_ui_code(keyword)
+            mgs_label_map, mgs_code_len = get_mgs_maps()
 
             search_keywords_to_try = [normalized_ui_code] # 기본 검색어 우선 추가
 
@@ -45,12 +47,12 @@ class SiteMgstage(SiteAvBase):
             if '-' in normalized_ui_code:
                 input_label, code_part = normalized_ui_code.split('-', 1)
                 
-                mgs_labels_to_try = MGS_LABEL_MAP.get(input_label.upper())
+                mgs_labels_to_try = mgs_label_map.get(input_label.upper())
                 if mgs_labels_to_try:
                     # MGS_LABEL_MAP에 있는 모든 후보 레이블에 대해 검색어 생성
                     for mgs_label in mgs_labels_to_try:
                         temp_code_part = code_part
-                        if codelen := MGS_CODE_LEN.get(mgs_label):
+                        if codelen := mgs_code_len.get(mgs_label):
                             try: temp_code_part = str(int(temp_code_part)).zfill(codelen)
                             except ValueError: pass
                         
