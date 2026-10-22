@@ -12,6 +12,7 @@ import requests
 import ssl
 import tempfile
 import shutil
+import copy
 
 from datetime import timedelta
 from urllib.parse import urlencode, unquote_plus, urlparse
@@ -25,7 +26,7 @@ from requests.adapters import HTTPAdapter
 from support import SupportDiscord
 from ..setup import *
 from ..site_util_av import SiteUtilAv
-from ..entity_base import EntityThumb
+from ..entity_base import EntityThumb, EntityExtra
 from ..trans_util import TransUtil
 from ..entity_base import EntityActor
 
@@ -82,6 +83,53 @@ def fix_broken_korean_bytes(text):
         from ..setup import logger
         logger.error(f"Critical error in fix_broken_korean_bytes: {e_main}")
         return text
+
+class _AvTask:
+    """One bounded lane per process, with cooperative waits in gevent workers."""
+    from threading import Lock
+    _lock = Lock()
+    _executors = {}
+    _semaphores = {}
+
+    def __init__(self, lane, callback):
+        from flask import current_app, has_app_context
+        app = current_app._get_current_object() if has_app_context() else None
+        lane_key = (os.getpid(), lane)
+
+        def execute():
+            if app is not None:
+                with app.app_context():
+                    return callback()
+            return callback()
+
+        try:
+            from gevent import monkey
+            cooperative = monkey.is_module_patched('socket')
+        except ImportError:
+            cooperative = False
+        if cooperative:
+            import gevent
+            from gevent.lock import Semaphore
+            semaphore = self._semaphores.setdefault(lane_key, Semaphore(1))
+
+            def run():
+                with semaphore:
+                    return execute()
+            self._future = gevent.spawn(run)
+            self._cooperative = True
+            gevent.sleep(0)
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with self._lock:
+                if lane_key not in self._executors:
+                    self._executors[lane_key] = ThreadPoolExecutor(max_workers=1, thread_name_prefix='av-' + lane)
+                executor = self._executors[lane_key]
+            self._future = executor.submit(execute)
+            self._cooperative = False
+
+    def result(self):
+        return self._future.get() if self._cooperative else self._future.result()
+
 
 class SiteAvBase:
     site_name = None
@@ -285,10 +333,11 @@ class SiteAvBase:
                 return res
             except requests.exceptions.RequestException as e:
                 if attempt < max_attempts - 1:
-                    logger.debug(f"get_response 일시 오류 ({attempt + 1}/{max_attempts}회 재시도 대기): {url} (사유: {e})")
+                    logger.debug('get_response 재시도: site=%s attempt=%s/%s error=%s',
+                                 cls.site_name, attempt + 1, max_attempts, type(e).__name__)
                     time.sleep(1.0)
                     continue
-                logger.error(f"get_response (requests) error for {url}: {e}")
+                logger.error('get_response 실패: site=%s error=%s', cls.site_name, type(e).__name__)
                 return None
 
 
@@ -399,7 +448,7 @@ class SiteAvBase:
             )
             return res
         except Exception as e:
-            logger.error(f"get_response_cffi error for {url}: {e}")
+            logger.error('get_response_cffi 실패: site=%s error=%s', cls.site_name, type(e).__name__)
             return None
 
 
@@ -451,6 +500,67 @@ class SiteAvBase:
         else:
             return f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_video_un?{urlencode(param)}"
     
+    @classmethod
+    def queue_translation(cls, entity, field, text, amateur=False):
+        """Keep raw values usable until the serial translation lane is joined."""
+        setattr(entity, field, text)
+        plan = getattr(entity, '_av_translation_plan', None)
+        if plan is None:
+            plan = {}
+            entity._av_translation_plan = plan
+        plan[field] = (text, amateur)
+
+    @classmethod
+    def start_translation_work(cls, entity):
+        if getattr(entity, '_av_translation_job', None) is not None:
+            return
+        plan = getattr(entity, '_av_translation_plan', None)
+        if not plan:
+            return
+        from types import SimpleNamespace
+        # Amateur title matching only needs names, not the mutable actor objects.
+        actor_context = SimpleNamespace(actor=[{
+            key: (actor.get(key) if isinstance(actor, dict) else getattr(actor, key, '')) or ''
+            for key in ('name_org', 'name_ko')
+        } for actor in (entity.actor or [])])
+        tasks = sorted(plan.items(), key=lambda item: (item[0] == 'plot', item[0]))
+        entity._av_translation_plan = {}
+        # The model provenance and settings belong to this item, not the site class.
+        translator = type(cls.__name__ + 'Translation', (cls,), {
+            'config': copy.deepcopy(cls.config), '_last_used_llm_model': None})
+
+        def translate():
+            values = {}
+            for field, (raw, amateur) in tasks:
+                try:
+                    value = (translator.trans_amateur_title(raw, entity=actor_context) if amateur
+                             else translator.trans_by_llm(raw))
+                    values[field] = (raw, value if value is not None else raw)
+                except Exception:
+                    logger.exception('[%s] %s 번역 실패, 원문 유지', cls.site_name, field)
+                    values[field] = (raw, raw)
+            return values, translator._last_used_llm_model
+        entity._av_translation_job = _AvTask('translation', translate)
+
+    @classmethod
+    def finish_translation_work(cls, entity):
+        cls.start_translation_work(entity)
+        while getattr(entity, '_av_translation_job', None) is not None:
+            job = entity._av_translation_job
+            try:
+                values, model = job.result()
+                for field, (raw, translated) in values.items():
+                    if getattr(entity, field, None) == raw:
+                        setattr(entity, field, translated)
+                if model:
+                    entity.extra_info['ai_translator'] = f'Ollama ({model})'
+            except Exception:
+                logger.exception('[%s] 번역 작업 실패, 원문 유지', cls.site_name)
+            finally:
+                entity._av_translation_job = None
+            cls.start_translation_work(entity)
+        entity.extra_info.setdefault('ai_translator', 'Default (FF)')
+
     @classmethod
     def trans(cls, text, source="ja", target="ko"):
         text = text.strip()
@@ -1393,6 +1503,24 @@ class SiteAvBase:
 
     @classmethod
     def default_jav_image(cls, image_url, mode=None):
+        if mode == 'merge_covers':
+            # Reconstruct display-only composites on demand; never publish a
+            # reference to a temporary merge file or enter a storage journal.
+            import json
+            merged = None
+            try:
+                covers = json.loads(image_url)
+                if not isinstance(covers, list) or len(covers) != 2 or not all(
+                        isinstance(url, str) and url.startswith(('http://', 'https://')) for url in covers):
+                    abort(400)
+                merged = cls._merge_covers(*covers)
+                if not merged:
+                    abort(502)
+                with open(merged, 'rb') as fp:
+                    return Response(fp.read(), mimetype='image/jpeg')
+            finally:
+                if merged and os.path.isfile(merged):
+                    os.remove(merged)
         res = cls.get_response(image_url, verify=False, timeout=8, max_retries=2)
 
         if res is None:
@@ -1479,7 +1607,11 @@ class SiteAvBase:
 
             for op in operations:
                 new_im = None
-                if op in ['r', 'l'] and is_first_op and num_ops > 1:
+                if op == 'lb':
+                    width, height = processed_im.size
+                    margin = int(height * 0.0533)
+                    new_im = processed_im.crop((0, margin, width, height - margin))
+                elif op in ['r', 'l'] and is_first_op and num_ops > 1:
                     width, height = processed_im.size
                     box = (width / 2, 0, width, height) if op == 'r' else (0, 0, width / 2, height)
                     new_im = processed_im.crop(box)
@@ -1623,6 +1755,74 @@ class SiteAvBase:
 
     @classmethod
     def process_image_data(cls, entity, raw_image_urls, ps_url_from_cache, extra_opts=None, **kwargs):
+        """Join all media/translation work before metadata can be saved or published."""
+        opts = dict(extra_opts or {})
+        opts.update(kwargs)
+        cls.start_translation_work(entity)
+        video_job = None
+        video_data = None
+        original_video = {}
+        if opts.get('_parallel_media') and not opts.get('is_validating'):
+            try:
+                from metadata.util_preview import MetaPreviewUtil
+                video_data = copy.deepcopy(entity.as_dict())
+                for key in ('trailer', 'trailer_url'):
+                    if key in entity.__dict__:
+                        video_data[key] = copy.deepcopy(entity.__dict__[key])
+                video_data['original'] = copy.deepcopy(getattr(entity, 'original', None) or {})
+                video_data.setdefault('extra_info', {}).pop('_media_replacements', None)
+                original_video = copy.deepcopy(video_data.get('original') or {})
+                video_opts = dict(opts)
+                video_opts.pop('_parallel_media', None)
+                video_opts['_defer_extras'] = True
+                category = 'WESTERN' if cls.module_char == 'W' else 'JAV_UNCEN' if cls.module_char == 'E' else 'JAV_CEN'
+                video_job = _AvTask('video', lambda: MetaPreviewUtil.complete_media(
+                    video_data, category, video_opts.get('media_path'), options=video_opts))
+            except Exception:
+                logger.exception('[%s] 영상 병렬 작업 시작 실패, 후속 직렬 처리 사용', cls.site_name)
+        try:
+            return cls._process_image_data(entity, raw_image_urls, ps_url_from_cache, extra_opts=opts)
+        finally:
+            cls.finish_translation_work(entity)
+            if video_job is not None:
+                try:
+                    report = video_job.result()
+                    extra = video_data.get('extra_info') or {}
+                    for key in ('source_video_path', 'trailer_video', 'preview_clip', 'trailer', 'trailer_url', 'extras'):
+                        if key in extra:
+                            entity.extra_info[key] = copy.deepcopy(extra[key])
+                        else:
+                            entity.extra_info.pop(key, None)
+                    errors = dict(entity.extra_info.get('media_errors') or {})
+                    for key in ('video', 'trailer', 'preview'):
+                        errors.pop(key, None)
+                        if key in (extra.get('media_errors') or {}):
+                            errors[key] = copy.deepcopy(extra['media_errors'][key])
+                    if errors:
+                        entity.extra_info['media_errors'] = errors
+                    else:
+                        entity.extra_info.pop('media_errors', None)
+                    entity.extra_info.setdefault('_media_replacements', []).extend(extra.get('_media_replacements') or [])
+                    for key in ('extras', 'trailer', 'trailer_url'):
+                        if key in (video_data.get('original') or {}):
+                            entity.original[key] = copy.deepcopy(video_data['original'][key])
+                        elif key in original_video:
+                            entity.original.pop(key, None)
+                    for key in ('trailer', 'trailer_url'):
+                        if key in video_data:
+                            setattr(entity, key, copy.deepcopy(video_data[key]))
+                        elif key in entity.__dict__:
+                            setattr(entity, key, None)
+                    entity.extras = [EntityExtra(entry.get('content_type', 'trailer'),
+                        entry.get('title', ''), entry.get('mode', 'mp4'), entry.get('content_url', ''),
+                        premiered=entry.get('premiered'), thumb=entry.get('thumb'))
+                        for entry in video_data.get('extras') or [] if isinstance(entry, dict)]
+                    entity.extra_info['_parallel_video_report'] = report
+                except Exception:
+                    logger.exception('[%s] 영상 병렬 결과 수집 실패, 후속 직렬 처리 사용', cls.site_name)
+
+    @classmethod
+    def _process_image_data(cls, entity, raw_image_urls, ps_url_from_cache, extra_opts=None, **kwargs):
         opts = dict(extra_opts or {})
         opts.update(kwargs)
 
@@ -1816,9 +2016,13 @@ class SiteAvBase:
             sources = decision_data['final_image_sources']
             covers = raw_image_urls.get('merge_covers')
             if covers and not sources.get('skip_landscape_download'):
-                merged_filepath = cls._merge_covers(*covers)
-                if merged_filepath:
-                    sources['landscape_source'] = merged_filepath
+                if image_mode == 'ff_proxy':
+                    import json
+                    sources['landscape_source'] = cls.proxy_image_reference(json.dumps(list(covers)), 'merge_covers')
+                else:
+                    merged_filepath = cls._merge_covers(*covers)
+                    if merged_filepath:
+                        sources['landscape_source'] = merged_filepath
 
             # --- 3. 최종 이미지 정보 생성 위임 ---
             from metadata.util_metadata import MetaUtil
@@ -1830,8 +2034,7 @@ class SiteAvBase:
             logger.error(f"Error during process_image_data for {entity.code}: {e}")
             logger.error(traceback.format_exc())
         finally:
-            # Proxy mode serves the generated image later; stored modes can release it now.
-            if merged_filepath and image_mode != 'ff_proxy' and os.path.exists(merged_filepath):
+            if merged_filepath and os.path.exists(merged_filepath):
                 os.remove(merged_filepath)
             if temp_filepath_to_clean and os.path.exists(temp_filepath_to_clean):
                 try:
@@ -2261,6 +2464,13 @@ class SiteAvBase:
 
 
     @classmethod
+    def proxy_image_reference(cls, source, mode=None):
+        params = {'site': cls.site_name, 'url': source}
+        if mode:
+            params['mode'] = mode
+        return f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{urlencode(params)}"
+
+    @classmethod
     def finalize_images_for_entity(cls, entity, decision_data):
         try:
             return cls._finalize_images_for_entity(entity, decision_data)
@@ -2315,7 +2525,15 @@ class SiteAvBase:
         if image_mode == 'ff_proxy':
             # 파이프라인 내부에서는 프록시를 씌우지 않고 순수 원본 URL을 그대로 유지
             if poster_source:
-                entity.thumb.append(EntityThumb(aspect="poster", value=poster_source))
+                mode = poster_mode
+                if mode == 'local_file' and image_sources.get('temp_poster_filepath'):
+                    poster_source = image_sources.get('processed_from_url') or (entity.original.get('thumb') or {}).get('landscape')
+                    mode = 'smart_crop' if cls.module_char == 'W' else 'crop_lb_r'
+                if poster_source:
+                    if mode and mode != 'local_file':
+                        entity.extra_info.setdefault('image_transforms', {})['poster'] = {'url': poster_source, 'mode': mode, 'site': cls.site_name}
+                        poster_source = cls.proxy_image_reference(poster_source, mode)
+                    entity.thumb.append(EntityThumb(aspect="poster", value=poster_source))
             if landscape_source:
                 landscape_url = landscape_source
                 if os.path.isfile(landscape_source):
@@ -2532,7 +2750,7 @@ class SiteAvBase:
                     else:
                         dest_rel_pl = f"{rel_dir}/{code_lower}_pl.jpg".strip('/')
                         from metadata.util_preview import MetaPreviewUtil
-                        if not rewrite:
+                        if not rewrite and not getattr(gdrive_data.get('remote_files'), 'listing_complete', False):
                             existing_pl_fid = MetaPreviewUtil.get_remote_file_id(dest_rel_pl, category=target_cat, is_image=True)
                             if existing_pl_fid:
                                 stored_paths[str(existing_pl_fid)] = dest_rel_pl
@@ -2570,7 +2788,7 @@ class SiteAvBase:
                     else:
                         dest_rel_p = f"{rel_dir}/{code_lower}_p.jpg".strip('/')
                         from metadata.util_preview import MetaPreviewUtil
-                        if not rewrite:
+                        if not rewrite and not getattr(gdrive_data.get('remote_files'), 'listing_complete', False):
                             existing_p_fid = MetaPreviewUtil.get_remote_file_id(dest_rel_p, category=target_cat, is_image=True)
                             if existing_p_fid:
                                 stored_paths[str(existing_p_fid)] = dest_rel_p
@@ -3436,10 +3654,13 @@ class SiteAvBase:
     @classmethod
     def save_actor_image(cls, entity_actor, skip_existing=None):
         try:
+            from metadata.mod_meta_db import ModuleMetaDb
+            if ModuleMetaDb.sync_registered_actor_image(entity_actor, 'JAV', skip_existing):
+                return
             return cls._save_actor_image(entity_actor, skip_existing=skip_existing)
         except Exception as exc:
             cls.set_image_storage_state(entity_actor, 'failed', str(exc))
-            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', exc)
+            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', type(exc).__name__)
 
     @classmethod
     def _save_actor_image(cls, entity_actor, skip_existing=None):
@@ -3613,10 +3834,13 @@ class SiteAvBase:
     @classmethod
     def save_western_actor_image(cls, entity_actor, skip_existing=None):
         try:
+            from metadata.mod_meta_db import ModuleMetaDb
+            if ModuleMetaDb.sync_registered_actor_image(entity_actor, 'WESTERN', skip_existing):
+                return
             return cls._save_western_actor_image(entity_actor, skip_existing=skip_existing)
         except Exception as exc:
             cls.set_image_storage_state(entity_actor, 'failed', str(exc))
-            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', exc)
+            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', type(exc).__name__)
 
     @classmethod
     def _save_western_actor_image(cls, entity_actor, skip_existing=None):

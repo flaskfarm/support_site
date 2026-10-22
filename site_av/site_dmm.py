@@ -522,6 +522,19 @@ class SiteDmm(SiteAvBase):
     # region INFO
 
     @classmethod
+    def _resolve_ps_source(cls, code, opts):
+        cached = cls._ps_url_cache.get(code, {}) or {}
+        url = opts.get('ps_url')
+        main = cached.get('main_content_type')
+        supported = [kind for kind in CONTENT_TYPE_PRIORITY if kind != 'unknown']
+        order = ([main] if main in supported else []) + supported
+        kind = opts.get('content_type')
+        if kind not in supported:
+            kind = next((key for key in order if cached.get(key) and
+                         (not url or cached[key] == url)), 'videoa')
+        return url or cached.get(kind), kind
+
+    @classmethod
     def info(cls, code, keyword=None, extra_opts=None, **kwargs):
         opts = dict(extra_opts or {})
         opts.update(kwargs)
@@ -559,23 +572,7 @@ class SiteDmm(SiteAvBase):
         is_validating = opts.get('is_validating', False)
         is_rescued = opts.get('is_rescued', False)
 
-        cached_data = cls._ps_url_cache.get(code, {})
-        ps_url_from_search_cache = opts.get('ps_url')
-
-        if not ps_url_from_search_cache:
-            content_type_from_cache = cached_data.get('main_content_type', 'unknown')
-            if (content_type_from_cache == 'unknown' or not cached_data.get(content_type_from_cache)) and cached_data: 
-                for prio_type in CONTENT_TYPE_PRIORITY:
-                    if prio_type in cached_data and cached_data.get(prio_type): 
-                        content_type_from_cache = prio_type
-                        break
-            ps_url_from_search_cache = cached_data.get(content_type_from_cache) if content_type_from_cache != 'unknown' else None
-        else:
-            content_type_from_cache = 'unknown' # ps_url이 직접 전달되면 타입을 알 수 없음
-
-        current_content_type = content_type_from_cache
-        if current_content_type == 'unknown':
-            current_content_type = 'videoa'
+        ps_url_from_search_cache, current_content_type = cls._resolve_ps_source(code, opts)
 
         #if not cls._ensure_age_verified():
         #    logger.error(f"DMM Info ({current_content_type}): Age verification failed for {code}.")
@@ -743,9 +740,9 @@ class SiteDmm(SiteAvBase):
                     if skip_trans:
                         entity.tagline = original_tagline
                     elif entity.content_type == 'amateur':
-                        entity.tagline = cls.trans_amateur_title(original_tagline, entity=entity)
+                        cls.queue_translation(entity, 'tagline', original_tagline, amateur=True)
                     else:
-                        entity.tagline = cls.trans_by_llm(original_tagline)
+                        cls.queue_translation(entity, 'tagline', original_tagline)
 
                 plot_val = content.get('description')
                 if plot_val: 
@@ -754,7 +751,7 @@ class SiteDmm(SiteAvBase):
                     if skip_trans:
                         entity.plot = original_plot
                     else:
-                        entity.plot = cls.trans_by_llm(original_plot)
+                        cls.queue_translation(entity, 'plot', original_plot)
 
                 premiered_val = content.get('deliveryStartDate')
                 if premiered_val and isinstance(premiered_val, str):
@@ -848,7 +845,7 @@ class SiteDmm(SiteAvBase):
                     if skip_trans:
                         entity.tagline = original_tagline_dvd
                     else:
-                        entity.tagline = cls.trans_by_llm(original_tagline_dvd)
+                        cls.queue_translation(entity, 'tagline', original_tagline_dvd)
                 info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
                 table_rows_dvd = tree.xpath(info_table_xpath_dvd)
                 premiered_shouhin_dvd, premiered_hatsubai_dvd, premiered_haishin_dvd = None, None, None   
@@ -974,7 +971,7 @@ class SiteDmm(SiteAvBase):
                         if skip_trans:
                             entity.plot = original_plot_dvd
                         else:
-                            entity.plot = cls.trans_by_llm(original_plot_dvd)
+                            cls.queue_translation(entity, 'plot', original_plot_dvd)
                 else: 
                     logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
 
@@ -1000,7 +997,7 @@ class SiteDmm(SiteAvBase):
                 if skip_trans:
                     entity.tagline = fallback_tagline
                 else:
-                    entity.tagline = cls.trans_by_llm(fallback_tagline)
+                    cls.queue_translation(entity, 'tagline', fallback_tagline)
 
         except Exception as e_meta:
             logger.exception(f"DMM Meta parsing error for {code}: {e_meta}")
@@ -1013,7 +1010,7 @@ class SiteDmm(SiteAvBase):
                 content_type=entity.content_type,
                 api_data=api_data
             )
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, extra_opts=opts)
+            image_request = (raw_image_urls, ps_url_from_search_cache, dict(opts))
 
         except Exception as e:
             logger.exception(f"DMM: Error during image processing for {code}: {e}")
@@ -1028,6 +1025,12 @@ class SiteDmm(SiteAvBase):
                 entity = cls.shiroutoname_info(entity)
             except Exception as e_shirouto:
                 logger.debug(f"[{cls.site_name}] Amateur Shiroutoname 보정 중 오류 ({entity.originaltitle}): {e_shirouto}")
+
+        if 'image_request' in locals():
+            try:
+                entity = cls.process_image_data(entity, image_request[0], image_request[1], extra_opts=image_request[2])
+            except Exception:
+                logger.exception("[%s] 이미지 처리 위임 실패: %s", cls.site_name, code)
 
         # Landscape(PL) 이미지 폴백 로직
         try:
@@ -1056,12 +1059,7 @@ class SiteDmm(SiteAvBase):
             logger.error(f"DMM Info: Error during landscape fallback logic for {code}: {e_fallback}")
             logger.error(traceback.format_exc())
 
-        used_model = getattr(cls, '_last_used_llm_model', None)
-        if used_model:
-            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
-            cls._last_used_llm_model = None
-        else:
-            entity.extra_info['ai_translator'] = "Default (FF)"
+        cls.finish_translation_work(entity)
 
         logger.debug(f"DMM ({entity.content_type}): __info finished for {code}. UI: {entity.ui_code}")
         return entity

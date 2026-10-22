@@ -412,6 +412,19 @@ class SiteFc2com(SiteAvBase):
 
 
     @classmethod
+    def _valid_official_product(cls, tree, code_part):
+        if tree is None or tree.xpath('//div[contains(@class, "items_notfound_header")]'):
+            return False
+        headers = tree.xpath('//div[contains(@class, "items_article_headerInfo")]//h3')
+        if not headers or not ''.join(headers[0].itertext()).strip():
+            return False
+        # Identity metadata is optional; if present it must describe the
+        # requested product, not a redirect/cached page for another article.
+        urls = tree.xpath('//meta[@property="og:url"]/@content | //link[@rel="canonical"]/@href')
+        ids = [match.group(1) for url in urls for match in [re.search(r'/article/(\d+)', url)] if match]
+        return not ids or all(value == str(code_part) for value in ids)
+
+    @classmethod
     def search(cls, keyword, manual=False):
         match = re.search(r'(\d{6,7})', keyword)
         if not match: return {'ret': 'success', 'data': []}
@@ -436,7 +449,7 @@ class SiteFc2com(SiteAvBase):
                     page_source_text = res.text
                     tree = html.fromstring(page_source_text)
 
-                if tree is not None and not tree.xpath('//div[contains(@class, "items_notfound_header")]'):
+                if cls._valid_official_product(tree, code_part):
                     # 캐시 저장
                     if page_source_text:
                         with cls._cache_lock:
@@ -633,7 +646,11 @@ class SiteFc2com(SiteAvBase):
                 if code_part in cls._page_source_cache:
                     cached_page, timestamp = cls._page_source_cache[code_part]
                     if (time.time() - timestamp) < cls.CACHE_EXPIRATION_SECONDS:
-                        tree = html.fromstring(cached_page)
+                        candidate_tree = html.fromstring(cached_page)
+                        if cls._valid_official_product(candidate_tree, code_part):
+                            tree = candidate_tree
+                        else:
+                            del cls._page_source_cache[code_part]
                         # del cls._page_source_cache[code_part] # 캐시 유지
                     else:
                         del cls._page_source_cache[code_part]
@@ -647,7 +664,7 @@ class SiteFc2com(SiteAvBase):
                     logger.error(f"[{cls.site_name}] Info CFFI Exception: {e}")
 
             # 정상 페이지 확인
-            if tree and not tree.xpath('//div[contains(@class, "items_notfound_header")]'):
+            if cls._valid_official_product(tree, code_part):
                 is_data_found = True
                 logger.debug(f"[{cls.site_name} - Official] Info Found: {code_part}")
                 
@@ -683,7 +700,7 @@ class SiteFc2com(SiteAvBase):
                 if skip_trans:
                     entity.tagline = cleaned_text
                 else:
-                    entity.tagline = cls.trans_by_llm(cleaned_text)
+                    cls.queue_translation(entity, 'tagline', cleaned_text)
 
                 # Plot
                 plot_text = head_meta.get('description') or head_meta.get('og:description')
@@ -700,7 +717,7 @@ class SiteFc2com(SiteAvBase):
                     if skip_trans:
                         entity.plot = entity.original['plot']
                     else:
-                        entity.plot = cls.trans_by_llm(entity.original['plot'])
+                        cls.queue_translation(entity, 'plot', entity.original['plot'])
                 else:
                     entity.original['plot'] = ''
                     entity.plot = ''
@@ -790,7 +807,7 @@ class SiteFc2com(SiteAvBase):
                     if skip_trans:
                         entity.tagline = val
                     else:
-                        entity.tagline = cls.trans_by_llm(val)
+                        cls.queue_translation(entity, 'tagline', val)
 
                 if javten_web_data.get('plot'):
                     raw_plot = javten_web_data['plot']
@@ -800,7 +817,7 @@ class SiteFc2com(SiteAvBase):
                     if skip_trans:
                         entity.plot = val
                     else:
-                        entity.plot = cls.trans_by_llm(val)
+                        cls.queue_translation(entity, 'plot', val)
 
                 if javten_web_data.get('seller'):
                     val = javten_web_data['seller']
@@ -895,9 +912,15 @@ class SiteFc2com(SiteAvBase):
             }
 
             try:
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
+                image_request = (raw_image_urls, None, dict(opts))
             except Exception as e:
                 logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
+
+            if 'image_request' in locals():
+                try:
+                    entity = cls.process_image_data(entity, image_request[0], image_request[1], extra_opts=image_request[2])
+                except Exception:
+                    logger.exception("[%s] 이미지 처리 위임 실패: %s", cls.site_name, code)
 
             has_image = bool(entity.thumb) or bool(entity.fanart)
             has_valid_year = entity.year != 1900
@@ -913,12 +936,7 @@ class SiteFc2com(SiteAvBase):
                 logger.warning(f"[{cls.site_name}] Info validation failed: Missing essential metadata for {code_part}. Marking as not found.")
                 return None
 
-            used_model = getattr(cls, '_last_used_llm_model', None)
-            if used_model:
-                entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
-                cls._last_used_llm_model = None
-            else:
-                entity.extra_info['ai_translator'] = "Default (FF)"
+            cls.finish_translation_work(entity)
 
             return entity
 
