@@ -15,6 +15,8 @@ from .site_av_base import SiteAvBase
 
 class ActorDict(dict):
     def __getattr__(self, key):
+        if key.startswith('__') and key.endswith('__'):
+            raise AttributeError(key)
         return self.get(key)
 
     def __setattr__(self, key, value):
@@ -635,7 +637,7 @@ class SiteTpdb(SiteAvBase):
         if skip_trans or not cls.config.get('trans_title', True):
             entity.tagline = cleaned_tagline
         else:
-            entity.tagline = cls.trans_by_llm(cleaned_tagline)
+            cls.queue_translation(entity, 'tagline', cleaned_tagline)
         
         if item_data.get('date'):
             entity.premiered = str(item_data['date'])
@@ -668,7 +670,7 @@ class SiteTpdb(SiteAvBase):
             if skip_trans:
                 entity.plot = cleaned_plot
             else:
-                entity.plot = cls.trans_by_llm(entity.original['plot'])
+                cls.queue_translation(entity, 'plot', entity.original['plot'])
 
         females, males = [], []
         for performer in item_data.get('performers', []):
@@ -762,6 +764,9 @@ class SiteTpdb(SiteAvBase):
                 poster_url = portrait_poster_url
             elif portrait_poster_url:
                 poster_url = portrait_poster_url
+            elif use_smart_crop and landscape_cover_url and (opts.get('image_mode') or cls.config.get('image_mode')) == 'ff_proxy':
+                poster_url = cls.proxy_image_reference(landscape_cover_url, 'smart_crop')
+                entity.extra_info.setdefault('image_transforms', {})['poster'] = {'url': landscape_cover_url, 'mode': 'smart_crop', 'site': cls.site_name}
             elif use_smart_crop and landscape_cover_url:
                 try:
                     res_pl = cls.get_response(landscape_cover_url, timeout=10)
@@ -798,9 +803,7 @@ class SiteTpdb(SiteAvBase):
             raw_image_urls['pl'] = front_cover
 
         # 고유 코드(WPS_ID / WPM_ID) 기반으로 이미지 저장
-        entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
-        if content_type == 'movie' and back_cover:
-            entity.original.setdefault('thumb', {})['back_cover'] = back_cover
+        image_request = (raw_image_urls, None, dict(opts))
 
         # 원래 UI Code 복구
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
@@ -827,11 +830,10 @@ class SiteTpdb(SiteAvBase):
             except Exception as e_trailer:
                 logger.error(f"[{cls.site_name}] Error adding trailer: {e_trailer}")
 
-        used_model = getattr(cls, '_last_used_llm_model', None)
-        if used_model:
-            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
-            cls._last_used_llm_model = None
-        else:
-            entity.extra_info['ai_translator'] = "Default (FF)"
+        if 'image_request' in locals():
+            entity = cls.process_image_data(entity, image_request[0], image_request[1], extra_opts=image_request[2])
+        if content_type == 'movie' and back_cover:
+            entity.original.setdefault('thumb', {})['back_cover'] = back_cover
+        cls.finish_translation_work(entity)
 
         return entity

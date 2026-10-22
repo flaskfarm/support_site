@@ -210,7 +210,7 @@ class EntityMovie(object):
 
 
     def as_dict(self):
-        return {
+        result = {
             'site' : self.site,
             'code' : self.code,
             'ui_code' : getattr(self, 'ui_code', None) or self.originaltitle or self.code,
@@ -238,6 +238,9 @@ class EntityMovie(object):
             'mpaa' : self.mpaa,
             'extra_info' : self.extra_info
         }
+        if hasattr(self, 'content_type'):
+            result['content_type'] = self.content_type
+        return result
 
 
 

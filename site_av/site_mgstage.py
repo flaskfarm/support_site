@@ -245,7 +245,7 @@ class SiteMgstage(SiteAvBase):
                 if skip_trans:
                     entity.tagline = original_tagline
                 else:
-                    entity.tagline = cls.trans_amateur_title(original_tagline, entity=entity)
+                    cls.queue_translation(entity, 'tagline', original_tagline, amateur=True)
 
             try:
                 dd_nodes = tree.xpath('//*[@id="introduction"]/dd')
@@ -268,7 +268,7 @@ class SiteMgstage(SiteAvBase):
                         if skip_trans:
                             entity.plot = cleaned_plot
                         else:
-                            entity.plot = cls.trans_by_llm(cleaned_plot)
+                            cls.queue_translation(entity, 'plot', cleaned_plot)
             except Exception as e_plot:
                 logger.error(f"MGS: Failed to parse plot for {code}: {e_plot}")
 
@@ -412,7 +412,7 @@ class SiteMgstage(SiteAvBase):
         # 이미지 처리 위임
         try:
             raw_image_urls = cls.__img_urls(tree)
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, extra_opts=opts)
+            image_request = (raw_image_urls, ps_url_from_search_cache, dict(opts))
 
         except Exception as e:
             logger.exception(f"MGS: Error during image processing delegation for {code}: {e}")
@@ -473,12 +473,12 @@ class SiteMgstage(SiteAvBase):
         except Exception as e_vr_check:
             logger.error(f"[{cls.site_name}] Error during VR check: {e_vr_check}")
 
-        used_model = getattr(cls, '_last_used_llm_model', None)
-        if used_model:
-            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
-            cls._last_used_llm_model = None
-        else:
-            entity.extra_info['ai_translator'] = "Default (FF)"
+        if 'image_request' in locals():
+            try:
+                entity = cls.process_image_data(entity, image_request[0], image_request[1], extra_opts=image_request[2])
+            except Exception:
+                logger.exception("[%s] 이미지 처리 위임 실패: %s", cls.site_name, code)
+        cls.finish_translation_work(entity)
 
         logger.debug(f"MGS ({cls.module_char}): __info finished for {code}. UI Code: {entity.ui_code}")
         return entity

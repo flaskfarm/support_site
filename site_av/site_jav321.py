@@ -239,7 +239,7 @@ class SiteJav321(SiteAvBase):
                     if skip_trans:
                         entity.plot = cleaned_plot
                     else:
-                        entity.plot = cls.trans_by_llm(cleaned_plot)
+                        cls.queue_translation(entity, 'plot', cleaned_plot)
 
             info_container_node_list = tree.xpath('//div[contains(@class, "panel-body")]//div[contains(@class, "col-md-9")]')
             if info_container_node_list:
@@ -352,7 +352,7 @@ class SiteJav321(SiteAvBase):
                 if skip_trans:
                     entity.tagline = cleaned_tagline
                 else:
-                    entity.tagline = cls.trans_by_llm(cleaned_tagline)
+                    cls.queue_translation(entity, 'tagline', cleaned_tagline)
 
             if not entity.tagline and entity.title: entity.tagline = entity.title
 
@@ -361,7 +361,7 @@ class SiteJav321(SiteAvBase):
 
             try:
                 raw_image_urls = cls.__img_urls(tree)
-                entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_search_cache, extra_opts=opts)
+                image_request = (raw_image_urls, ps_url_from_search_cache, dict(opts))
 
             except Exception as e:
                 logger.exception(f"Jav321: Error during image processing delegation for {code}: {e}")
@@ -415,12 +415,12 @@ class SiteJav321(SiteAvBase):
             except Exception as e_vr_check:
                 logger.error(f"[{cls.site_name}] Error during VR check: {e_vr_check}")
 
-            used_model = getattr(cls, '_last_used_llm_model', None)
-            if used_model:
-                entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
-                cls._last_used_llm_model = None
-            else:
-                entity.extra_info['ai_translator'] = "Default (FF)"
+            if 'image_request' in locals():
+                try:
+                    entity = cls.process_image_data(entity, image_request[0], image_request[1], extra_opts=image_request[2])
+                except Exception:
+                    logger.exception("[%s] 이미지 처리 위임 실패: %s", cls.site_name, code)
+            cls.finish_translation_work(entity)
 
             logger.debug(f"Jav321: __info finished for {code}. UI Code: {ui_code_for_image}")
             return entity

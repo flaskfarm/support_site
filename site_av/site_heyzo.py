@@ -256,7 +256,7 @@ class SiteHeyzo(SiteAvBase):
         if skip_trans:
             entity.tagline = cleaned_title
         else:
-            entity.tagline = cls.trans_by_llm(cleaned_title)
+            cls.queue_translation(entity, 'tagline', cleaned_title)
         entity.premiered = tmp.get('premiered')
         entity.year = tmp.get('year')
         
@@ -338,7 +338,7 @@ class SiteHeyzo(SiteAvBase):
                 'pl': landscape_url,
                 'arts': gallery_urls,
             }
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
+            image_request = (raw_image_urls, None, dict(opts))
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation for {code}: {e}")
 
@@ -378,7 +378,7 @@ class SiteHeyzo(SiteAvBase):
             if skip_trans:
                 entity.plot = raw_plot
             else:
-                entity.plot = cls.trans_by_llm(raw_plot)
+                cls.queue_translation(entity, 'plot', raw_plot)
         else:
             entity.plot = ''
 
@@ -403,11 +403,11 @@ class SiteHeyzo(SiteAvBase):
             except Exception as e:
                 logger.error(f"[{cls.site_name}] Trailer processing error: {e}")
 
-        used_model = getattr(cls, '_last_used_llm_model', None)
-        if used_model:
-            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
-            cls._last_used_llm_model = None
-        else:
-            entity.extra_info['ai_translator'] = "Default (FF)"
+        if 'image_request' in locals():
+            try:
+                entity = cls.process_image_data(entity, image_request[0], image_request[1], extra_opts=image_request[2])
+            except Exception:
+                logger.exception("[%s] 이미지 처리 위임 실패: %s", cls.site_name, code)
+        cls.finish_translation_work(entity)
 
         return entity

@@ -180,7 +180,7 @@ class SitePaco(SiteAvBase):
             if skip_trans:
                 entity.tagline = cleaned_title
             else:
-                entity.tagline = cls.trans_by_llm(entity.original['tagline'])
+                cls.queue_translation(entity, 'tagline', entity.original['tagline'])
 
         if json_data.get('Series'):
             entity.original['series'] = json_data['Series']
@@ -193,7 +193,7 @@ class SitePaco(SiteAvBase):
             if skip_trans:
                 entity.plot = entity.original['plot']
             else:
-                entity.plot = cls.trans_by_llm(entity.original['plot'])
+                cls.queue_translation(entity, 'plot', entity.original['plot'])
 
         if json_data.get('Duration'):
             entity.runtime = int(json_data.get('Duration')) // 60
@@ -379,7 +379,7 @@ class SitePaco(SiteAvBase):
                 'arts': arts_urls,
             }
 
-            entity = cls.process_image_data(entity, raw_image_urls, ps_url_from_cache=None, extra_opts=opts)
+            image_request = (raw_image_urls, None, dict(opts))
         except Exception as e:
             logger.exception(f"[{cls.site_name}] Error during image processing delegation: {e}")
 
@@ -416,11 +416,11 @@ class SitePaco(SiteAvBase):
             try: entity.ratings.append(EntityRatings(float(json_data['AvgRating']), max=5, name=cls.site_name))
             except: pass
 
-        used_model = getattr(cls, '_last_used_llm_model', None)
-        if used_model:
-            entity.extra_info['ai_translator'] = f"Ollama ({used_model})"
-            cls._last_used_llm_model = None
-        else:
-            entity.extra_info['ai_translator'] = "Default (FF)"
+        if 'image_request' in locals():
+            try:
+                entity = cls.process_image_data(entity, image_request[0], image_request[1], extra_opts=image_request[2])
+            except Exception:
+                logger.exception("[%s] 이미지 처리 위임 실패: %s", cls.site_name, code)
+        cls.finish_translation_work(entity)
 
         return entity
