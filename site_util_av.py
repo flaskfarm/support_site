@@ -145,7 +145,11 @@ class SiteUtilAv:
                 return image_source
             api_path = "image_proxy" if effective_image_mode == "ff_proxy" else "discord_proxy"
             tmp = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/{api_path}?url=" + quote_plus(image_source)
-            if proxy_url: tmp += "&proxy_url=" + quote_plus(proxy_url)
+            if proxy_url and effective_image_mode == "ff_proxy":
+                from .ssrf_guard import image_proxy_site
+                site = image_proxy_site(proxy_url, F.PluginManager.get_plugin_instance('metadata'))
+                if site:
+                    tmp += '&proxy_site=' + quote_plus(site)
             if crop_mode: tmp += "&crop_mode=" + quote_plus(crop_mode)
             return tmp
 
@@ -567,6 +571,15 @@ class SiteUtilAv:
             logger.warning(f"Discord_proxy_image: Invalid image_url (not a string or empty): {image_url}")
             return image_url
 
+        ssrf_safe = kwargs.pop("ssrf_safe", False)
+        if ssrf_safe:
+            from .ssrf_guard import validate
+            # Even cache hits must not turn private input into a redirect.
+            # Legacy client proxy arguments have no meaning on public routes.
+            kwargs.pop("proxy_url", None)
+            kwargs.pop("proxy_ref", None)
+            validate(image_url)
+
         cache = CacheUtil.get_cache()
         cached_data_for_url = cache.get(image_url, {})
 
@@ -591,6 +604,11 @@ class SiteUtilAv:
 
         proxy_url_for_open = kwargs.pop("proxy_url", None)
         
+        if ssrf_safe:
+            from .ssrf_guard import SSRFRejected
+            # No supported guarded loader exists on SiteUtilAv. Keep internal
+            # callers unchanged, and reject a public cache miss before fetching.
+            raise SSRFRejected()
         pil_image_opened = cls.imopen(image_url, proxy_url=proxy_url_for_open)
         if pil_image_opened is None:
             logger.warning(f"Discord_proxy_image: Failed to open image from: {image_url}")

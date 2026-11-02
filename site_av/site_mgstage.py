@@ -61,7 +61,7 @@ class SiteMgstage(SiteAvBase):
                         if mapped_keyword not in search_keywords_to_try:
                             search_keywords_to_try.append(mapped_keyword)
             
-            logger.debug(f"MGS Search: Keywords to try: {search_keywords_to_try}")
+            logger.debug(f"[MGStage] 검색에 사용할 품번 후보: {search_keywords_to_try}")
 
             final_data = []
             for search_keyword in search_keywords_to_try:
@@ -69,7 +69,7 @@ class SiteMgstage(SiteAvBase):
                 data = cls.__search(search_keyword, normalized_ui_code, do_trans, manual)
                 if data:
                     # 결과를 찾았으면, 더 이상 검색하지 않고 루프 종료
-                    logger.debug(f"MGS Search: Found results with keyword '{search_keyword}'.")
+                    logger.debug(f"[MGStage] {search_keyword}: 검색 후보 확인")
                     final_data = data
                     break
         except Exception as exception:
@@ -85,11 +85,11 @@ class SiteMgstage(SiteAvBase):
     def __search(cls, keyword_for_url, original_ui_code, do_trans, manual):
 
         url = f"{SITE_BASE_URL}/search/cSearch.php?search_word={keyword_for_url}&x=0&y=0&type=top"
-        logger.debug(f"MGS Search URL: {url}")
+        logger.debug(f"[MGStage] 검색 요청 주소: {url}")
 
         tree = cls.get_tree(url)
         if tree is None:
-            logger.warning(f"MGS Search ({cls.module_char}): Failed to get tree for URL: {url}")
+            logger.warning(f"[MGStage] 검색 응답을 확인하지 못함 ({cls.module_char}): {url}")
             return []
 
         lists = tree.xpath('//div[@class="search_list"]/div/ul/li')
@@ -166,9 +166,9 @@ class SiteMgstage(SiteAvBase):
 
         if sorted_result:
             log_count = min(len(sorted_result), 5)
-            logger.debug(f"MGS Search: Top {log_count} results for '{keyword_for_url}':")
+            logger.debug(f"[MGStage] {keyword_for_url}: 검색 상위 후보 {log_count}건")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
-                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
+                logger.debug(f"  {idx+1}. 일치도={item_log_final.get('score')}, 내부 코드={item_log_final.get('code')}, 품번={item_log_final.get('ui_code')}, 제목='{item_log_final.get('title_ko')}'")
 
         return sorted_result
 
@@ -222,7 +222,7 @@ class SiteMgstage(SiteAvBase):
         url = SITE_BASE_URL + f"/product/product_detail/{code[2:]}/"
         tree = cls.get_tree(url)
         if tree is None:
-            logger.error(f"MGS info error: Failed to get page tree for {code}. URL: {url}")
+            logger.error(f"[MGStage] {code}: 작품 페이지 응답 확인 실패 (주소: {url})")
             return None
 
         entity = EntityMovie(cls.site_name, code)
@@ -270,7 +270,7 @@ class SiteMgstage(SiteAvBase):
                         else:
                             cls.queue_translation(entity, 'plot', cleaned_plot)
             except Exception as e_plot:
-                logger.error(f"MGS: Failed to parse plot for {code}: {e_plot}")
+                logger.error(f"[MGStage] {code}: 줄거리 분석 실패 — {e_plot}")
 
             info_table_xpath = '//div[@class="detail_data"]//tr'
             tr_nodes = tree.xpath(info_table_xpath)
@@ -390,7 +390,7 @@ class SiteMgstage(SiteAvBase):
                     entity.premiered = parsed_date.strftime('%Y-%m-%d')
                     entity.year = parsed_date.year
                 except Exception as e:
-                    logger.warning(f"MGS: Failed to parse valid date string '{premiered_str}': {e}")
+                    logger.warning(f"[MGStage] 출시일 분석 실패: {premiered_str} — {e}")
 
             rating_nodes = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
             if rating_nodes:
@@ -403,7 +403,7 @@ class SiteMgstage(SiteAvBase):
                     except Exception: pass
 
             if not entity.ui_code:
-                logger.error(f"MGS ({cls.module_char}): CRITICAL - Failed to parse identifier for {code}.")
+                logger.error(f"[MGStage] {code}: 작품 식별 코드 분석 실패 ({cls.module_char})")
                 return None
         except Exception as e_meta:
             logger.exception(f"MGS ({cls.module_char}): Meta parsing error for {code}: {e_meta}")
@@ -471,7 +471,7 @@ class SiteMgstage(SiteAvBase):
                     entity.genre.append(vr_genre_translated)
                     
         except Exception as e_vr_check:
-            logger.error(f"[{cls.site_name}] Error during VR check: {e_vr_check}")
+            logger.error(f"[{cls.site_name}] VR 작품 여부 확인 실패: {e_vr_check}")
 
         if 'image_request' in locals():
             try:
@@ -513,7 +513,7 @@ class SiteMgstage(SiteAvBase):
             "arts": all_sample_images
         }
 
-        logger.debug(f"MGS __img_urls collected: PL='{ret['pl']}', SpecificCandidates={len(ret['specific_poster_candidates'])}, Total Sample Arts={len(ret['arts'])}")
+        logger.debug(f"[MGStage] 이미지 주소 수집 완료: 가로 커버 {ret['pl']}, 포스터 후보 {len(ret['specific_poster_candidates'])}개, 샘플 이미지 {len(ret['arts'])}개")
         return ret
 
 

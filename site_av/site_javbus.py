@@ -386,27 +386,17 @@ class SiteJavbus(SiteAvBase):
             all_sample_images = []
             for href_art in tree.xpath('//*[@id="sample-waterfall"]/a/@href'):
                 all_sample_images.append(cls.__fix_url(href_art))
-            all_sample_images = list(dict.fromkeys(all_sample_images))
-
-            # 4. 역할에 맞게 데이터 분류 및 정제
-            thumb_candidates = set()
-            if pl_url:
-                thumb_candidates.add(pl_url)
-
             # Javbus는 PL 외에 명확한 포스터 후보가 없으므로 specific_poster_candidates는 비워둠
             specific_poster_candidates = []
-
-            # 순수 팬아트 목록 생성
-            pure_arts = [art for art in all_sample_images if art and art not in thumb_candidates]
 
             # 5. 최종 결과 반환
             ret = {
                 "ps": ps_url,
                 "pl": pl_url,
                 "specific_poster_candidates": specific_poster_candidates,
-                "arts": pure_arts
+                "arts": all_sample_images
             }
-            logger.debug(f"JavBus __img_urls collected: PS='{ret['ps']}', PL='{ret['pl']}', SpecificCandidates={len(ret['specific_poster_candidates'])}, PureArts={len(ret['arts'])}")
+            logger.debug(f"JavBus __img_urls collected: PS='{ret['ps']}', PL='{ret['pl']}', SpecificCandidates={len(ret['specific_poster_candidates'])}, OriginalArts={len(ret['arts'])}")
             return ret
         except Exception as e:
             logger.exception(f"JavBus __img_urls: Error extracting URLs: {e}")

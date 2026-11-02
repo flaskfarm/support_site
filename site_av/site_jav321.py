@@ -103,7 +103,7 @@ class SiteJav321(SiteAvBase):
             item.image_url = processed_ps_url
 
             if item.code and processed_ps_url:
-                cls._ps_url_cache[item.code] = processed_ps_url
+                cls._ps_url_cache[item.code] = {'ps': processed_ps_url}
                 # logger.debug(f"Jav321 Search: Cached PS URL for {item.code}: {processed_ps_url}")
 
             date_tags = tree.xpath(f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()')
@@ -357,7 +357,7 @@ class SiteJav321(SiteAvBase):
             if not entity.tagline and entity.title: entity.tagline = entity.title
 
             # 이미지 처리 위임
-            ps_url_from_search_cache = cls._ps_url_cache.get(code)
+            ps_url_from_search_cache = cls._ps_url_cache.get(code, {}).get('ps')
 
             try:
                 raw_image_urls = cls.__img_urls(tree)
@@ -461,29 +461,20 @@ class SiteJav321(SiteAvBase):
             ps_url = cls._process_jav321_url_from_attribute(raw_ps_url)
             pl_url = cls._process_jav321_url_from_attribute(raw_pl_url)
             all_sample_images = [cls._process_jav321_url_from_attribute(url) for url in raw_sample_images if url]
-            all_sample_images = list(dict.fromkeys(all_sample_images))
-
-            # 3. 역할에 맞게 데이터 분류 (중복 제거 포함)
-            thumb_candidates = set()
-            if pl_url: thumb_candidates.add(pl_url)
-
+            # 후보 선택은 원본 샘플 목록을 변경하지 않는다.
             specific_poster_candidates = []
             if all_sample_images:
                 first_art = all_sample_images[0]
                 specific_poster_candidates.append(first_art)
-                thumb_candidates.add(first_art)
                 if len(all_sample_images) > 1 and all_sample_images[-1] != first_art:
                     last_art = all_sample_images[-1]
                     specific_poster_candidates.append(last_art)
-                    thumb_candidates.add(last_art)
-
-            pure_arts = [art for art in all_sample_images if art and art not in thumb_candidates]
 
             # 4. 최종 결과 반환
             ret = {
                 "ps": ps_url, "pl": pl_url,
                 "specific_poster_candidates": specific_poster_candidates,
-                "arts": pure_arts
+                "arts": all_sample_images
             }
             logger.debug(f"Jav321 __img_urls collected: PS='{ret['ps']}', PL='{ret['pl']}', ...")
             return ret

@@ -21,6 +21,7 @@ from flask import Response, abort, send_file
 from io import BytesIO
 from PIL import Image, UnidentifiedImageError
 from requests.adapters import HTTPAdapter
+from ..ssrf_guard import fetch as guarded_fetch, is_public_scope, validate, SSRFRejected
 
 # FF
 from support import SupportDiscord
@@ -246,7 +247,7 @@ class SiteAvBase:
         try:
             return html.fromstring(text)
         except Exception as e:
-            logger.error(f"Failed to parse HTML from URL '{url}': {e}")
+            logger.error(f"페이지 응답 분석 실패: {url} — {e}")
             return None
 
 
@@ -329,15 +330,62 @@ class SiteAvBase:
         max_attempts = kwargs.pop("max_retries", 3)
         for attempt in range(max_attempts):
             try:
+                if is_public_scope():
+                    if method.upper() != 'GET':
+                        raise SSRFRejected()
+                    from urllib.parse import urljoin, urlsplit
+                    from ..ssrf_guard import destination, _redirect_cookies, MAX_IMAGE_BYTES
+                    from requests.cookies import get_cookie_header
+                    current, seen, origin = url, set(), None
+                    crossed = False
+                    for hop in range(6):
+                        current, host, port, _ = destination(current)
+                        if current in seen:
+                            raise SSRFRejected()
+                        seen.add(current)
+                        next_origin = (urlsplit(current).scheme, host, port)
+                        crossed = crossed or (origin is not None and origin != next_origin)
+                        origin = next_origin
+                        options = dict(kwargs, allow_redirects=False)
+                        outgoing = dict(request_headers)
+                        # Explicit per-request values suppress inherited credentials,
+                        # without copying or changing the initialized site session.
+                        outgoing.update({'Host': None, 'Proxy-Authorization': None})
+                        if crossed:
+                            outgoing.update({'Authorization': None, 'Cookie': ''})
+                            options.update(auth=lambda prepared: prepared, cookies=None)
+                        else:
+                            cookie_headers = dict(getattr(cls.session, 'headers', {}) or {})
+                            cookie_headers.update(request_headers)
+                            jar = _redirect_cookies(current, cookie_headers, cls.session.cookies, kwargs.get('cookies'))
+                            outgoing['Cookie'] = get_cookie_header(jar, requests.Request('GET', current).prepare()) or ''
+                        res = cls.session.request(method, current, headers=outgoing, proxies=proxies, **options)
+                        if res.status_code not in (301, 302, 303, 307, 308):
+                            if not kwargs.get('stream', False):
+                                try:
+                                    if len(res.content) > MAX_IMAGE_BYTES:
+                                        raise SSRFRejected()
+                                finally:
+                                    res.close()
+                            return res
+                        try:
+                            location = res.headers.get('Location')
+                            if (not isinstance(location, str) or not location or hop == 5 or
+                                    any(ord(c) <= 32 or ord(c) == 127 for c in location) or '\\' in location):
+                                raise SSRFRejected()
+                            current = urljoin(current, location)
+                        finally:
+                            res.close()
+                    raise SSRFRejected()
                 res = cls.session.request(method, url, headers=request_headers, proxies=proxies, **kwargs)
                 return res
             except requests.exceptions.RequestException as e:
                 if attempt < max_attempts - 1:
                     logger.debug('get_response 재시도: site=%s attempt=%s/%s error=%s',
-                                 cls.site_name, attempt + 1, max_attempts, type(e).__name__)
+                                 cls.site_name, attempt + 1, max_attempts, e)
                     time.sleep(1.0)
                     continue
-                logger.error('get_response 실패: site=%s error=%s', cls.site_name, type(e).__name__)
+                logger.exception('get_response 실패: site=%s', cls.site_name)
                 return None
 
 
@@ -448,7 +496,7 @@ class SiteAvBase:
             )
             return res
         except Exception as e:
-            logger.error('get_response_cffi 실패: site=%s error=%s', cls.site_name, type(e).__name__)
+            logger.exception('get_response_cffi 실패: site=%s', cls.site_name)
             return None
 
 
@@ -479,27 +527,9 @@ class SiteAvBase:
     # 예고편 url
     @classmethod
     def make_video_url(cls, url):
-        if cls.config['use_proxy'] == False:
-            return url
-        param = {
-            "site": cls.site_name,
-            "url": url
-        }
+        # Collectors preserve sources; web/file output copies apply URL proxies.
+        return url
 
-        # 유효성 검사 일단 생략
-        #proxies = None
-        #if cls.config['use_proxy']:
-        #    proxies = {"http": cls.config['proxy_url'], "https": cls.config['proxy_url']}
-        #
-        #with cls.session.get(url, proxies=proxies, headers=cls.default_headers) as res:
-        #    if res.status_code != 200:
-        #        return None
-
-        if cls.module_char == 'C':
-            return f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_video?{urlencode(param)}"
-        else:
-            return f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_video_un?{urlencode(param)}"
-    
     @classmethod
     def queue_translation(cls, entity, field, text, amateur=False):
         """Keep raw values usable until the serial translation lane is joined."""
@@ -988,48 +1018,89 @@ class SiteAvBase:
     # 메타데이터 라우팅 함수에서 호출한다.
     # 리턴타입: redirect 
     @classmethod
-    def jav_image(cls, url=None, mode=None, site=None, path=None):
+    def _local_image_path(cls, url):
+        """None means remote; a matched but invalid local URL must never be fetched."""
+        from urllib.parse import urlsplit, unquote
+        config = cls.config or {}
+        server = config.get('image_server_url') or ''
+        if not isinstance(url, str) or not isinstance(server, str) or not server:
+            return None
+        base, target = urlsplit(server), urlsplit(url)
+        if (base.scheme not in ('http', 'https') or not base.hostname or
+                target.scheme != base.scheme or target.hostname != base.hostname):
+            return None
+        default_port = 443 if base.scheme == 'https' else 80
+        if (target.port if target.port is not None else default_port) != (
+                base.port if base.port is not None else default_port):
+            return None
+        base_path = unquote(base.path, errors='strict').rstrip('/')
+        target_path = unquote(target.path, errors='strict')
+        boundary_path = target_path.replace('\\', '/')
+        if boundary_path != base_path and not boundary_path.startswith(base_path + '/'):
+            return None
+        if (any(ord(c) < 32 or ord(c) == 127 for c in url) or
+                '\\' in target_path or '\x00' in target_path or
+                '\\' in base_path or '..' in base_path.split('/')):
+            raise ValueError('Invalid local image URL')
+        relative = target_path[len(base_path):]
+        if relative.startswith('/'):
+            relative = relative[1:]
+        if relative.startswith('/') or '..' in relative.split('/'):
+            raise ValueError('Invalid local image path')
+        root = config.get('image_server_local_path')
+        if not isinstance(root, str) or not root.strip() or '\x00' in root:
+            raise ValueError('Invalid local image root')
+        root = os.path.abspath(root)
+        candidate = os.path.abspath(os.path.join(root, relative))
+        # Deliberately lexical: administrator-managed symlinks remain supported.
+        if root == os.path.sep or os.path.commonpath([root, candidate]) != root:
+            raise ValueError('Invalid local image path')
+        return candidate
+
+    @classmethod
+    def jav_image(cls, url=None, mode=None, site=None):
+        from ..ssrf_guard import unwrap_image_url
         # 중첩 프록시 URL 인입 시 순수 원본 이미지 주소 언래핑
-        if url and ('/metadata/normal/jav_image' in url or '/metadata/normal/jav_image_un' in url) and 'url=' in url:
+        for _ in range(4):
+            if not (url and '/metadata/normal/jav_image' in url and 'url=' in url):
+                break
             try:
                 from urllib.parse import parse_qs, urlparse
                 parsed_nested = urlparse(url)
                 qs = parse_qs(parsed_nested.query)
                 if 'url' in qs and qs['url']:
-                    url = qs['url'][0]
+                    nested = qs['url'][0]
+                    if nested == url:
+                        break
+                    url = nested
                 if not site and 'site' in qs and qs['site']:
                     site = qs['site'][0]
             except Exception as e_unwrap:
                 logger.debug(f"[SiteAvBase] 중첩 프록시 URL 언래핑 예외: {e_unwrap}")
+                break
 
-        # 로컬 파일 요청 처리
-        if site == 'system' and path:
-            try:
-                allowed_path = os.path.join(path_data, "tmp")
-                if os.path.commonpath([allowed_path, os.path.abspath(path)]) != allowed_path:
-                    abort(403)
-                return send_file(path, mimetype='image/jpeg')
-            except FileNotFoundError:
-                abort(404)
-            except Exception:
-                abort(500)
+        url = unwrap_image_url(url)
+
+        # 공개 요청은 URL만 받는다. 두 URL을 받는 기존 합성 모드는 아래에서 검증한다.
+        if is_public_scope() and mode != 'merge_covers':
+            if not isinstance(url, str) or not url.startswith(('http://', 'https://')):
+                abort(400)
 
         # 내 이미지 서버 URL인 경우 HTTP 요청 대신 로컬 디스크에서 직접 검증 및 서빙
-        local_root = (cls.config.get('image_server_local_path') if cls.config else '') or ''
-        server_url = (cls.config.get('image_server_url') if cls.config else '') or ''
-        server_url_clean = server_url.rstrip('/')
+        try:
+            disk_path = cls._local_image_path(url)
+        except (ValueError, TypeError):
+            abort(403)
 
-        if url and local_root and server_url_clean and url.startswith(server_url_clean):
-            rel_path = url[len(server_url_clean):].lstrip('/\\')
-            disk_path = os.path.join(local_root, rel_path.replace('/', os.path.sep))
+        if disk_path is not None:
 
             # 비동기 파일 저장 타이밍 이슈 방어: 파일이 생성되고 크기가 유효해질 때까지 대기 확인 (최대 1.6초)
             for _ in range(8):
-                if os.path.exists(disk_path) and os.path.getsize(disk_path) > 0:
+                if os.path.isfile(disk_path) and os.path.getsize(disk_path) > 0:
                     break
                 time.sleep(0.2)
 
-            if os.path.exists(disk_path) and os.path.getsize(disk_path) > 0:
+            if os.path.isfile(disk_path) and os.path.getsize(disk_path) > 0:
                 if not mode:
                     return send_file(disk_path, mimetype='image/jpeg')
                 # 크롭 모드가 지정되어 있으면 로컬 파일 이미지를 직접 열어 처리
@@ -1068,7 +1139,7 @@ class SiteAvBase:
             for domain, expert_module in CONTEXT_SWITCH_RULES.items():
                 if domain in url:
                     if expert_module and cls.site_name != expert_module.site_name:
-                        logger.debug(f"jav_video: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: {url}")
+                        logger.debug(f"jav_video: Overriding proxy/headers for '{cls.site_name}' with settings from '{expert_module.site_name}' for URL: [remote media]")
 
                         if expert_module.config and expert_module.config.get('use_proxy', False):
                             proxies = {"http": expert_module.config['proxy_url'], "https": expert_module.config['proxy_url']}
@@ -1105,14 +1176,14 @@ class SiteAvBase:
 
             for attempt in range(max_attempts):
                 try:
-                    req = stream_session.get(
-                        url,
-                        proxies=proxies,
-                        headers=request_headers,
-                        stream=True,
-                        timeout=(10, 30),
-                        verify=False
-                    )
+                    if is_public_scope():
+                        req = guarded_fetch(url, proxy=proxies, transport=stream_session,
+                                            headers=request_headers, stream=True,
+                                            timeout=(10, 30), verify=False)
+                    else:
+                        req = stream_session.get(url, proxies=proxies,
+                                                 headers=request_headers, stream=True,
+                                                 timeout=(10, 30), verify=False)
 
                     if req.status_code in [200, 206]:
                         content_type = req.headers.get('Content-Type', '').lower()
@@ -1138,11 +1209,11 @@ class SiteAvBase:
                             first_chunk = None
                             chunk_iter = None
                             if attempt < max_attempts - 1:
-                                logger.warning(f"jav_video: 동영상이 아닌 HTML/에러 페이지 응답 감지 ({attempt + 1}/{max_attempts}회): {url}. {retry_delay}초 후 재시도...")
+                                logger.warning(f"jav_video: 동영상이 아닌 HTML/에러 페이지 응답 감지 ({attempt + 1}/{max_attempts}회): [remote media]. {retry_delay}초 후 재시도...")
                                 time.sleep(retry_delay)
                                 continue
                             else:
-                                logger.error(f"jav_video: 동영상 스트림 접근 불가 (에러 페이지 응답, {max_attempts}회 시도 초과): {url}")
+                                logger.error(f"jav_video: 동영상 스트림 접근 불가 (에러 페이지 응답, {max_attempts}회 시도 초과): [remote media]")
                                 stream_session.close()
                                 return stream_failure(404, 'invalid_content')
 
@@ -1150,27 +1221,35 @@ class SiteAvBase:
                         break
                     elif attempt < max_attempts - 1:
                         req.close()
-                        logger.warning(f"jav_video: HTTP {req.status_code} 실패 ({attempt + 1}/{max_attempts}회): {url}. 2초 후 재시도...")
+                        logger.warning(f"jav_video: HTTP {req.status_code} 실패 ({attempt + 1}/{max_attempts}회): [remote media]. 2초 후 재시도...")
                         time.sleep(2)
                     else:
-                        logger.error(f"jav_video: 스트림 연결 실패 (HTTP {req.status_code}, {max_attempts}회 시도 초과): {url}")
+                        logger.error(f"jav_video: 스트림 연결 실패 (HTTP {req.status_code}, {max_attempts}회 시도 초과): [remote media]")
                         req.close()
                         stream_session.close()
                         return stream_failure(req.status_code if req.status_code >= 400 else 502,
                                               'not_found' if req.status_code in (404, 410) else 'upstream_error')
                 except requests.exceptions.RequestException as e_req:
+                    if req is not None:
+                        req.close()
                     if attempt < max_attempts - 1:
-                        logger.warning(f"jav_video: 연결 오류 ({attempt + 1}/{max_attempts}회): {url}. 2초 후 재시도... 사유: {e_req}")
+                        logger.debug('jav_video: 연결 오류 (%s/%s회), 2초 후 재시도: %s', attempt + 1, max_attempts, e_req)
                         time.sleep(2)
                     else:
-                        logger.error(f"jav_video: 연결 실패 ({max_attempts}회 시도 초과): {url}. 사유: {e_req}")
+                        logger.exception('jav_video: 연결 실패 (%s회 시도 초과)', max_attempts)
                         stream_session.close()
                         if isinstance(e_req, requests.exceptions.SSLError):
                             return stream_failure(502, 'tls_error')
                         return stream_failure(504 if isinstance(e_req, requests.exceptions.Timeout) else 502, 'connection_error')
 
+        except SSRFRejected:
+            if 'stream_session' in locals():
+                stream_session.close()
+            raise
         except Exception as e:
-            logger.error(f"jav_video: 처리 예외 ({url}): {e}")
+            if 'stream_session' in locals():
+                stream_session.close()
+            logger.exception('jav_video: 처리 예외')
             return stream_failure(500, 'proxy_error')
 
         # 전체 스트리밍/다운로드 누적 전송 최대 허용 시간 (3분 = 180초)
@@ -1185,12 +1264,12 @@ class SiteAvBase:
                     for chunk in chunk_iter:
                         # 누적 전송 시간이 제한을 초과하면 연결 강제 종료
                         if time.time() - stream_start_time > max_stream_duration:
-                            logger.warning(f"jav_video: 전체 전송 허용 시간({max_stream_duration}초) 초과로 스트림 중단: {url}")
+                            logger.warning(f"jav_video: 전체 전송 허용 시간({max_stream_duration}초) 초과로 스트림 중단: [remote media]")
                             break
                         if chunk:
                             yield chunk
             except Exception as e_stream:
-                logger.debug(f"jav_video: 전송 중단 ({url}): {e_stream}")
+                logger.debug('jav_video: 전송 중단: %s', e_stream, exc_info=True)
             finally:
                 if req:
                     req.close()
@@ -1210,7 +1289,10 @@ class SiteAvBase:
             response_headers['Content-Range'] = req.headers['Content-Range']
 
         status_code = req.status_code if req.status_code in [200, 206] else 200
-        return Response(generate_content(), status=status_code, headers=response_headers)
+        result = Response(generate_content(), status=status_code, headers=response_headers)
+        result.call_on_close(req.close)
+        result.call_on_close(stream_session.close)
+        return result
 
 
     _yaml_settings = {}
@@ -1452,44 +1534,47 @@ class SiteAvBase:
         if not img_src or not isinstance(img_src, str):
             return None
 
-        # 이미지 서버 URL인 경우 인터넷(HTTP)을 타지 않고 로컬 디스크에서 즉시 로드
-        local_root = cls.config.get('image_server_local_path') if cls.config else None
-        server_url = (cls.config.get('image_server_url') if cls.config else '') or ''
-        server_url_clean = server_url.rstrip('/')
+        display_src = '[remote image]' if is_public_scope() else img_src
 
-        if local_root and os.path.exists(local_root) and server_url_clean and img_src.startswith(server_url_clean):
-            rel_url_path = img_src[len(server_url_clean):].lstrip('/\\')
-            disk_path = os.path.join(local_root, rel_url_path.replace('/', os.path.sep))
-            if os.path.exists(disk_path):
+        # 이미지 서버 URL인 경우 인터넷(HTTP)을 타지 않고 로컬 디스크에서 즉시 로드
+        try:
+            disk_path = cls._local_image_path(img_src)
+        except (ValueError, TypeError):
+            return None
+
+        if disk_path is not None:
+            if os.path.isfile(disk_path):
                 try:
                     img = Image.open(disk_path)
                     img.load()
                     return img
                 except Exception as e_local:
-                    logger.debug(f"[{cls.site_name}] imopen 로컬 파일 로드 예외: {disk_path} ({e_local})")
+                    logger.debug('[%s] imopen 로컬 파일 로드 예외: %s (%s)', cls.site_name, display_src, e_local)
 
         # 순수 원격 원본 URL일 때만 네트워크 요청 수행
         if img_src.startswith("http"):
             try:
                 res = cls.get_response(img_src, timeout=6, max_retries=2)
                 if not res or res.status_code != 200:
-                    logger.debug(f"[{cls.site_name}] imopen failed: Status {res.status_code if res is not None else 'None'} for {img_src}")
+                    logger.debug(f"[{cls.site_name}] imopen failed: Status {res.status_code if res is not None else 'None'} for {display_src}")
                     return None
                     
                 content_type = res.headers.get('Content-Type', '').lower()
                 if not content_type.startswith('image/') and content_type != 'binary/octet-stream':
-                    logger.debug(f"[{cls.site_name}] imopen failed: Invalid Content-Type '{content_type}' for {img_src}")
+                    logger.debug(f"[{cls.site_name}] imopen failed: Invalid Content-Type '{content_type}' for {display_src}")
                     return None
 
                 img = Image.open(BytesIO(res.content))
                 img.load()
                 return img
                 
+            except SSRFRejected:
+                raise
             except UnidentifiedImageError:
-                logger.warning(f"[{cls.site_name}] imopen: Not a valid image file. URL: {img_src}")
+                logger.warning(f"[{cls.site_name}] imopen: Not a valid image file. URL: {display_src}")
                 return None
             except Exception as e:
-                logger.error(f"[{cls.site_name}] imopen exception for {img_src}: {e}")
+                logger.exception('[%s] imopen exception for %s', cls.site_name, display_src)
                 return None
         else:
             try:
@@ -1497,7 +1582,7 @@ class SiteAvBase:
                 img.load() 
                 return img
             except (FileNotFoundError, OSError, UnidentifiedImageError) as e:
-                logger.warning(f"[{cls.site_name}] imopen local file failed: {img_src} ({e})")
+                logger.warning(f"[{cls.site_name}] imopen local file failed: {display_src} ({e})")
                 return None
 
 
@@ -1513,6 +1598,12 @@ class SiteAvBase:
                 if not isinstance(covers, list) or len(covers) != 2 or not all(
                         isinstance(url, str) and url.startswith(('http://', 'https://')) for url in covers):
                     abort(400)
+                if is_public_scope():
+                    from ..ssrf_guard import unwrap_image_url
+                    covers = [unwrap_image_url(cover) for cover in covers]
+                    for cover in covers:
+                        # Validate the whole batch before the first cover fetch.
+                        validate(cover)
                 merged = cls._merge_covers(*covers)
                 if not merged:
                     abort(502)
@@ -1524,12 +1615,12 @@ class SiteAvBase:
         res = cls.get_response(image_url, verify=False, timeout=8, max_retries=2)
 
         if res is None:
-            P.logger.error(f"image_proxy: SiteUtil.get_response returned None for URL: {image_url}")
+            P.logger.error(f"image_proxy: SiteUtil.get_response returned None for URL: [remote image]")
             abort(404)
             return
 
         if res.status_code != 200:
-            P.logger.warning(f"image_proxy: Received status code {res.status_code} for URL: {image_url}")
+            P.logger.warning(f"image_proxy: Received status code {res.status_code} for URL: [remote image]")
             abort(res.status_code if res.status_code >= 400 else 500)
             return
 
@@ -1549,7 +1640,7 @@ class SiteAvBase:
                     is_image_content = True
 
         if not is_image_content:
-            P.logger.error(f"image_proxy: Expected image, but got Content-Type '{content_type_header}' and invalid content for URL: {image_url}")
+            P.logger.error(f"image_proxy: Expected image, but got Content-Type '{content_type_header}' and invalid content for URL: [remote image]")
             abort(400)
 
         try:
@@ -1559,26 +1650,19 @@ class SiteAvBase:
             imformat = im.format
 
             if imformat is None or content_type_header == 'binary/octet-stream':
-                P.logger.debug(f"image_proxy: Pillow detected format '{imformat}' for binary stream. URL: {image_url}")
+                P.logger.debug(f"image_proxy: 이미지 형식 확인: {imformat} (원격 이미지)")
                 if imformat not in ['JPEG', 'PNG', 'WEBP', 'GIF']:
                     imformat = 'JPEG'
 
             mimetype = im.get_format_mimetype() or f'image/{imformat.lower()}'
 
         except UnidentifiedImageError as e:
-            P.logger.error(f"image_proxy: PIL.UnidentifiedImageError for URL: {image_url}. Response Content-Type: {content_type_header}")
-            P.logger.error(f"image_proxy: Error details: {e}")
-            try:
-                failed_image_path = os.path.join(path_data, "tmp", f"failed_image_{time.time()}.bin")
-                with open(failed_image_path, 'wb') as f:
-                    f.write(res.content)
-                P.logger.info(f"image_proxy: Content of failed image saved to: {failed_image_path}")
-            except Exception as save_err:
-                P.logger.error(f"image_proxy: Could not save failed image content: {save_err}")
+            P.logger.error(f"image_proxy: 원격 응답을 이미지로 읽지 못함. 응답 형식: {content_type_header}")
+            P.logger.error(f"image_proxy: 이미지 읽기 실패 원인: {e}")
             abort(400)
             return
         except Exception as e_pil:
-            P.logger.error(f"image_proxy: General PIL error for URL: {image_url}: {e_pil}")
+            P.logger.error(f"image_proxy: General PIL error for URL: [remote image]: {e_pil}")
             P.logger.error(traceback.format_exc())
             abort(500)
             return
@@ -1747,7 +1831,7 @@ class SiteAvBase:
             if relative:
                 observations.append(dict(media_type=kind or 'poster', url=url, gdrive_fileid=fid,
                     relative_path=relative, is_user='_user.' in relative.rsplit('/', 1)[-1].lower(),
-                    sort_order=idx, source='gds' if mode == 'gdrive' else 'site'))
+                    sort_order=idx, source='gdrive' if mode == 'gdrive' else 'site'))
         if not isinstance(entity.extra_info, dict):
             entity.extra_info = {}
         entity.extra_info['_storage_media'] = observations
@@ -1863,7 +1947,7 @@ class SiteAvBase:
             'landscape': raw_pl_candidate
         }
         
-        if 'fanart' not in entity.original or not entity.original['fanart']:
+        if 'arts' in raw_image_urls:
             entity.original['fanart'] = list(raw_image_urls.get('arts') or [])
 
         image_mode = cls.config.get('image_mode')
@@ -1874,6 +1958,7 @@ class SiteAvBase:
         try:
             # --- 1. 결정에 필요한 모든 정보 수집 (Decision Data) ---
             decision_data = {
+                'refresh_owner': opts.get('_refresh_owner'),
                 'raw_urls': raw_image_urls,
                 'ps_url': ps_url_from_cache,
                 'ui_code': entity.ui_code,
@@ -2016,13 +2101,9 @@ class SiteAvBase:
             sources = decision_data['final_image_sources']
             covers = raw_image_urls.get('merge_covers')
             if covers and not sources.get('skip_landscape_download'):
-                if image_mode == 'ff_proxy':
-                    import json
-                    sources['landscape_source'] = cls.proxy_image_reference(json.dumps(list(covers)), 'merge_covers')
-                else:
-                    merged_filepath = cls._merge_covers(*covers)
-                    if merged_filepath:
-                        sources['landscape_source'] = merged_filepath
+                merged_filepath = cls._merge_covers(*covers)
+                if merged_filepath:
+                    sources['landscape_source'] = merged_filepath
 
             # --- 3. 최종 이미지 정보 생성 위임 ---
             from metadata.util_metadata import MetaUtil
@@ -2031,7 +2112,7 @@ class SiteAvBase:
 
         except Exception as e:
             cls.set_image_storage_state(entity, 'failed', str(e))
-            logger.error(f"Error during process_image_data for {entity.code}: {e}")
+            logger.error(f"이미지 처리 실패: {entity.code} — {e}")
             logger.error(traceback.format_exc())
         finally:
             if merged_filepath and os.path.exists(merged_filepath):
@@ -2040,7 +2121,7 @@ class SiteAvBase:
                 try:
                     os.remove(temp_filepath_to_clean)
                 except Exception as e_remove:
-                    logger.error(f"Failed to remove temp file {temp_filepath_to_clean}: {e_remove}")
+                    logger.error(f"임시 이미지 파일 정리 실패: {temp_filepath_to_clean} — {e_remove}")
 
         return entity
 
@@ -2176,7 +2257,11 @@ class SiteAvBase:
 
         # 사이트 모듈에서 이미 세로 포스터나 크롭본을 직접 넘긴 경우
         if direct_poster_url:
-            if not is_user_poster:
+            # Keep a selected local cache and its skip flag as one decision.
+            apply_direct_poster = not is_user_poster and (
+                image_mode != 'image_server' or should_process_poster
+            )
+            if apply_direct_poster:
                 final_image_sources['poster_source'] = direct_poster_url
             image_server_prefix = str(
                 decision_data.get('image_server_paths', {}).get('url_prefix') or ''
@@ -2190,9 +2275,9 @@ class SiteAvBase:
             )
             if direct_poster_url.startswith('http') and not is_generated_image_url:
                 final_image_sources['original_poster_source'] = direct_poster_url
-                if not is_user_poster:
+                if apply_direct_poster:
                     final_image_sources['poster_mode'] = None
-            elif not is_user_poster:
+            elif apply_direct_poster:
                 final_image_sources['poster_mode'] = 'local_file'
                 temp_dir = os.path.join(path_data, "tmp")
                 if os.path.commonpath([temp_dir, os.path.abspath(direct_poster_url)]) == temp_dir:
@@ -2236,7 +2321,7 @@ class SiteAvBase:
                             if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
                                 if pl_valid and pl_height > im_lg_obj.height:
                                     continue
-                                logger.debug(f"Found ideal poster (visually same as thumbnail): {candidate_url}")
+                                logger.debug(f"썸네일과 같은 이미지를 최적 포스터로 선택: {candidate_url}")
                                 if not is_user_poster:
                                     final_image_sources['poster_source'] = candidate_url
                                 final_image_sources['original_poster_source'] = candidate_url
@@ -2254,7 +2339,7 @@ class SiteAvBase:
                                 if im_lg_obj and cls.is_hq_poster(im_sm_obj, im_lg_obj):
                                     if pl_valid and pl_height > im_lg_obj.height:
                                         continue
-                                    logger.debug(f"HQ Poster Found in advanced Phase 1: {candidate_url}")
+                                    logger.debug(f"고화질 포스터 선택 완료: {candidate_url}")
                                     if not is_user_poster:
                                         final_image_sources['poster_source'] = candidate_url
                                     final_image_sources['original_poster_source'] = candidate_url
@@ -2399,11 +2484,21 @@ class SiteAvBase:
             # logger.debug(f"Determining landscape source for {ui_code} as no user/system file exists or rewrite is on.")
             final_image_sources['landscape_source'] = pl_url
 
-        # 팬아트 목록 결정
+        # DMM Amateur의 최종 커버를 확정한 뒤 팬아트 제외와 개수 제한을 적용한다.
+        if (site_name == 'dmm' and decision_data.get('content_type') == 'amateur'
+                and final_image_sources.get('poster_source') == final_image_sources.get('landscape_source')):
+            if other_arts_on_page:
+                final_image_sources['landscape_source'] = other_arts_on_page[0]
+                final_image_sources['skip_landscape_download'] = False
+                logger.debug("[ImageUtil] DMM Amateur: P and PL are identical. Replaced landscape with first sample image.")
+
+        # 팬아트는 원본 목록의 복사본에서만 선택한다.
         if image_mode != 'image_server' or decision_data['rewrite_flag']:
             final_thumb_source_urls = set()
             if final_image_sources.get('landscape_source'):
                 final_thumb_source_urls.add(final_image_sources['landscape_source'])
+            if final_image_sources.get('original_poster_source'):
+                final_thumb_source_urls.add(final_image_sources['original_poster_source'])
 
             poster_source = final_image_sources.get('poster_source')
             if poster_source:
@@ -2413,7 +2508,7 @@ class SiteAvBase:
                 elif isinstance(poster_source, str) and poster_source.startswith('http'):
                     final_thumb_source_urls.add(poster_source)
 
-            all_potential_arts = list(dict.fromkeys(other_arts_on_page + ([pl_url] if pl_url else [])))
+            all_potential_arts = list(dict.fromkeys(other_arts_on_page))
 
             final_fanarts = []
             exclude_set = set(final_thumb_source_urls)
@@ -2423,23 +2518,6 @@ class SiteAvBase:
 
             max_arts = site_config.get('max_arts', 0)
             final_image_sources['arts'] = final_fanarts[:max_arts] if max_arts > 0 else []
-
-        if (decision_data.get('site_name') == 'dmm' and 
-            decision_data.get('content_type') == 'amateur'):
-            
-            # 최종 결정된 포스터(P)와 가로 이미지(PL)가 동일한 경우 (둘 다 정사각형 패키지인 경우)
-            if (final_image_sources.get('poster_source') == final_image_sources.get('landscape_source')):
-                logger.debug("[ImageUtil] DMM Amateur: P and PL are identical. Replaced landscape with first sample image.")
-                
-                # arts[0]가 존재한다면 이를 가로 이미지(PL)로 대체
-                arts = raw_urls.get('arts', [])
-                if arts:
-                    final_image_sources['landscape_source'] = arts[0]
-                    final_image_sources['skip_landscape_download'] = False # 다운로드 강제화
-                    
-                    # 첫 번째 컷이 가로 이미지로 빠졌으므로, 팬아트 갤러리(Arts)에서 중복을 제거
-                    if arts[0] in final_image_sources['arts']:
-                        final_image_sources['arts'].remove(arts[0])
 
         return final_image_sources
 
@@ -2459,15 +2537,13 @@ class SiteAvBase:
             logger.debug(f"Saved temporary poster to: {filepath}")
             return filepath
         except Exception as e:
-            logger.error(f"Failed to save PIL to temp file: {e}")
+            logger.error(f"이미지 임시 파일 저장 실패: {e}")
             return None
 
 
     @classmethod
-    def proxy_image_reference(cls, source, mode=None):
+    def proxy_image_reference(cls, source):
         params = {'site': cls.site_name, 'url': source}
-        if mode:
-            params['mode'] = mode
         return f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{urlencode(params)}"
 
     @classmethod
@@ -2523,25 +2599,18 @@ class SiteAvBase:
                 return None
 
         if image_mode == 'ff_proxy':
-            # 파이프라인 내부에서는 프록시를 씌우지 않고 순수 원본 URL을 그대로 유지
+            # Storage-free mode keeps site URLs; URL proxying belongs to output copies.
+            original = getattr(entity, 'original', None) or {}
+            raw_thumb = original.get('thumb') or {}
+            if poster_source and os.path.isfile(str(poster_source)):
+                poster_source = raw_thumb.get('poster')
+            if landscape_source and os.path.isfile(str(landscape_source)):
+                landscape_source = raw_thumb.get('landscape')
             if poster_source:
-                mode = poster_mode
-                if mode == 'local_file' and image_sources.get('temp_poster_filepath'):
-                    poster_source = image_sources.get('processed_from_url') or (entity.original.get('thumb') or {}).get('landscape')
-                    mode = 'smart_crop' if cls.module_char == 'W' else 'crop_lb_r'
-                if poster_source:
-                    if mode and mode != 'local_file':
-                        entity.extra_info.setdefault('image_transforms', {})['poster'] = {'url': poster_source, 'mode': mode, 'site': cls.site_name}
-                        poster_source = cls.proxy_image_reference(poster_source, mode)
-                    entity.thumb.append(EntityThumb(aspect="poster", value=poster_source))
+                entity.thumb.append(EntityThumb(aspect="poster", value=poster_source))
             if landscape_source:
-                landscape_url = landscape_source
-                if os.path.isfile(landscape_source):
-                    param = urlencode({'site': 'system', 'path': landscape_source})
-                    landscape_url = f"{F.SystemModelSetting.get('ddns')}/metadata/normal/jav_image?{param}"
-                entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_url))
-            for art_url in arts:
-                entity.fanart.append(art_url)
+                entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_source))
+            entity.fanart.extend(arts)
 
         elif image_mode == 'discord_proxy':
             def apply(url, use_proxy_server, server_url):
@@ -2564,7 +2633,7 @@ class SiteAvBase:
                     with open(poster_source, 'rb') as f:
                         response_bytes = BytesIO(f.read())
                 except Exception as e:
-                    logger.error(f"Failed to read local file for discord: {e}")
+                    logger.error(f"이미지 중계용 로컬 파일 읽기 실패: {e}")
             else:
                 response = safe_jav_image(url=poster_source, mode=poster_mode, site=cls.site_name)
                 if response is not None and response.status_code == 200: response_bytes = BytesIO(response.data)
@@ -2612,6 +2681,10 @@ class SiteAvBase:
 
             os.makedirs(target_folder, exist_ok=True)
 
+            def image_receipt(target):
+                return next((e for e in decision_data.get('_media_replacements', [])
+                             if e.get('image_contract') and os.path.abspath(e['target']) == os.path.abspath(target)), None)
+
             poster_source = image_sources.get('poster_source')
             landscape_source = image_sources.get('landscape_source')
             source_mode = image_sources.get('poster_mode')
@@ -2640,15 +2713,15 @@ class SiteAvBase:
                                 if not staged:
                                     raise RuntimeError("Landscape staging failed")
                                 try:
-                                    cls.publish_image_file(staged, system_landscape_path)
+                                    cls.publish_image_file(staged, system_landscape_path, replacement=image_receipt(system_landscape_path))
                                 finally:
                                     if os.path.exists(staged): os.remove(staged)
                             else:
-                                MetaUtil.save_normalized_jpeg(im_pl_loaded, system_landscape_path)
+                                MetaUtil.save_normalized_jpeg(im_pl_loaded, system_landscape_path, replacement=image_receipt(system_landscape_path))
                             im_pl_loaded.close()
                             save_success = True
                         else:
-                            logger.warning(f"Failed to download landscape for {code_lower} from {landscape_source}")
+                            logger.warning(f"{code_lower}: 가로 이미지 다운로드 실패 — {landscape_source}")
 
                     if not save_success:
                         cls.set_image_storage_state(entity, 'failed', '로컬 랜드스케이프 다운로드 또는 저장 실패')
@@ -2680,13 +2753,13 @@ class SiteAvBase:
                     elif source_mode == 'local_file':
                         try:
                             with open(poster_source, 'rb') as f:
-                                save_success = cls._save_image_data(BytesIO(f.read()), system_poster_path)
+                                save_success = cls._save_image_data(BytesIO(f.read()), system_poster_path, replacement=image_receipt(system_poster_path))
                         except Exception as e:
-                            logger.warning(f"Failed to save poster for {code_lower}: {e}")
+                            logger.warning(f"{code_lower}: 포스터 저장 실패 — {e}")
                     else:
                         response = safe_jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
                         if response and response.status_code == 200:
-                            save_success = cls._save_image_data(BytesIO(response.data), system_poster_path)
+                            save_success = cls._save_image_data(BytesIO(response.data), system_poster_path, replacement=image_receipt(system_poster_path))
 
                     if not save_success:
                         cls.set_image_storage_state(entity, 'failed', '로컬 포스터 다운로드 또는 저장 실패')
@@ -2706,7 +2779,7 @@ class SiteAvBase:
                     filepath = os.path.join(target_folder, filename)
                     if not user_filename and (rewrite or not os.path.isfile(filepath)):
                         response = safe_jav_image(url=art_url, site=cls.site_name)
-                        if response is None or response.status_code != 200 or not cls._save_image_data(BytesIO(response.data), filepath):
+                        if response is None or response.status_code != 200 or not cls._save_image_data(BytesIO(response.data), filepath, replacement=image_receipt(filepath)):
                             cls.set_image_storage_state(entity, 'failed', '로컬 팬아트 다운로드 또는 저장 실패')
                             return
                     entity.fanart.append(f"{server_url_prefix}/{filename}")
@@ -2736,6 +2809,8 @@ class SiteAvBase:
 
             with tempfile.TemporaryDirectory(prefix='gdrive_images_', dir=tmp_dir) as tmp_dir:
                 queued_images = {}
+                art_results = {}
+                art_slots = {}
                 # 랜드스케이프 처리
                 saved_pl_url = None
                 user_pl_fid = gdrive_data.get('user_pl_fid')
@@ -2744,6 +2819,8 @@ class SiteAvBase:
                     logger.info(f"[{cls.site_name}] [GDrive] 원격 유저 랜드스케이프 썸네일 연결: {saved_pl_url}")
                 elif not rewrite and gdrive_data.get('system_pl_fid'):
                     saved_pl_url = MetaUtil.format_gdrive_thumbnail_url(gdrive_data['system_pl_fid'])
+                elif not rewrite and (code_lower + '_pl.jpg') in getattr(gdrive_data.get('remote_files'), 'ambiguous_names', set()):
+                    cls.set_image_storage_state(entity, 'failed', '동명 랜드스케이프의 최신 파일 확인 보류')
                 elif landscape_source:
                     if image_sources.get('skip_landscape_download'):
                         saved_pl_url = landscape_source
@@ -2782,6 +2859,8 @@ class SiteAvBase:
                     logger.info(f"[{cls.site_name}] [GDrive] 원격 유저 포스터 썸네일 연결: {saved_p_url}")
                 elif not rewrite and gdrive_data.get('system_p_fid'):
                     saved_p_url = MetaUtil.format_gdrive_thumbnail_url(gdrive_data['system_p_fid'])
+                elif not rewrite and (code_lower + '_p.jpg') in getattr(gdrive_data.get('remote_files'), 'ambiguous_names', set()):
+                    cls.set_image_storage_state(entity, 'failed', '동명 포스터의 최신 파일 확인 보류')
                 elif poster_source:
                     if image_sources.get('skip_poster_download'):
                         saved_p_url = poster_source
@@ -2819,6 +2898,49 @@ class SiteAvBase:
                                 cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 다운로드 또는 업로드 실패')
                                 logger.error(f"[{cls.site_name}] [GDrive] 포스터 원본 다운로드 실패: {poster_source}")
 
+                # 팬아트 처리
+                if rewrite or image_sources.get('arts'):
+                    for idx, art_url in enumerate(image_sources.get('arts', [])):
+                        filename = f"{code_lower}_art_{idx+1}.jpg"
+                        dest_rel_art = f"{rel_dir}/{filename}".strip('/')
+                        user_art = next((f"{code_lower}_art_{idx+1}_user.{ext}" for ext in ('jpg', 'jpeg', 'png', 'webp')
+                                         if (gdrive_data.get('remote_files') or {}).get(f"{code_lower}_art_{idx+1}_user.{ext}")), None)
+                        if user_art:
+                            art_results[idx] = MetaUtil.format_gdrive_thumbnail_url(gdrive_data['remote_files'][user_art])
+                            continue
+                        # rewrite 옵션이 꺼져 있는 경우 원격 팬아트 파일 사전 확인
+                        from metadata.util_preview import MetaPreviewUtil
+                        if not rewrite:
+                            remote_files = gdrive_data.get('remote_files')
+                            if filename in getattr(remote_files, 'ambiguous_names', set()):
+                                cls.set_image_storage_state(entity, 'failed', '동명 팬아트의 최신 파일 확인 보류')
+                                continue
+                            existing_art_fid = (remote_files.get(filename) if remote_files is not None else
+                                                MetaPreviewUtil.get_remote_file_id(dest_rel_art, category=target_cat, is_image=True))
+                            if existing_art_fid:
+                                stored_paths.setdefault(str(existing_art_fid), dest_rel_art)
+                                art_results[idx] = MetaUtil.format_gdrive_thumbnail_url(existing_art_fid)
+                                continue
+
+                        image_fd, tmp_art = tempfile.mkstemp(prefix='gdrive_image_', suffix='.jpg', dir=tmp_dir)
+                        os.close(image_fd)
+                        response = safe_jav_image(url=art_url, site=cls.site_name)
+                        if response and response.status_code == 200:
+                            if not cls._save_image_data(BytesIO(response.data), tmp_art):
+                                with open(tmp_art, 'wb') as f: f.write(response.data)
+
+                            queued_images[dest_rel_art] = tmp_art
+                            art_slots[dest_rel_art] = idx
+                        else:
+                            cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 다운로드 또는 업로드 실패')
+                            logger.error(f"[{cls.site_name}] [GDrive] 팬아트 #{idx+1} 다운로드 실패 ➔ 처리 중단: {art_url}")
+                            continue
+
+                else:
+                    for fname, fid in gdrive_data.get('remote_files', {}).items():
+                        if fname.startswith(f"{code_lower}_art_"):
+                            entity.fanart.append(MetaUtil.format_gdrive_thumbnail_url(fid))
+
                 if queued_images:
                     replacements = decision_data.setdefault('_media_replacements', [])
                     entity.extra_info['_media_replacements'] = replacements
@@ -2827,7 +2949,9 @@ class SiteAvBase:
                     for relative, file_id in uploaded.items():
                         stored_paths[str(file_id)] = relative
                         url = MetaUtil.format_gdrive_thumbnail_url(file_id)
-                        if relative.endswith('_pl.jpg'):
+                        if relative in art_slots:
+                            art_results[art_slots[relative]] = url
+                        elif relative.endswith('_pl.jpg'):
                             saved_pl_url = url
                         else:
                             saved_p_url = url
@@ -2850,56 +2974,7 @@ class SiteAvBase:
                         f"[{cls.site_name}] 유효하지 않은 포스터 URL을 최종 메타데이터에 반영하지 않습니다: {saved_p_url}"
                     )
 
-                # 팬아트 처리
-                if rewrite or image_sources.get('arts'):
-                    for idx, art_url in enumerate(image_sources.get('arts', [])):
-                        filename = f"{code_lower}_art_{idx+1}.jpg"
-                        dest_rel_art = f"{rel_dir}/{filename}".strip('/')
-                        user_art = next((f"{code_lower}_art_{idx+1}_user.{ext}" for ext in ('jpg', 'jpeg', 'png', 'webp')
-                                         if (gdrive_data.get('remote_files') or {}).get(f"{code_lower}_art_{idx+1}_user.{ext}")), None)
-                        if user_art:
-                            entity.fanart.append(MetaUtil.format_gdrive_thumbnail_url(gdrive_data['remote_files'][user_art]))
-                            continue
-                        # rewrite 옵션이 꺼져 있는 경우 원격 팬아트 파일 사전 확인
-                        from metadata.util_preview import MetaPreviewUtil
-                        if not rewrite:
-                            remote_files = gdrive_data.get('remote_files')
-                            existing_art_fid = (remote_files.get(filename) if remote_files is not None else
-                                                MetaPreviewUtil.get_remote_file_id(dest_rel_art, category=target_cat, is_image=True))
-                            if existing_art_fid:
-                                stored_paths.setdefault(str(existing_art_fid), dest_rel_art)
-                                entity.fanart.append(MetaUtil.format_gdrive_thumbnail_url(existing_art_fid))
-                                continue
-
-                        image_fd, tmp_art = tempfile.mkstemp(prefix='gdrive_image_', suffix='.jpg', dir=tmp_dir)
-                        os.close(image_fd)
-                        response = safe_jav_image(url=art_url, site=cls.site_name)
-                        if response and response.status_code == 200:
-                            if not cls._save_image_data(BytesIO(response.data), tmp_art):
-                                with open(tmp_art, 'wb') as f: f.write(response.data)
-
-                            fid = MetaUtil.upload_image_to_gdrive(tmp_art, dest_rel_art, category=target_cat, overwrite=rewrite,
-                                **({'replacements': decision_data['_media_replacements']} if decision_data.get('_media_replacements') else {}))
-                            if os.path.exists(tmp_art):
-                                try: os.remove(tmp_art)
-                                except: pass
-
-                            if fid:
-                                stored_paths[str(fid)] = dest_rel_art
-                                entity.fanart.append(MetaUtil.format_gdrive_thumbnail_url(fid))
-                            else:
-                                cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 다운로드 또는 업로드 실패')
-                                logger.error(f"[{cls.site_name}] [GDrive] 팬아트 #{idx+1} 업로드 실패 ➔ 처리 중단: {dest_rel_art}")
-                                return
-                        else:
-                            cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 다운로드 또는 업로드 실패')
-                            logger.error(f"[{cls.site_name}] [GDrive] 팬아트 #{idx+1} 다운로드 실패 ➔ 처리 중단: {art_url}")
-                            return
-
-                else:
-                    for fname, fid in gdrive_data.get('remote_files', {}).items():
-                        if fname.startswith(f"{code_lower}_art_"):
-                            entity.fanart.append(MetaUtil.format_gdrive_thumbnail_url(fid))
+                entity.fanart.extend(art_results[i] for i in sorted(art_results))
 
         assets = [(getattr(t, 'aspect', None), getattr(t, 'value', None), 0) for t in entity.thumb or []]
         assets += [('fanart', url, idx) for idx, url in enumerate(entity.fanart or [])]
@@ -2937,7 +3012,7 @@ class SiteAvBase:
                     cls.set_image_storage_state(entity, 'failed', '로컬 이미지 파일이 없거나 비어 있습니다.')
                     return
         cls.set_image_storage_state(entity, 'complete')
-        logger.info(f"[ImageUtil] 이미지 최종 처리 완료. Thumbs: {len(unique_thumb_urls)}, Fanarts: {len(unique_fanarts)}")
+        logger.info(f"[ImageUtil] 이미지 처리 완료: 대표·가로 이미지 {len(unique_thumb_urls)}개 확인 ({'팬아트 '+str(len(unique_fanarts))+'개' if unique_fanarts else '팬아트 없음'})")
 
 
     # endregion 이미지 처리 관련
@@ -3126,7 +3201,7 @@ class SiteAvBase:
                     rule_applied = True
                     break
             except (re.error, IndexError) as e:
-                logger.error(f"Error applying rule: '{line}' - {e}")
+                logger.error(f"규칙 적용 실패: '{line}' - {e}")
 
         # 모든 규칙에 실패했을 경우의 폴백
         if not rule_applied:
@@ -3464,7 +3539,7 @@ class SiteAvBase:
             else:
                 return 60 # 넘버 파트가 다름
         except Exception as e:
-            logger.error(f"Score calculation error: {e}. Keyword: '{original_keyword}', Item: '{item_ui_code}'")
+            logger.error(f"작품 일치도 계산 실패: 검색어 {original_keyword}, 결과 품번 {item_ui_code} — {e}")
             return 20
 
 
@@ -3534,22 +3609,41 @@ class SiteAvBase:
         return cls.parse_image_file_mode(value)
 
     @classmethod
-    def publish_image_file(cls, source, destination):
+    def publish_image_file(cls, source, destination, replacement=None):
+        if replacement is not None:
+            from metadata.util_preview import MediaReplacement
+            if not replacement.get('image_contract') or os.path.abspath(destination) != os.path.abspath(replacement['target']):
+                raise ValueError('이미지 게시 영수증의 대상이 일치하지 않습니다.')
+            MediaReplacement.image_write_start(replacement, source)
         parent = os.path.dirname(os.path.abspath(destination))
         mode = cls.local_image_file_mode(parent)
+        if replacement is not None and mode is None:
+            mode = 0o644
         os.makedirs(parent, exist_ok=True)
-        fd, staging = tempfile.mkstemp(prefix='.image_', suffix='.tmp', dir=parent)
-        os.close(fd)
+        backup = None
+        written = False
+        if replacement is None and os.path.lexists(destination):
+            import uuid
+            backup = str(destination) + '.old_' + uuid.uuid4().hex
+            os.rename(destination, backup)
         try:
-            shutil.copyfile(source, staging)
-            # mkstemp creates mode 0600. Set the final mode before atomic publication,
-            # without changing the process-wide umask or exposing partial image data.
+            with open(source, 'rb') as src:
+                fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                written = True
+                with os.fdopen(fd, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
             if mode is not None:
-                os.chmod(staging, mode)
-            os.replace(staging, destination)
-        finally:
-            if os.path.exists(staging):
-                os.remove(staging)
+                os.chmod(destination, mode)
+            if replacement is not None:
+                MediaReplacement.generated(replacement)
+        except Exception:
+            if written and os.path.exists(destination):
+                os.remove(destination)
+            if backup:
+                os.rename(backup, destination)
+            raise
+        if backup:
+            os.remove(backup)
 
     @classmethod
     def save_image_bytes(cls, data, destination):
@@ -3564,7 +3658,7 @@ class SiteAvBase:
             if os.path.exists(staging): os.remove(staging)
 
     @classmethod
-    def _save_image_data(cls, image_data_bytesio: BytesIO, save_path: str) -> bool:
+    def _save_image_data(cls, image_data_bytesio: BytesIO, save_path: str, replacement=None) -> bool:
         tmp_dir = os.path.join(path_data, 'tmp')
         os.makedirs(tmp_dir, exist_ok=True)
         fd, staging = tempfile.mkstemp(prefix='image_', suffix='.img', dir=tmp_dir)
@@ -3572,7 +3666,7 @@ class SiteAvBase:
         try:
             if not cls._encode_image_data(image_data_bytesio, staging):
                 return False
-            cls.publish_image_file(staging, save_path)
+            cls.publish_image_file(staging, save_path, replacement=replacement)
             return True
         finally:
             if os.path.exists(staging): os.remove(staging)
@@ -3611,7 +3705,7 @@ class SiteAvBase:
             logger.warning(f"Invalid image response; refusing to save: {save_path}")
             return False
         except Exception as e:
-            logger.error(f"Failed to intelligently save image to {save_path}: {e}")
+            logger.error(f"이미지 처리·저장 실패: {save_path} — {e}")
             logger.error(traceback.format_exc())
             return False
 
@@ -3660,7 +3754,7 @@ class SiteAvBase:
             return cls._save_actor_image(entity_actor, skip_existing=skip_existing)
         except Exception as exc:
             cls.set_image_storage_state(entity_actor, 'failed', str(exc))
-            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', type(exc).__name__)
+            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', exc, exc_info=True)
 
     @classmethod
     def _save_actor_image(cls, entity_actor, skip_existing=None):
@@ -3701,7 +3795,7 @@ class SiteAvBase:
                 if 'url' in qs_dict:
                     real_thumb_url = qs_dict['url'][0]
             except Exception as e:
-                logger.error(f"Failed to parse proxy URL: {e}")
+                logger.error(f"이미지 프록시 주소 분석 실패: {e}")
 
         def clean_name(n):
             return re.sub(r'\s+', '_', str(n).strip())
@@ -3745,7 +3839,7 @@ class SiteAvBase:
                     if res and res.status_code == 200:
                         if not cls._save_image_data(BytesIO(res.content), tmp_file):
                             with open(tmp_file, 'wb') as f: f.write(res.content)
-                        user_gid = MetaUtil.upload_image_to_gdrive(tmp_file, relative_path, category='JAV_CEN', overwrite=rewrite) or ''
+                        user_gid = MetaUtil.upload_image_to_gdrive(tmp_file, relative_path, category='JAV_CEN', overwrite=rewrite, prechecked=not rewrite) or ''
                         if user_gid:
                             final_thumb_url = MetaUtil.format_gdrive_thumbnail_url(user_gid)
                 finally:
@@ -3768,7 +3862,7 @@ class SiteAvBase:
                         cls.set_image_storage_state(entity_actor, 'failed', '인물 이미지 다운로드 또는 로컬 저장 실패')
                         return
                 except Exception as e:
-                    logger.error(f"Failed to save actor image: {e}")
+                    logger.error(f"인물 이미지 저장 실패: {e}")
                     return
 
             if not os.path.isfile(full_path) or os.path.getsize(full_path) == 0:
@@ -3840,7 +3934,7 @@ class SiteAvBase:
             return cls._save_western_actor_image(entity_actor, skip_existing=skip_existing)
         except Exception as exc:
             cls.set_image_storage_state(entity_actor, 'failed', str(exc))
-            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', type(exc).__name__)
+            logger.warning('[ImageUtil] 인물 이미지 처리 실패, 인물 정보는 유지: %s', exc, exc_info=True)
 
     @classmethod
     def _save_western_actor_image(cls, entity_actor, skip_existing=None):
@@ -3919,7 +4013,7 @@ class SiteAvBase:
                     if res and res.status_code == 200:
                         if not cls._save_image_data(BytesIO(res.content), tmp_file):
                             with open(tmp_file, 'wb') as f: f.write(res.content)
-                        user_gid = MetaUtil.upload_image_to_gdrive(tmp_file, relative_path, category='WESTERN', overwrite=rewrite) or ''
+                        user_gid = MetaUtil.upload_image_to_gdrive(tmp_file, relative_path, category='WESTERN', overwrite=rewrite, prechecked=not rewrite) or ''
                         if user_gid:
                             final_thumb_url = MetaUtil.format_gdrive_thumbnail_url(user_gid)
                 finally:
@@ -4093,12 +4187,12 @@ class SiteAvBase:
                             logger.debug(f"[{cls.site_name}] Target image matches placeholder sample '{filename}'. Marking as fake image.")
                             return True
                 except Exception as e_sample:
-                    logger.warning(f"[{cls.site_name}] Failed to process placeholder sample '{filename}': {e_sample}")
+                    logger.warning(f"[{cls.site_name}] 대체 이미지 비교용 표본 처리 실패: {filename} — {e_sample}")
 
             return False
             
         except Exception as e:
-            logger.error(f"[{cls.site_name}] Error during placeholder check: {e}")
+            logger.error(f"[{cls.site_name}] 대체 이미지 여부 확인 실패: {e}")
             return False
 
 

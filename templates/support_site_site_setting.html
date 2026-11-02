@@ -210,8 +210,35 @@ $("body").on('click', '#site_wavve_login_btn', function(e) {
 
 $("body").on('click', '#site_imgur_auth_btn', function(e) {
   e.preventDefault();
-  var url = "https://api.imgur.com/oauth2/authorize?client_id=" + $('#site_imgur_client_id').val() + "&response_type=token&state=state";
-  var win = window.open(url, "_blank", 'width=800,height=500');
+  var clientId = {{ arg['site_imgur_client_id']|tojson }};
+  if (!clientId || $('#site_imgur_client_id').val() !== clientId) {
+    alert('Client ID 설정을 저장하고 이 페이지를 새로고침한 후 인증하세요.');
+    return;
+  }
+  var win = window.open('about:blank', '_blank', 'width=800,height=500');
+  if (!win) {
+    alert('인증 팝업을 허용한 후 다시 시도하세요.');
+    return;
+  }
+  $.ajax({
+    url: '/support_site/ajax/site/command',
+    type: 'POST',
+    dataType: 'json',
+    data: {command: 'imgur_auth_start'},
+    success: function(ret) {
+      if (ret.ret !== 'success' || !ret.state) {
+        win.close();
+        alert('인증 요청을 시작하지 못했습니다. 다시 시도하세요.');
+        return;
+      }
+      win.location.href = 'https://api.imgur.com/oauth2/authorize?client_id=' +
+        encodeURIComponent(clientId) + '&response_type=token&state=' + encodeURIComponent(ret.state);
+    },
+    error: function() {
+      win.close();
+      alert('인증 요청을 시작하지 못했습니다. 로그인 상태를 확인하세요.');
+    }
+  });
 });
 
 $("body").on('click', '#site_naver_login_btn', function(e) {

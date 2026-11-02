@@ -555,9 +555,10 @@ class SiteStashdb(SiteAvBase):
             studio_dict = item_data.get('studio') or {}
             final_studio = cls._format_studio_name(studio_dict.get('name'))
             
-            raw_title = str(item_data.get('title') or '').strip() or item.ui_code
+            raw_title = str(item_data.get('title') or '').strip()
             studio_code = str(item_data.get('code') or '').strip()
-            raw_title = cls._format_scene_title(raw_title, final_studio, studio_code, item_data=item_data)
+            raw_title = cls._format_scene_title(raw_title, final_studio, studio_code, item_data=item_data) if raw_title else item.code
+            item.ui_code = str(raw_title or '').strip() or item.code
 
             females, males = [], []
             performers = item_data.get('performers') or []
@@ -609,7 +610,9 @@ class SiteStashdb(SiteAvBase):
                 item.score = int(round(calc_score))
 
             item.score = max(0, min(100, item.score))
-            ret.append(item.as_dict())
+            result = item.as_dict()
+            result['originaltitle'] = item.ui_code
+            ret.append(result)
 
         ret.sort(key=lambda k: k.get("score", 0), reverse=True)
 
@@ -885,6 +888,7 @@ class SiteStashdb(SiteAvBase):
             if not isinstance(img_obj, dict): continue
             url = str(img_obj.get('url') or '')
             if not url: continue
+            raw_image_urls['arts'].append(url)
             w = img_obj.get('width')
             h = img_obj.get('height')
             if w and h and int(w) > int(h):
@@ -907,9 +911,6 @@ class SiteStashdb(SiteAvBase):
             poster_url = portrait_poster_url
         elif portrait_poster_url:
             poster_url = portrait_poster_url
-        elif use_smart_crop and landscape_cover_url and (opts.get('image_mode') or cls.config.get('image_mode')) == 'ff_proxy':
-            poster_url = cls.proxy_image_reference(landscape_cover_url, 'smart_crop')
-            entity.extra_info.setdefault('image_transforms', {})['poster'] = {'url': landscape_cover_url, 'mode': 'smart_crop', 'site': cls.site_name}
         elif use_smart_crop and landscape_cover_url:
             try:
                 res_pl = cls.get_response(landscape_cover_url, timeout=10)
@@ -950,7 +951,7 @@ class SiteStashdb(SiteAvBase):
                     'content_type': 'trailer'
                 }]
 
-                final_url = cls.make_video_url(trailer_url) if cls.config.get('use_trailer_proxy', False) else trailer_url
+                final_url = trailer_url
                 if final_url:
                     entity.extras.append(EntityExtra("trailer", entity.tagline or entity.title, "mp4", final_url))
 

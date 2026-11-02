@@ -9,7 +9,8 @@ import lxml.html
 from tool import ToolUtil
 from .setup import *
 
-from curl_cffi import requests
+import requests as binary_requests
+from curl_cffi import requests as curl_requests
 from curl_cffi.requests import BrowserType
 
 
@@ -18,12 +19,12 @@ default_headers: dict | None = None
 
 class SiteUtil(object):
 
-    session: requests.Session | None = None
+    session: curl_requests.Session | None = None
     loose_match_shows: tuple | None = None
 
     @classmethod
     def initialize(cls, common_headers: str = None, loose_match_shows: str = None) -> None:
-        cls.session = requests.Session(impersonate=_get_latest_chrome())
+        cls.session = curl_requests.Session(impersonate=_get_latest_chrome())
         logger.debug('Request session has been initialized.')
         global default_headers
         default_headers = _get_default_headers(common_headers)
@@ -42,7 +43,13 @@ class SiteUtil(object):
         return res.text
 
     @classmethod
-    def get_response(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=30.0):
+    def get_response(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None, verify=None, timeout=30.0, ssrf_safe=False):
+        if ssrf_safe:
+            from .ssrf_guard import SSRFRejected
+            if post_data is not None:
+                raise SSRFRejected()
+            return cls.get_image_response(url, proxy_url=proxy_url, headers=headers, cookies=cookies,
+                                          verify=verify, timeout=timeout, ssrf_safe=True)
         proxies = None
         if proxy_url is not None and proxy_url != '':
             proxies = {"http"  : proxy_url, "https" : proxy_url}
@@ -59,8 +66,58 @@ class SiteUtil(object):
             else:
                 res = cls.session.post(url, headers=headers, proxies=proxies, data=post_data, cookies=cookies, timeout=timeout, verify=verify)
         if not 300 > res.status_code > 199:
-            logger.warning(f'http_code={res.status_code} url="{res.url}" "body="{res.text}"')
+            if ssrf_safe:
+                logger.warning('Remote media HTTP status: %s', res.status_code)
+            else:
+                logger.warning(f'http_code={res.status_code} url="{res.url}" "body="{res.text}"')
         return res
+
+    @classmethod
+    def get_image_response(cls, url, proxy_url=None, headers=None, cookies=None, verify=None, timeout=30.0, ssrf_safe=False):
+        """Receive image bytes with requests; borrow only scoped page cookies/headers."""
+        from http.cookiejar import CookieJar
+        from .ssrf_guard import fetch, _redirect_cookies, MAX_IMAGE_BYTES, SSRFRejected, unwrap_image_url
+        if ssrf_safe:
+            url = unwrap_image_url(url)
+        inherited = dict(getattr(cls.session, 'headers', {}) or {})
+        inherited.update((default_headers if headers is None else headers) or {})
+        # Page-session credentials without a domain scope must not be attached
+        # to an arbitrary image URL. Explicit internal per-request headers remain supported.
+        outgoing = {key: value for key, value in inherited.items() if key.lower() not in (
+            'cookie', 'authorization', 'proxy-authorization', 'host')}
+        if headers is not None:
+            outgoing.update({key: value for key, value in headers.items()
+                             if key.lower() not in ('host', 'proxy-authorization')})
+        page_cookies = getattr(cls.session, 'cookies', None)
+        page_cookies = getattr(page_cookies, 'jar', page_cookies)
+        jar = _redirect_cookies(url, outgoing, page_cookies if isinstance(page_cookies, CookieJar) else None, cookies)
+        host = urllib.parse.urlsplit(url).hostname
+        for cookie in list(jar):
+            if not cookie.domain or (not cookie.domain_specified and cookie.domain != host):
+                jar.clear(cookie.domain, cookie.path, cookie.name)
+        # Let the cookie engine enforce Domain/Path/Secure on every request.
+        outgoing = {key: value for key, value in outgoing.items() if key.lower() != 'cookie'}
+        effective_verify = getattr(cls.session, 'verify', True) if verify is None else verify
+        proxies = {'http': proxy_url, 'https': proxy_url} if proxy_url else None
+        with binary_requests.Session() as session:
+            session.trust_env = False
+            if ssrf_safe:
+                return fetch(url, client='requests', transport=session, proxy=proxies, headers=outgoing,
+                             cookies=jar, verify=effective_verify, timeout=timeout)
+            session.cookies = jar
+            response = session.get(url, headers=outgoing, proxies=proxies, verify=effective_verify,
+                                   timeout=timeout, stream=True)
+            try:
+                body = bytearray()
+                for chunk in response.iter_content(65536):
+                    if len(body) + len(chunk) > MAX_IMAGE_BYTES:
+                        raise SSRFRejected()
+                    body.extend(chunk)
+                response._content = bytes(body)
+                response._content_consumed = True
+                return response
+            finally:
+                response.close()
 
 
     @classmethod
@@ -70,8 +127,11 @@ class SiteUtil(object):
         ret = image_url
         if image_mode == '1':
             tmp = '{ddns}/metadata/api/image_proxy?url=' + urllib.parse.quote_plus(image_url)
-            if proxy_url is not None:
-                tmp += '&proxy_url=' + urllib.parse.quote_plus(proxy_url)
+            if proxy_url:
+                from .ssrf_guard import image_proxy_site
+                site = image_proxy_site(proxy_url, F.PluginManager.get_plugin_instance('metadata'))
+                if site:
+                    tmp += '&proxy_site=' + urllib.parse.quote_plus(site)
             ret = ToolUtil.make_apikey_url(tmp)
         elif image_mode == '2':
             tmp = '{ddns}/metadata/api/discord_proxy?url=' + urllib.parse.quote_plus(image_url)
@@ -84,7 +144,7 @@ class SiteUtil(object):
         elif image_mode == '5':  #로컬에 포스터를 만들고
             from PIL import Image
             from io import BytesIO
-            im = Image.open(BytesIO(requests.get(image_url).content))
+            im = Image.open(BytesIO(cls.get_image_response(image_url, proxy_url=proxy_url).content))
             width, height = im.size
             filename = 'proxy_%s.jpg' % str(time.time())
             filepath = os.path.join(F.config['path_data'], 'tmp', filename)
@@ -314,7 +374,7 @@ class SiteUtil(object):
     def process_image_book(cls, url):
         from PIL import Image
         from io import BytesIO
-        im = Image.open(BytesIO(requests.get(url).content))
+        im = Image.open(BytesIO(cls.get_image_response(url).content))
         width, height = im.size
         filename = 'proxy_%s.jpg' % str(time.time())
         filepath = os.path.join(F.config['path_data'], 'tmp', filename)
@@ -779,7 +839,7 @@ def _get_latest_chrome() -> str:
 
 def _get_default_headers(default: dict | None = None) -> dict:
     data = {}
-    with requests.Session(impersonate=_get_latest_chrome()) as session:
+    with curl_requests.Session(impersonate=_get_latest_chrome()) as session:
         response = None
         header_url = "https://postman-echo.com/headers"
         try:

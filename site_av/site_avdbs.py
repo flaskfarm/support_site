@@ -51,6 +51,70 @@ class SiteAvdbs(SiteAvBase):
 
     # meta_person 통합 인물 테이블에서 배우 조회
     @classmethod
+    def _match_meta_person_candidates(cls, search_name, results, western=False):
+        """등록 PERSON 후보의 정확 일치와 동명이인 순위를 수집/배치에서 공유."""
+        from datetime import datetime, timezone
+        clean_target = str(search_name or '').strip()
+        if not clean_target:
+            return None
+        ranked_matches = {}
+        target_lower = clean_target.lower()
+
+        for cand_idx, cand in enumerate(results):
+            cand_person_idx = str(cand.get('person_idx') or '').strip().lower()
+            cand_org = str(cand.get('name_org') or '').strip().lower()
+            cand_en = str(cand.get('name_en') or '').strip().lower()
+            cand_aliases = [str(a).strip().lower() for a in (cand.get('aliases') or []) if str(a).strip()]
+            if target_lower == cand_person_idx:
+                match_rank = 1
+            elif target_lower == cand_org:
+                match_rank = 2
+            elif target_lower == cand_en:
+                match_rank = 3
+            elif target_lower in cand_aliases or (not western and cand.get('other_names') and
+                    cls._parse_and_match_other_names(cand['other_names'], clean_target)):
+                match_rank = 4
+            elif not western and re.search(r'\([^()]+\)|（[^（）]+）', cand_org):
+                name_parts = {part.strip().lower() for part in re.split(r'[（）()]', cand_org) if part.strip()}
+                if target_lower not in name_parts:
+                    continue
+                match_rank = 5
+            else:
+                continue
+
+            debut = str(cand.get('debut_date') or '').strip()
+            debut_key = (0, 0, 0)
+            if re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', debut):
+                try:
+                    datetime.strptime(debut, {4: '%Y', 7: '%Y-%m', 10: '%Y-%m-%d'}[len(debut)])
+                    parts = [int(value) for value in debut.split('-')]
+                    debut_key = tuple(parts + [0] * (3 - len(parts)))
+                except ValueError:
+                    pass
+            try:
+                works_count = int(cand.get('works_count') or 0)
+            except (TypeError, ValueError):
+                works_count = 0
+            created = cand.get('created_time')
+            try:
+                created = created if isinstance(created, datetime) else datetime.fromisoformat(str(created).replace('Z', '+00:00'))
+                if created.tzinfo is not None:
+                    created = created.astimezone(timezone.utc).replace(tzinfo=None)
+            except (TypeError, ValueError):
+                created = datetime.min
+            person_id = int(cand.get('id') or 0)
+            rank_key = (-match_rank, debut_key != (0, 0, 0), debut_key, works_count, created, person_id)
+            identity = ('person_idx', cand_person_idx) if cand_person_idx else ('id', person_id) if person_id else ('candidate', cand_idx)
+            if identity not in ranked_matches or rank_key > ranked_matches[identity][0]:
+                ranked_matches[identity] = (rank_key, cand)
+
+        if ranked_matches:
+            matched_item = max(ranked_matches.values(), key=lambda match: match[0])[1]
+            return matched_item
+        return None
+
+
+    @classmethod
     def _search_from_meta_person_db(cls, name_variations_to_search):
         try:
             meta_plugin = F.PluginManager.get_plugin_instance('metadata')
@@ -65,30 +129,13 @@ class SiteAvdbs(SiteAvBase):
                 if not clean_target:
                     continue
 
-                results = meta_db_mod.person_search(clean_target, domain="JAV")
+                results = meta_db_mod.person_search(clean_target, domain="JAV", options={'actor_match_candidates': True})
                 if not results:
                     continue
 
-                matched_item = None
-                target_lower = clean_target.lower()
-
-                for cand in results:
-                    cand_org = str(cand.get('name_org') or '').strip().lower()
-                    cand_ko = str(cand.get('name_ko') or '').strip().lower()
-                    cand_en = str(cand.get('name_en') or '').strip().lower()
-                    cand_aliases = [str(a).strip().lower() for a in (cand.get('aliases') or []) if str(a).strip()]
-
-                    # 원문명, 한국어명, 영문명, 별칭과 100% 일치하거나 DB other_names의 괄호 안 원문명과 일치할 때만 승인
-                    is_matched = (target_lower in (cand_org, cand_ko, cand_en) or target_lower in cand_aliases)
-                    if not is_matched and cand.get('other_names'):
-                        is_matched = cls._parse_and_match_other_names(cand['other_names'], clean_target)
-
-                    if is_matched:
-                        matched_item = cand
-                        break
-
+                matched_item = cls._match_meta_person_candidates(clean_target, results)
                 if matched_item:
-                    logger.debug(f"AVDBS MetaPerson 100% Match: '{clean_target}' -> {matched_item.get('name_ko') or matched_item.get('name_org')} ({matched_item.get('person_idx')})")
+                    logger.debug(f"[AVDBS] 인물명 일치: {clean_target} → {matched_item.get('name_ko') or matched_item.get('name_org')} ({matched_item.get('person_idx')})")
                     return {
                         "name_org": matched_item.get("name_org", ""),
                         "name_ko": matched_item.get("name_ko", ""),
@@ -98,7 +145,7 @@ class SiteAvdbs(SiteAvBase):
                         "site": "meta_person_db"
                     }
         except Exception as e:
-            logger.debug(f"AVDBS MetaPerson search error: {e}")
+            logger.debug(f"[AVDBS] 인물 DB 검색 실패: {e}")
         return None
 
 
@@ -426,10 +473,10 @@ class SiteAvdbs(SiteAvBase):
                 'person_type': 'actor'
             }
             meta_db_mod.person_save(payload)
-            logger.debug(f"AVDBS WEB ➔ MetaPerson 자동 저장 완료: {name_kr} ({name_orig})")
+            logger.debug(f"[AVDBS] 사이트 인물 정보를 DB에 저장 완료: {name_kr} ({name_orig})")
 
         except Exception as e:
-            logger.debug(f"AVDBS WEB MetaPerson 자동 저장 실패: {e}")
+            logger.debug(f"[AVDBS] 사이트 인물 정보를 DB에 저장하지 못함: {e}")
 
 
     ################################################

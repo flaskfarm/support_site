@@ -1,0 +1,13 @@
+root = true
+
+[*.{py,pyf,js,css,html,md,yaml,yml,json,sh,toml,ini}]
+end_of_line = lf
+
+[.gitattributes]
+end_of_line = lf
+
+[.editorconfig]
+end_of_line = lf
+
+[.gitignore]
+end_of_line = lf
