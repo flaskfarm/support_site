@@ -5601,6 +5601,7 @@ MGS_LABEL_MAP = {
     "ODVHJ": ["062ODVHJ"],
     "OE": ["002OE"],
     "OEM": ["540OEM"],
+    "OERO": ["892OERO"],
     "OFAV": ["157OFAV"],
     "OFKU": ["052OFKU"],
     "OFPC": ["323OFPC"],

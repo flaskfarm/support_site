@@ -8,7 +8,12 @@ class ToolImgur(object):
     __cdn_id = None
 
     @classmethod
-    def __get_client(cls):
+    def reset_client(cls):
+        cls.__client = None
+        cls.__cdn_id = None
+
+    @classmethod
+    def __get_client(cls, strict=False):
         try:
             from imgurpython import ImgurClient
         except:
@@ -16,6 +21,8 @@ class ToolImgur(object):
                 os.system("pip install imgurpython")
                 from imgurpython import ImgurClient
             except Exception as e:
+                if strict:
+                    raise
                 logger.error(f"Exception:{str(e)}")
                 logger.error(traceback.format_exc())
         try:
@@ -39,6 +46,9 @@ class ToolImgur(object):
                     cls.__cdn_id = ret['id']
                     #logger.error(ret)
         except Exception as e:
+            if strict:
+                cls.reset_client()
+                raise
             logger.error(f"Exception:{str(e)}")
             logger.error(traceback.format_exc())
         return cls.__client
@@ -60,7 +70,7 @@ class ToolImgur(object):
 
     @classmethod
     def upload_from_paste(cls, img):
-        client = cls.__get_client()
+        client = cls.__get_client(strict=True)
         if client:
             data = {
                 'image': img.split('base64,')[1],

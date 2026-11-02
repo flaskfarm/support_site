@@ -443,7 +443,7 @@ class SiteJavdb(SiteAvBase):
 
             arts_nodes = tree.xpath('//div[contains(@class, "preview-images")]/a[@class="tile-item"]/@href')
             arts_urls = ["https:" + href if href.startswith("//") else href for href in arts_nodes]
-            ret['arts'] = list(dict.fromkeys(arts_urls))
+            ret['arts'] = arts_urls
 
             if ret['arts']:
                 ret['specific_poster_candidates'].append(ret['arts'][0])

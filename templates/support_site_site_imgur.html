@@ -1,29 +1,25 @@
 <script type="text/javascript">
-// First, parse the query string
-var params = {}, queryString = location.hash.substring(1),
-    regex = /([^&=]+)=([^&]*)/g, m;
-while (m = regex.exec(queryString)) {
-  params[decodeURIComponent(m[1])] = decodeURIComponent(m[2]);
-}
-// And send the token over to the server
-var req = new XMLHttpRequest();
-// consider using POST so query isn't logged
-//req.open('GET', 'https://' + window.location.host + '/catchtoken?' + queryString, true);
-req.open('POST', 'https://' + window.location.host + '/support_site/normal/imgur_callback?' + queryString, true);
-req.onreadystatechange = function (e) {
-  if (req.readyState == 4) {
-    if(req.status == 200) {
-      var response = req.responseText;
-      alert(response);
-      //window.location = params['state']
-    } else {
-      alert('Error!!')
-    } 
-    window.close();
-  }
-};
-
-//alert('토큰을 저장하였습니다.');
-//window.close();
-req.send(null);
+(function() {
+  var fragment = location.hash.substring(1);
+  history.replaceState(null, '', location.pathname + location.search);
+  var params = new URLSearchParams(fragment);
+  var body = new URLSearchParams({command: 'imgur_auth_complete'});
+  ['state', 'access_token', 'refresh_token', 'account_username', 'account_id'].forEach(function(key) {
+    body.set(key, params.get(key) || '');
+  });
+  var req = new XMLHttpRequest();
+  req.open('POST', '/support_site/ajax/site/command', true);
+  req.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+  req.onreadystatechange = function() {
+    if (req.readyState === 4) {
+      var succeeded = false;
+      try { succeeded = req.status === 200 && JSON.parse(req.responseText).ret === 'success'; }
+      catch (e) { /* 로그인 페이지 등 JSON이 아닌 응답도 인증 실패로 처리한다. */ }
+      alert(succeeded ? 'Imgur 인증 정보를 저장했습니다. 설정을 새로고침하세요.' :
+        'Imgur 인증에 실패했습니다. 설정에서 다시 인증하세요.');
+      window.close();
+    }
+  };
+  req.send(body.toString());
+})();
 </script>

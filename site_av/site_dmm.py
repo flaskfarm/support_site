@@ -68,28 +68,28 @@ class SiteDmm(SiteAvBase):
         keyword_processed_parts_for_score = [part for part in keyword_processed_parts_for_score if part]
 
         keyword_for_url, label_part_for_retry, num_part_for_retry = cls.__get_keyword_for_url(temp_keyword, retry_step)
-        logger.debug(f"DMM Search [STEP {retry_step}]: original='{original_keyword}', keyword_for_url='{keyword_for_url}'")
+        logger.debug(f"[DMM] 작품 검색 {retry_step}단계: 원본 품번 {original_keyword}, 검색어 {keyword_for_url}")
 
         # --- 검색 URL 생성 ---
         # search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': keyword_for_url }
         # search_url = f"{SITE_BASE_URL}/search/?{urlencode(search_params)}"
 
         search_url = f"{SITE_BASE_URL}/search/=/searchstr={quote(keyword_for_url)}/limit=120/sort=rankprofile/"
-        logger.debug(f"DMM Search URL: {search_url}")
+        logger.debug(f"[DMM] 검색 요청 주소: {search_url}")
 
         tree = None
         try:
             tree = cls.get_tree(search_url, headers={'Referer': FANZA_AV_URL}, allow_redirects=True)
             if tree is None: 
-                logger.warning(f"DMM Search: Search tree is None for '{original_keyword}'. URL: {search_url}")
+                logger.warning(f"[DMM] 검색 응답을 확인하지 못함: {original_keyword} (주소: {search_url})")
                 return []
 
             title_tags_check = tree.xpath('//title/text()')
             if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]: 
-                logger.error(f"DMM Search: Age page received for '{original_keyword}'.")
+                logger.error(f"[DMM] 검색 응답이 연령 확인 페이지로 반환됨: {original_keyword}")
                 return []
         except Exception as e: 
-            logger.exception(f"DMM Search: Failed to get tree for '{original_keyword}': {e}")
+            logger.exception(f"[DMM] 검색 응답 분석 실패: {original_keyword} — {e}")
             return []
 
         # --- 검색 결과 목록 추출 XPath ---
@@ -112,10 +112,10 @@ class SiteDmm(SiteAvBase):
                     #logger.debug(f"DMM Search: Found {len(lists)} item blocks using XPath: {xpath_expr}")
                     break
             except Exception as e_xpath: 
-                logger.warning(f"DMM Search: XPath error with '{xpath_expr}' for '{original_keyword}': {e_xpath}")
+                logger.warning(f"[DMM] 검색 응답의 작품 영역 분석 실패: {original_keyword} ({xpath_expr}) — {e_xpath}")
 
         if not lists: 
-            logger.debug(f"DMM Search: No item blocks found using any XPath for '{original_keyword}'.")
+            logger.debug(f"[DMM] 검색 결과에서 작품 항목을 찾지 못함: {original_keyword}")
 
         ret_temp_before_filtering = []
 
@@ -165,7 +165,7 @@ class SiteDmm(SiteAvBase):
                     path_from_url = parsed_url.path
                     hostname = parsed_url.hostname
                 except Exception as e_url_parse_item_loop:
-                    logger.error(f"DMM Search Item: Failed to parse href '{href}': {e_url_parse_item_loop}")
+                    logger.error(f"[DMM] 작품 상세 주소 분석 실패: {href} — {e_url_parse_item_loop}")
                     continue
 
                 is_videoa_path = (hostname == 'video.dmm.co.jp' and '/av/content/' in href)
@@ -331,12 +331,12 @@ class SiteDmm(SiteAvBase):
         # --- 검색 결과가 없고, 아직 재시도 안했으며, 재시도용 정보가 있을 경우 ---
         if not ret_temp_before_filtering and label_part_for_retry and num_part_for_retry:
             if retry_step == 0:
-                logger.debug(f"DMM Search: No results for '{keyword_for_url}'. Moving to Step 1 (3-digit padding).")
+                logger.debug(f"[DMM] 검색 후보 없음: {keyword_for_url} — 숫자 세 자리 형식으로 재검색")
                 return cls.__search(original_keyword, do_trans, manual, retry_step=1)
             
             # Step 1 실패 시, 숫자가 99 이하인 경우에만 Step 2 (2-digit) 진행
             elif retry_step == 1 and num_part_for_retry.isdigit() and int(num_part_for_retry) <= 99:
-                logger.debug(f"DMM Search: No results for '{keyword_for_url}'. Moving to Step 2 (2-digit padding).")
+                logger.debug(f"[DMM] 검색 후보 없음: {keyword_for_url} — 숫자 두 자리 형식으로 재검색")
                 return cls.__search(original_keyword, do_trans, manual, retry_step=2)
 
         # --- 2단계: Blu-ray 필터링 ---
@@ -444,23 +444,23 @@ class SiteDmm(SiteAvBase):
         for item_final in final_filtered_list:
             item_final.pop('_variant_priority', None)
 
-        logger.debug(f"DMM Search: Variant filtering complete. Items after: {len(final_filtered_list)}")
+        logger.debug(f"[DMM] 중복·다른 판본 제외 후 검색 후보: {len(final_filtered_list)}")
 
         # --- 2차 재시도 로직 (필터 후 결과 없음 또는 저득점) ---
         should_retry = False
         if not final_filtered_list:
             should_retry = True
-            logger.debug("DMM Search: No results after filtering. Preparing to retry.")
+            logger.debug("[DMM] 판본 확인 후 남은 후보가 없어 재검색 예정")
         else:
             has_any_standard = any(not item.get('has_suffix', False) for item in final_filtered_list)
             has_digital = any(item.get('content_type') in ['videoa', 'amateur'] for item in final_filtered_list)
             
             if not has_any_standard:
                 should_retry = True
-                logger.debug("DMM Search: Only special/DOD versions found. Forcing retry to find standard version.")
+                logger.debug("[DMM] 특수·주문제작 판본만 있어 일반 판본 재검색 예정")
             elif not has_digital:
                 should_retry = True
-                logger.debug("DMM Search: No digital version (videoa/amateur) found. Forcing retry to check shorter padding.")
+                logger.debug("[DMM] 디지털 판본이 없어 더 짧은 숫자 형식으로 재검색 예정")
             else:
                 max_score = max(item.get("score", 0) for item in final_filtered_list)
                 if max_score < 80:
@@ -470,10 +470,10 @@ class SiteDmm(SiteAvBase):
         if should_retry and label_part_for_retry and num_part_for_retry:
             next_results = []
             if retry_step == 0:
-                logger.debug(f"DMM Search: Retrying '{original_keyword}' (Moving to Step 1).")
+                logger.debug(f"[DMM] {original_keyword}: 첫 번째 대체 형식으로 재검색")
                 next_results = cls.__search(original_keyword, do_trans, manual, retry_step=1)
             elif retry_step == 1 and num_part_for_retry.isdigit() and int(num_part_for_retry) <= 99:
-                logger.debug(f"DMM Search: Retrying '{original_keyword}' (Moving to Step 2).")
+                logger.debug(f"[DMM] {original_keyword}: 두 번째 대체 형식으로 재검색")
                 next_results = cls.__search(original_keyword, do_trans, manual, retry_step=2)
 
             if next_results:
@@ -508,9 +508,9 @@ class SiteDmm(SiteAvBase):
         if sorted_result:
             log_count = min(len(sorted_result), 10)
             log_prefix = f"[STEP {retry_step} RESULT]"
-            logger.debug(f"DMM Search: {log_prefix} Top {log_count} results for '{original_keyword}':")
+            logger.debug(f"[DMM] {original_keyword}: 검색 상위 후보 {log_count}건 ({log_prefix})")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
-                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title')}'")
+                logger.debug(f"  {idx+1}. 일치도={item_log_final.get('score')}, 분류={item_log_final.get('content_type')}, 내부 코드={item_log_final.get('code')}, 품번={item_log_final.get('ui_code')}, 제목='{item_log_final.get('title')}'")
 
         return sorted_result
 
@@ -613,7 +613,7 @@ class SiteDmm(SiteAvBase):
                 if keyword_cache:
                     trusted_keyword = keyword_cache.get(code)
             except Exception as e_cache:
-                logger.warning(f"DMM Info: Failed to get keyword from cache for {code}: {e_cache}")
+                logger.warning(f"[DMM] {code}: 캐시 검색어 조회 실패 — {e_cache}")
 
         if trusted_keyword:
             trusted_ui_code_from_keyword, _, _ = cls._parse_ui_code(trusted_keyword)
@@ -672,19 +672,19 @@ class SiteDmm(SiteAvBase):
                 
                 # 400 에러 시 재시도 (Amateur <-> Videoa)
                 if res.status_code == 400:
-                    logger.warning(f"DMM API 400 Error. Retrying with opposite type (Amateur <-> AV). Code: {code}")
+                    logger.warning(f"[DMM] {code}: 요청 분류를 바꿔 재시도 예정 (HTTP 400)")
                     is_amateur = not is_amateur
                     res = call_content_api(is_amateur_flag=is_amateur, is_av_flag=not is_amateur)
                     if res.status_code == 200:
                         entity.content_type = 'amateur' if is_amateur else 'videoa'
-                        logger.info(f"DMM Info: Content type corrected to '{entity.content_type}'")
+                        logger.info(f"[DMM] 작품 분류 보정 완료: '{entity.content_type}'")
 
                 logger.debug(f"DMM Info (API): Step 3/3 'ContentPageData' API call completed: {code} (type: {entity.content_type})")
 
                 if res.status_code == 200:
                     data = res.json()
                     if 'errors' in data or not data.get('data', {}).get('ppvContent'):
-                        logger.warning(f"DMM API: No content found for {code}. Falling back to DVD/HTML parsing.")
+                        logger.warning(f"[DMM] {code}: API 작품 정보가 없어 DVD·웹 페이지 정보로 대체 조회합니다.")
                         api_data = None
                         entity.content_type = 'dvd'
                     else:
@@ -707,7 +707,7 @@ class SiteDmm(SiteAvBase):
                 logger.info(f"DMM INFO URL: {detail_url}")
                 tree = cls.get_tree(detail_url, headers={'Referer': referer}, timeout=30, verify=False)
                 if tree is None: 
-                    logger.error(f"DMM Info (DVD): Failed to get page tree for {code}."); return None
+                    logger.error(f"[DMM] {code}: DVD 작품 페이지 응답 확인 실패"); return None
             except Exception as e_gt_info_dmm: 
                 logger.exception(f"DMM Info (DVD): Exc getting detail page: {e_gt_info_dmm}"); return None
 
@@ -980,7 +980,7 @@ class SiteDmm(SiteAvBase):
                 core_trusted = re.sub(r'[^A-Z0-9]', '', trusted_ui_code_from_keyword.upper())
                 core_cid = re.sub(r'[^A-Z0-9]', '', entity.ui_code.upper())
                 if not (core_trusted in core_cid or core_cid in core_trusted):
-                    logger.warning(f"DMM Info Mismatch: Keyword '{trusted_keyword}' (parsed as '{trusted_ui_code_from_keyword}') led to a result with a different final UI code '{entity.ui_code}'.")
+                    logger.warning(f"[DMM] 작품 식별 불일치: 검색어 {trusted_keyword}의 품번 {trusted_ui_code_from_keyword}, 사이트 결과 {entity.ui_code}")
 
             if identifier_parsed:
                 ui_code_for_image = entity.ui_code.lower()
@@ -1043,20 +1043,20 @@ class SiteDmm(SiteAvBase):
 
                 # 1순위: 포스터 이미지가 있다면, 그것을 landscape으로 복사
                 if poster_thumb and poster_thumb.value:
-                    logger.debug("DMM PL Fallback: Using poster image as landscape.")
+                    logger.debug("[DMM] 가로 커버가 없어 포스터 이미지로 대체")
                     entity.thumb.append(EntityThumb(aspect="landscape", value=poster_thumb.value))
 
                 # 2순위: 포스터도 없고, 팬아트가 있다면, 첫 번째 팬아트를 landscape으로 사용
                 elif not poster_thumb and entity.fanart:
-                    logger.debug("DMM PL Fallback: No poster. Using first fanart image as landscape.")
+                    logger.debug("[DMM] 가로 커버·포스터가 없어 첫 팬아트 이미지로 대체")
                     entity.thumb.append(EntityThumb(aspect="landscape", value=entity.fanart[0]))
 
                 # 3순위: 아무 이미지도 없을 경우
                 else:
-                    logger.warning(f"DMM PL Fallback: No poster or fanart available to use as a fallback for {code}.")
+                    logger.warning(f"[DMM] {code}: 가로 커버와 대체 포스터·팬아트 없음")
 
         except Exception as e_fallback:
-            logger.error(f"DMM Info: Error during landscape fallback logic for {code}: {e_fallback}")
+            logger.error(f"[DMM] {code}: 가로 커버 대체 이미지 처리 실패 — {e_fallback}")
             logger.error(traceback.format_exc())
 
         cls.finish_translation_work(entity)
@@ -1090,7 +1090,7 @@ class SiteDmm(SiteAvBase):
                         img_urls_dict['specific_poster_candidates'].append(arts[-1])
                 return img_urls_dict
             except Exception as e:
-                logger.error(f"DMM __img_urls (API): Failed to parse image URLs from JSON: {e}")
+                logger.error(f"[DMM] 이미지 주소 응답 분석 실패: {e}")
                 return img_urls_dict
 
         # --- HTML 파싱 방식 (dvd/bluray) ---
@@ -1155,11 +1155,9 @@ class SiteDmm(SiteAvBase):
                         numeric_suffix_with_ext = match_new_pattern.group(2)
                         high_res_candidate_url = f"{base_path_part}jp-{numeric_suffix_with_ext}"
 
-                    if high_res_candidate_url:
-                        temp_arts_list_dvd.append(high_res_candidate_url)
+                    temp_arts_list_dvd.append(high_res_candidate_url or thumb_url)
 
-                # 중복된 URL 제거 후 할당
-                img_urls_dict['arts'] = list(dict.fromkeys(temp_arts_list_dvd))
+                img_urls_dict['arts'] = temp_arts_list_dvd
                 
                 # specific_poster_candidates 설정
                 if img_urls_dict['arts']:
@@ -1229,7 +1227,7 @@ class SiteDmm(SiteAvBase):
                             if video_data.get("video_url"):
                                 trailer_url_final = video_data["video_url"]
                         except json.JSONDecodeError as e_json_dvd:
-                            logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}.")
+                            logger.error(f"[DMM] DVD·블루레이 트레일러 응답 분석 실패 — {e_json_dvd}.")
 
             if trailer_url_final:
                 logger.debug(f"DMM Trailer: Found URL for {code}: {trailer_url_final}")
@@ -1283,11 +1281,11 @@ class SiteDmm(SiteAvBase):
                             trailer_title_from_json = trailer_data['title']
 
                     except json.JSONDecodeError as e:
-                        logger.error(f"DMM Trailer Helper ({current_content_type_for_log}): Failed to parse JSON. Error: {e}")
+                        logger.error(f"[DMM] 트레일러 응답 분석 실패 ({current_content_type_for_log}): {e}")
                 else:
                     logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): Could not find 'const args' in player page.")
             else:
-                logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): Failed to get content from player page.")
+                logger.warning(f"[DMM] 트레일러 재생 페이지의 영상 정보 확인 실패 ({current_content_type_for_log})")
         
         except Exception as e_helper:
             logger.exception(f"DMM Trailer Helper ({current_content_type_for_log}): Exception for CID {cid_part}: {e_helper}")

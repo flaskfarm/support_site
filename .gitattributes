@@ -1,0 +1,17 @@
+*.py           text eol=lf
+*.pyf          text eol=lf
+*.js           text eol=lf
+*.css          text eol=lf
+*.html         text eol=lf
+*.md           text eol=lf
+*.yaml         text eol=lf
+*.yml          text eol=lf
+*.json         text eol=lf
+*.sh           text eol=lf
+*.toml         text eol=lf
+*.ini          text eol=lf
+.gitattributes text eol=lf
+.editorconfig  text eol=lf
+.gitignore     text eol=lf
+*.db           -text
+*.jpg          -text

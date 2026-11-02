@@ -1,5 +1,9 @@
 import json
+import secrets
 import sqlite3
+import time
+
+from flask import session
 
 from .setup import *
 
@@ -119,31 +123,80 @@ class ModuleSite(PluginModuleBase):
                 logger.error(traceback.format_exc())
                 ret['ret'] = 'error'
                 ret['msg'] = f"에러: {str(e)}"
+        elif command == 'imgur_auth_start':
+            if req.method != 'POST':
+                return jsonify({'ret': 'error', 'error_code': 'invalid_request', 'error_origin': 'ff', 'msg': 'POST 요청이 필요합니다.'}), 405
+            state = secrets.token_urlsafe(32)
+            session['imgur_oauth'] = {'state': state, 'issued_at': time.time()}
+            return jsonify({'ret': 'success', 'state': state})
+        elif command == 'imgur_auth_complete':
+            if req.method != 'POST':
+                return jsonify({'ret': 'error', 'error_code': 'invalid_request', 'error_origin': 'ff', 'msg': 'POST 요청이 필요합니다.'}), 405
+            pending = session.get('imgur_oauth') or {}
+            supplied_state = req.form.get('state', '')
+            issued_at = pending.get('issued_at')
+            expected_state = pending.get('state')
+            if (not isinstance(issued_at, (int, float)) or
+                    not 0 <= time.time() - issued_at <= 600):
+                session.pop('imgur_oauth', None)
+                return jsonify({'ret': 'error', 'error_code': 'invalid_request', 'error_origin': 'ff', 'msg': '인증 요청이 없거나 만료되었습니다.'}), 400
+            if (not isinstance(expected_state, str) or not expected_state or
+                    not supplied_state or not secrets.compare_digest(
+                        expected_state.encode('utf-8'), supplied_state.encode('utf-8'))):
+                return jsonify({'ret': 'error', 'error_code': 'invalid_request', 'error_origin': 'ff', 'msg': '인증 요청이 일치하지 않습니다.'}), 400
+            fields = ('access_token', 'refresh_token', 'account_username', 'account_id')
+            values = {key: req.form.get(key, '').strip() for key in fields}
+            if any(not value or any(ord(char) < 32 or ord(char) == 127 for char in value)
+                   for value in values.values()):
+                return jsonify({'ret': 'error', 'error_code': 'invalid_request', 'error_origin': 'ff', 'msg': '인증 정보가 누락되었거나 올바르지 않습니다.'}), 400
+            # 토큰은 본문에서만 수신하며 응답·예외 로그에 포함하지 않는다.
+            session.pop('imgur_oauth', None)
+            try:
+                from .tool_imgur import ToolImgur
+                for key, value in values.items():
+                    P.ModelSetting.set(f'site_imgur_{key}', value)
+                ToolImgur.reset_client()
+            except Exception:
+                return jsonify({'ret': 'error', 'error_code': 'ff_internal_error', 'error_origin': 'ff', 'msg': '인증 정보 저장에 실패했습니다. 다시 인증하세요.'}), 500
+            return jsonify({'ret': 'success', 'msg': 'Imgur 인증 정보를 저장했습니다.'})
         elif command == 'imgur_upload':
-            from .tool_imgur import ToolImgur
-            tmp = ToolImgur.upload_from_paste(req.form['url'])
-            if tmp != None:
-                ret['url'] = tmp
-            else:
-                ret['msg'] = '실패'
-                ret['ret'] = 'error'
+            image = req.form.get('url', '')
+            if not image.startswith('data:image/') or 'base64,' not in image or not image.split('base64,', 1)[1]:
+                return jsonify(ret='error', error_code='invalid_request', error_origin='ff', msg='클립보드 이미지가 올바르지 않습니다.'), 400
+            try:
+                from .tool_imgur import ToolImgur
+                tmp = ToolImgur.upload_from_paste(image)
+                if tmp:
+                    return jsonify(ret='success', url=tmp)
+                return jsonify(ret='error', error_code='upstream_unavailable', error_origin='unknown', msg='Imgur 업로드 결과를 확인하지 못했습니다.'), 502
+            except Exception as exc:
+                import requests
+                status, origin, code = 500, 'ff', 'ff_internal_error'
+                remote = None
+                response = getattr(exc, 'response', None)
+                if isinstance(exc, requests.exceptions.HTTPError) and response is not None:
+                    remote = response.status_code
+                elif type(exc).__module__.startswith('imgurpython.'):
+                    remote = getattr(exc, 'status_code', None)
+                if type(remote) is int:
+                    status, origin, code = (503 if remote == 429 else 504 if remote == 504 else 502), 'external', 'upstream_http_error'
+                elif isinstance(exc, requests.exceptions.Timeout):
+                    status, origin, code = 504, 'external', 'upstream_timeout'
+                elif isinstance(exc, requests.exceptions.ConnectionError):
+                    status, origin, code = 502, 'external', 'upstream_unavailable'
+                body = dict(ret='error', error_code=code, error_origin=origin, msg='Imgur 이미지 업로드에 실패했습니다. 상태를 확인하세요.')
+                if origin == 'external':
+                    body['upstream'] = dict(site='imgur', http_status=remote, reason='timeout' if code == 'upstream_timeout' else 'request_failed')
+                # SDK 예외 원문에는 OAuth 정보가 포함될 수 있다.
+                logger.error('Imgur 업로드 실패: code=%s origin=%s status=%s', code, origin, remote)
+                return jsonify(body), status
         elif command == 'naverlogin_callback_process':
             from . import ToolNaverCafe
             ret = ToolNaverCafe.do_login(arg1, arg2)
         return jsonify(ret)
 
     def process_normal(self, sub, req):
-        try:
-            if sub == 'imgur_callback':
-                P.ModelSetting.set('site_imgur_access_token', req.args.get('access_token'))
-                P.ModelSetting.set('site_imgur_refresh_token', req.args.get('refresh_token'))
-                P.ModelSetting.set('site_imgur_account_username', req.args.get('account_username'))
-                P.ModelSetting.set('site_imgur_account_id', req.args.get('account_id'))
-                return "토큰을 저장하였습니다.\n설정을 새로고침하세요"
-        except Exception as e:
-            P.logger.error(f"Exception:{str(e)}")
-            P.logger.error(traceback.format_exc())
-            return f"{str(e)}"
+        return '', 404
 
     def setting_save_after(self, change_list):
         flag_wavve = False

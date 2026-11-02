@@ -414,7 +414,8 @@ class SiteTpdb(SiteAvBase):
             raw_site = str(site_node.get('name', '')).strip()
             final_studio = cls._format_studio_name(raw_site)
             
-            raw_title = item_data.get('title', '')
+            raw_title = str(item_data.get('title') or '').strip()
+            item.ui_code = raw_title or item.code
 
             females, males = [], []
             for performer in item_data.get('performers', []):
@@ -501,7 +502,9 @@ class SiteTpdb(SiteAvBase):
 
             calc_score = cls._calculate_western_score(keyword, item_data, tpdb_rank, local_duration=local_dur)
             item.score = max(0, min(100, int(round(calc_score))))
-            ret.append(item.as_dict())
+            result = item.as_dict()
+            result['originaltitle'] = item.ui_code
+            ret.append(result)
 
         ret.sort(key=lambda k: k.get("score", 0), reverse=True)
 
@@ -764,9 +767,6 @@ class SiteTpdb(SiteAvBase):
                 poster_url = portrait_poster_url
             elif portrait_poster_url:
                 poster_url = portrait_poster_url
-            elif use_smart_crop and landscape_cover_url and (opts.get('image_mode') or cls.config.get('image_mode')) == 'ff_proxy':
-                poster_url = cls.proxy_image_reference(landscape_cover_url, 'smart_crop')
-                entity.extra_info.setdefault('image_transforms', {})['poster'] = {'url': landscape_cover_url, 'mode': 'smart_crop', 'site': cls.site_name}
             elif use_smart_crop and landscape_cover_url:
                 try:
                     res_pl = cls.get_response(landscape_cover_url, timeout=10)
@@ -819,14 +819,7 @@ class SiteTpdb(SiteAvBase):
                     'content_type': 'trailer'
                 }]
 
-                if cls.config.get('use_trailer_proxy', False):
-                    final_url = cls.make_video_url(trailer_url)
-                    if final_url:
-                        logger.debug(f"[{cls.site_name}] Added Proxied Trailer URL: {final_url}")
-                        entity.extras.append(EntityExtra("trailer", entity.tagline or entity.title, "mp4", final_url))
-                else:
-                    logger.debug(f"[{cls.site_name}] Added Direct Trailer URL: {trailer_url}")
-                    entity.extras.append(EntityExtra("trailer", entity.tagline or entity.title, "mp4", trailer_url))
+                entity.extras.append(EntityExtra("trailer", entity.tagline or entity.title, "mp4", trailer_url))
             except Exception as e_trailer:
                 logger.error(f"[{cls.site_name}] Error adding trailer: {e_trailer}")
 
