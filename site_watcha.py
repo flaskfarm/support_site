@@ -1,4 +1,5 @@
 from http.cookies import SimpleCookie
+from urllib.parse import quote, quote_plus
 
 from . import SiteUtil
 from .site_util import caching, encode_base64
@@ -52,16 +53,18 @@ class SiteWatcha(object):
     @classmethod
     def _search_api(cls, keyword, content_type='movies'):
         try:
-            url = 'https://pedia.watcha.com/api/searches?query=%s' % keyword
+            keyword = str(keyword if keyword is not None else '').strip()
+            if not keyword:
+                logger.warning("No keyword")
+                return []
+            url = 'https://pedia.watcha.com/api/searches?query=%s' % quote_plus(keyword, safe='')
             data = cls.get_json(url)
             if content_type == 'movies':
                 return data['result']['movies']
             elif content_type == 'tv_seasons':
                 return data['result']['tv_seasons']
-        except Exception as e:
-            logger.error(f"Exception:{str(e)}")
-            logger.error(traceback.format_exc())
-            logger.debug(f'keyword: {keyword}, content_type: {content_type}, data: {data}')
+        except Exception:
+            logger.exception(f'keyword: {keyword}, content_type: {content_type}')
 
     @classmethod
     def info_basic(cls, code, entity, api_return=False):
