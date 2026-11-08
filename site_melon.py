@@ -4,11 +4,12 @@ from urllib.parse import quote
 
 import lxml.html
 import requests
-from support import default_headers
+
+from .site_util import get_default_headers
 
 try:
     from .setup import *
-except:
+except Exception:
     from support import get_logger
     logger = None
     def set_logger(_):
@@ -18,10 +19,7 @@ except:
 class SiteMelon(object):
     site_name = 'melon'
 
-    default_headers = {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
-        'Accept' : 'application/json',
-    }
+    default_headers = None
 
     module_char = 'S'
     site_char = 'M'
@@ -29,9 +27,19 @@ class SiteMelon(object):
 
 
     @classmethod
+    def initialize(cls, headers: str = None, common_headers: str = None) -> None:
+        cls.default_headers = get_default_headers(headers if headers else common_headers)
+
+
+    @classmethod
     def base_search(cls, mode, keyword):
-        url = f'https://www.melon.com/search/keyword/index.json?query={quote(keyword)}'
-        data = requests.get(url, headers=default_headers).json()
+        url = f'https://www.melon.com/search/keyword/index.json'
+        response = requests.get(url, headers=cls.default_headers, params={"query": keyword})
+        try:
+            data = response.json()
+        except Exception:
+            logger.exception("mode='%s' keyword='%s'", mode, keyword)
+            return []
         if mode == 'artist' and 'ARTISTCONTENTS' in data:
             return data['ARTISTCONTENTS']
         elif mode == 'album' and 'ALBUMCONTENTS' in data:
@@ -79,7 +87,7 @@ class SiteMelon(object):
     def info_artist(cls, code):
         entity = {'code':code, 'artist_id':code[2:], 'genres':[], 'desc':'', 'info_desc':''}
         url = f"https://www.melon.com/artist/detail.htm?artistId={code[2:]}"
-        text = requests.get(url, headers=default_headers).text
+        text = requests.get(url, headers=cls.default_headers).text
         root = lxml.html.fromstring(text)
         tag = root.xpath('//p[@class="title_atist"]/strong/following-sibling::text()')[0]
         entity['title'] = tag
@@ -110,7 +118,7 @@ class SiteMelon(object):
         entity['info_desc'] = entity['info_desc'].strip()
         url = f"https://www.melon.com/artist/photoPaging.htm?startIndex=1&pageSize=24&orderBy=LIKE&listType=0&artistId={entity['artist_id']}"
         logger.debug(url)
-        text = requests.get(url, headers=default_headers).text
+        text = requests.get(url, headers=cls.default_headers).text
         root = lxml.html.fromstring(text)
         entity['photo'] = []
         tags = root.xpath('//li')
@@ -132,7 +140,7 @@ class SiteMelon(object):
     def get_album_list(cls, url):
         ret = []
         try:
-            text = requests.get(url, headers=default_headers).text
+            text = requests.get(url, headers=cls.default_headers).text
             root = lxml.html.fromstring(text)
             tags = root.xpath('//li[@class="album11_li"]')
             logger.debug(f"HTML 앨범 수 : {len(tags)}")
@@ -285,7 +293,7 @@ class SiteMelon(object):
     def info_album(cls, code):
         entity = {'code':code, 'album_id':code[2:], 'info_desc':''}
         url = f"https://www.melon.com/album/detail.htm?albumId={entity['album_id']}"
-        text = requests.get(url, headers=default_headers).text
+        text = requests.get(url, headers=cls.default_headers).text
         root = lxml.html.fromstring(text)
         tag = root.xpath('//div[@class="thumb"]/a/img')[0]
         entity['image'] = tag.attrib['src'].split('?')[0]
@@ -422,7 +430,7 @@ class SiteMelon(object):
         try:
             entity = {'ret':'fail', 'song_id':song_id, 'lyric':'', 'producer':{}}
             url = f"https://www.melon.com/song/detail.htm?songId={song_id}"
-            text = requests.get(url, headers=default_headers).text
+            text = requests.get(url, headers=cls.default_headers).text
             root = lxml.html.fromstring(text)
             tag = root.xpath('//div[@class="thumb"]/a/img')[0]
             entity['image'] = tag.attrib['src'].split('?')[0]
