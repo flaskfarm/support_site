@@ -34,7 +34,10 @@ class SiteAvdbs(SiteAvBase):
             final_info = cls._search_from_local_db(name_variations_to_search)
 
         if final_info is None and cls.config.get('use_web_search'):
-            final_info = cls._search_from_web(original_input_name)
+            for search_name in name_variations_to_search:
+                final_info = cls._search_from_web(search_name)
+                if final_info is not None:
+                    break
         
         if final_info is not None:
             entity_actor["name_org"] = final_info.get("name_org", original_input_name)
@@ -124,6 +127,9 @@ class SiteAvdbs(SiteAvBase):
             if not meta_db_mod:
                 return None
 
+            fallback_match = None
+            fallback_target = None
+
             for search_name in name_variations_to_search:
                 clean_target = str(search_name or '').strip()
                 if not clean_target:
@@ -135,15 +141,37 @@ class SiteAvdbs(SiteAvBase):
 
                 matched_item = cls._match_meta_person_candidates(clean_target, results)
                 if matched_item:
-                    logger.debug(f"[AVDBS] 인물명 일치: {clean_target} → {matched_item.get('name_ko') or matched_item.get('name_org')} ({matched_item.get('person_idx')})")
-                    return {
-                        "name_org": matched_item.get("name_org", ""),
-                        "name_ko": matched_item.get("name_ko", ""),
-                        "name_en": matched_item.get("name_en", ""),
-                        "thumb": matched_item.get("thumb", ""),
-                        "actor_idx": matched_item.get("person_idx", ""),
-                        "site": "meta_person_db"
-                    }
+                    # 정확 일치 판정 (person_idx, name_org, name_en)
+                    target_lower = clean_target.lower()
+                    cand_person_idx = str(matched_item.get('person_idx') or '').strip().lower()
+                    cand_org = str(matched_item.get('name_org') or '').strip().lower()
+                    cand_en = str(matched_item.get('name_en') or '').strip().lower()
+
+                    is_exact = (target_lower in [cand_person_idx, cand_org, cand_en])
+                    if is_exact:
+                        logger.debug(f"[AVDBS] 인물명 일치: {clean_target} → {matched_item.get('name_ko') or matched_item.get('name_org')} ({matched_item.get('person_idx')})")
+                        return {
+                            "name_org": matched_item.get("name_org", ""),
+                            "name_ko": matched_item.get("name_ko", ""),
+                            "name_en": matched_item.get("name_en", ""),
+                            "thumb": matched_item.get("thumb", ""),
+                            "actor_idx": matched_item.get("person_idx", ""),
+                            "site": "meta_person_db"
+                        }
+                    elif fallback_match is None:
+                        fallback_match = matched_item
+                        fallback_target = clean_target
+
+            if fallback_match:
+                logger.debug(f"[AVDBS] 인물명 fallback 일치: {fallback_target} → {fallback_match.get('name_ko') or fallback_match.get('name_org')} ({fallback_match.get('person_idx')})")
+                return {
+                    "name_org": fallback_match.get("name_org", ""),
+                    "name_ko": fallback_match.get("name_ko", ""),
+                    "name_en": fallback_match.get("name_en", ""),
+                    "thumb": fallback_match.get("thumb", ""),
+                    "actor_idx": fallback_match.get("person_idx", ""),
+                    "site": "meta_person_db"
+                }
         except Exception as e:
             logger.debug(f"[AVDBS] 인물 DB 검색 실패: {e}")
         return None
@@ -198,18 +226,34 @@ class SiteAvdbs(SiteAvBase):
                 col_org = 'name_org' if 'name_org' in existing_cols else 'inner_name_cn'
                 col_ko = 'name_ko' if 'name_ko' in existing_cols else 'inner_name_kr'
                 col_en = 'name_en' if 'name_en' in existing_cols else 'inner_name_en'
-                col_onm = 'actor_onm' if 'actor_onm' in existing_cols else ('aliases' if 'aliases' in existing_cols else col_org)
+                col_onm = None
+                for cand_col in ['other_names', 'actor_onm', 'aliases']:
+                    if cand_col in existing_cols:
+                        col_onm = cand_col
+                        break
+                if not col_onm:
+                    col_onm = col_org
                 has_site_col = 'site' in existing_cols
 
-                for current_search_name in name_variations_to_search:
-                    site_filter = "site = ? AND " if has_site_col else ""
-                    site_params = (cls.site_name,) if has_site_col else ()
+                site_filter = "site = ? AND " if has_site_col else ""
+                site_params = (cls.site_name,) if has_site_col else ()
 
+                matched_row = None
+                matched_search_name = None
+
+                # 1단계: name_org 정확 일치 우선 (원문 전체 -> 본문 이름 -> 괄호 내부 이름)
+                for current_search_name in name_variations_to_search:
                     query1 = f"SELECT * FROM actors WHERE {site_filter}{col_org} = ? LIMIT 1"
                     cursor.execute(query1, site_params + (current_search_name,))
                     row = cursor.fetchone()
-                    
-                    if not row:
+                    if row:
+                        matched_row = row
+                        matched_search_name = current_search_name
+                        break
+
+                # 2단계: 정확 일치가 없을 때 별칭(other_names) / DB 후보 괄호 분리 / 한글·영문 fallback
+                if not matched_row:
+                    for current_search_name in name_variations_to_search:
                         query2 = f"SELECT * FROM actors WHERE {site_filter}({col_onm} LIKE ? OR {col_org} LIKE ?)"
                         like_term = f"%{current_search_name}%"
                         cursor.execute(query2, site_params + (like_term, like_term))
@@ -227,40 +271,49 @@ class SiteAvdbs(SiteAvBase):
                                         matched_by_cn = True
 
                                     if matched_by_onm or matched_by_cn:
-                                        row = potential_row
+                                        matched_row = potential_row
+                                        matched_search_name = current_search_name
                                         break
 
-                    if not row:
+                        if matched_row:
+                            break
+
                         query3 = f"SELECT * FROM actors WHERE {site_filter}({col_ko} = ? OR {col_en} = ? OR {col_en} LIKE ?) LIMIT 1"
                         cursor.execute(query3, site_params + (current_search_name, current_search_name, f"%({current_search_name})%"))
                         row = cursor.fetchone()
+                        if row:
+                            matched_row = row
+                            matched_search_name = current_search_name
+                            break
+
+                if matched_row:
+                    row = matched_row
+                    current_search_name = matched_search_name
+                    korean_name = row[col_ko] if col_ko in row.keys() else ""
+                    name_en_field = row[col_en] if (col_en in row.keys() and row[col_en]) else ""
+                    name_org_field = row[col_org] if (col_org in row.keys() and row[col_org]) else current_search_name
                     
-                    if row:
-                        korean_name = row[col_ko] if col_ko in row.keys() else ""
-                        name_en_field = row[col_en] if (col_en in row.keys() and row[col_en]) else ""
-                        name_org_field = row[col_org] if (col_org in row.keys() and row[col_org]) else current_search_name
+                    # 단일 우선순위 문자열 규칙으로 썸네일 URL 추출
+                    thumb_url = cls._resolve_local_db_thumb_url(row, order_str=img_order, img_prefix=prefix)
                         
-                        # 단일 우선순위 문자열 규칙으로 썸네일 URL 추출
-                        thumb_url = cls._resolve_local_db_thumb_url(row, order_str=img_order, img_prefix=prefix)
-                            
-                        if name_en_field:
-                            match_name_en = re.match(r"^(.*?)\s*\(.*\)$", name_en_field)
-                            if match_name_en:
-                                name_en_field = match_name_en.group(1).strip()
-                        
-                        actor_idx = str(row["actor_id"] or "").strip() if "actor_id" in row.keys() else ""
+                    if name_en_field:
+                        match_name_en = re.match(r"^(.*?)\s*\(.*\)$", name_en_field)
+                        if match_name_en:
+                            name_en_field = match_name_en.group(1).strip()
 
-                        if korean_name and thumb_url:
-                            logger.debug(f"AVDBS DB: Match found for '{current_search_name}': {korean_name} ({name_en_field})")
+                    actor_idx = str(row["actor_id"] or "").strip() if "actor_id" in row.keys() else ""
 
-                            return {
-                                "name_org": str(name_org_field).strip(),
-                                "name_ko": korean_name, 
-                                "name_en": name_en_field, 
-                                "thumb": thumb_url, 
-                                "actor_idx": actor_idx,
-                                "site": f"{cls.site_name}_db"
-                            }
+                    if korean_name and thumb_url:
+                        logger.debug(f"AVDBS DB: Match found for '{current_search_name}': {korean_name} ({name_en_field})")
+
+                        return {
+                            "name_org": str(name_org_field).strip(),
+                            "name_ko": korean_name,
+                            "name_en": name_en_field,
+                            "thumb": thumb_url,
+                            "actor_idx": actor_idx,
+                            "site": f"{cls.site_name}_db"
+                        }
 
         except sqlite3.Error as e: 
             logger.error(f"DB 조회 중 오류: {e}")
@@ -523,11 +576,30 @@ class SiteAvdbs(SiteAvBase):
 
     @classmethod
     def _parse_name_variations(cls, originalname):
-        """이름에서 임의로 괄호를 자르지 않고, 가공되지 않은 100% 원문 이름만을 반환합니다."""
+        """
+        배우 이름에서 사이트 원문 전체, 괄호 앞 본문 이름, 괄호 내부 이름을
+        우선순위 순서대로 중복 없이 반환합니다.
+        예: '美谷朱音（美谷朱里）' -> ['美谷朱音（美谷朱里）', '美谷朱音', '美谷朱里']
+        """
         if not originalname:
             return []
         clean_name = str(originalname).strip()
-        return [clean_name] if clean_name else []
+        if not clean_name:
+            return []
+
+        variations = [clean_name]
+
+        # 반각 () 및 전각 （） 괄호 패턴 파싱 (중첩 괄호 제외, 단일 외곽 괄호 형태)
+        match = re.match(r'^(.*?)\s*[（\(]([^（）\(\)]+)[）\)]\s*$', clean_name)
+        if match:
+            main_name = match.group(1).strip()
+            paren_name = match.group(2).strip()
+            if main_name and main_name not in variations:
+                variations.append(main_name)
+            if paren_name and paren_name not in variations:
+                variations.append(paren_name)
+
+        return variations
 
 
     # endregion 유틸
