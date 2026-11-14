@@ -356,29 +356,38 @@ class SiteTmdbTv(SiteTmdb):
 
 
     @classmethod
-    def process_actor_image(cls, tmdb, show):
+    def process_actor_image(cls, tmdb, show, translate_actor=True):
         try:
             tmdb_actor = tmdb.credits(language='en')
             for tmdb_item in tmdb_actor['cast']:
                 if tmdb_item['profile_path'] is None:
                     continue
-                try:
-                    kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko')
-                except Exception:
-                    kor_name = None
+                if translate_actor:
+                    try:
+                        kor_name = SiteUtil.trans(tmdb_item['name'], source='en', target='ko')
+                    except Exception:
+                        kor_name = None
                 flag_find = False
                 for actor in show['actor']:
-                    if (actor.get('name_ko') or actor.get('name_org')) == kor_name:
+                    if translate_actor:
+                        name_matches = (actor.get('name_ko') or actor.get('name_org')) == kor_name
+                    else:
+                        name_matches = any(name and name in (actor.get('name_org'), actor.get('name_ko'))
+                                           for name in (tmdb_item.get('name'), tmdb_item.get('original_name')))
+                    if name_matches:
                         flag_find = True
                         actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                         break
                 if flag_find == False:
-                    try:
-                        kor_role_name = SiteUtil.trans(tmdb_item['character'], source='en', target='ko')
-                    except Exception:
-                        kor_role_name = None
+                    if translate_actor:
+                        try:
+                            kor_role_name = SiteUtil.trans(tmdb_item['character'], source='en', target='ko')
+                        except Exception:
+                            kor_role_name = None
+                    else:
+                        kor_role_name = tmdb_item.get('character') or ''
                     for actor in show['actor']:
-                        if actor['role'] == kor_role_name:
+                        if actor['role'] == kor_role_name and (translate_actor or kor_role_name):
                             flag_find = True
                             actor['thumb'] = cls.get_image_url(tmdb_item['profile_path'], 'profile')
                             break
@@ -388,7 +397,7 @@ class SiteTmdbTv(SiteTmdb):
 
 
     @classmethod
-    def apply(cls, tmdb_id, show, apply_image=True, apply_actor_image=True):
+    def apply(cls, tmdb_id, show, apply_image=True, apply_actor_image=True, translate_actor=True):
         try:
             tmdb = tmdbsimple.TV(tmdb_id)
             tmdb_dict = tmdb.info()
@@ -403,7 +412,7 @@ class SiteTmdbTv(SiteTmdb):
                 cls.process_image(tmdb, show)
 
             if apply_actor_image:
-                cls.process_actor_image(tmdb, show)
+                cls.process_actor_image(tmdb, show, translate_actor=translate_actor)
 
             # episodes
             try:
@@ -724,12 +733,28 @@ class SiteTmdbMovie(SiteTmdb):
 
 
     @classmethod
+    def _actor_translation_enabled(cls):
+        """Read the loaded metadata setting at use time; standalone keeps legacy behavior."""
+        try:
+            metadata = F.PluginManager.get_plugin_instance('metadata')
+            if metadata is None:
+                return True
+            option = metadata.ModelSetting.get('movie_translate_option')
+            if option not in ('none', 'text', 'all'):
+                logger.warning('TMDB 영화 번역 설정이 유효하지 않아 인물 기계 번역을 생략합니다.')
+                return False
+            return option == 'all'
+        except Exception:
+            logger.warning('metadata 영화 번역 설정을 조회하지 못해 인물 기계 번역을 생략합니다.')
+            return False
+
+    @classmethod
     def info_actor(cls, tmdb, entity, primary=True, kor_trans=True):
         try:
             info = tmdb.credits(language='ko')
             trans = False
-            if kor_trans and ((len(entity.country) > 0 and entity.country[0] in ['South Korea', u'한국', u'대한민국']) or ((entity.extra_info.get('original_language') or '') == 'ko')):
-                trans = True
+            if primary and kor_trans and ((len(entity.country) > 0 and entity.country[0] in ['South Korea', u'한국', u'대한민국']) or ((entity.extra_info.get('original_language') or '') == 'ko')):
+                trans = cls._actor_translation_enabled()
             #trans = True
             # 한국배우는 자동번역
             if primary:

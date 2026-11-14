@@ -1102,7 +1102,16 @@ class SiteAvBase:
 
             if os.path.isfile(disk_path) and os.path.getsize(disk_path) > 0:
                 if not mode:
-                    return send_file(disk_path, mimetype='image/jpeg')
+                    try:
+                        with Image.open(disk_path) as image:
+                            image.load()
+                            if image.format not in ('JPEG', 'PNG', 'WEBP', 'GIF'):
+                                abort(415)
+                            mime = Image.MIME.get(image.format)
+                            if not mime: abort(415)
+                        return send_file(disk_path, mimetype=mime)
+                    except (UnidentifiedImageError, OSError):
+                        abort(415)
                 # 크롭 모드가 지정되어 있으면 로컬 파일 이미지를 직접 열어 처리
                 im = cls.imopen(disk_path)
                 if im is not None:
@@ -1559,11 +1568,6 @@ class SiteAvBase:
                     logger.debug(f"[{cls.site_name}] imopen failed: Status {res.status_code if res is not None else 'None'} for {display_src}")
                     return None
                     
-                content_type = res.headers.get('Content-Type', '').lower()
-                if not content_type.startswith('image/') and content_type != 'binary/octet-stream':
-                    logger.debug(f"[{cls.site_name}] imopen failed: Invalid Content-Type '{content_type}' for {display_src}")
-                    return None
-
                 img = Image.open(BytesIO(res.content))
                 img.load()
                 return img
@@ -1607,8 +1611,12 @@ class SiteAvBase:
                 merged = cls._merge_covers(*covers)
                 if not merged:
                     abort(502)
+                with Image.open(merged) as image:
+                    image.load()
+                    mime = Image.MIME.get(image.format)
+                    if not mime: abort(415)
                 with open(merged, 'rb') as fp:
-                    return Response(fp.read(), mimetype='image/jpeg')
+                    return Response(fp.read(), mimetype=mime)
             finally:
                 if merged and os.path.isfile(merged):
                     os.remove(merged)
@@ -1626,35 +1634,19 @@ class SiteAvBase:
 
         content_type_header = res.headers.get('Content-Type', '').lower()
         content_bytes = res.content
-        is_image_content = False
-
-        # Content-Type 헤더로 이미지 여부 1차 확인
-        if content_type_header.startswith('image/'):
-            is_image_content = True
-        # binary/octet-stream인 경우 파일 시그니처(Magic Number)로 2차 확인
-        elif content_type_header == 'binary/octet-stream':
-            if len(content_bytes) > 4:
-                if (content_bytes.startswith(b'\xFF\xD8\xFF') or
-                    content_bytes.startswith(b'\x89PNG') or
-                    content_bytes.startswith(b'GIF8')):
-                    is_image_content = True
-
-        if not is_image_content:
-            P.logger.error(f"image_proxy: Expected image, but got Content-Type '{content_type_header}' and invalid content for URL: [remote image]")
-            abort(400)
-
         try:
             bytes_im = BytesIO(content_bytes)
             im = Image.open(bytes_im)
             im.load()
             imformat = im.format
 
-            if imformat is None or content_type_header == 'binary/octet-stream':
-                P.logger.debug(f"image_proxy: 이미지 형식 확인: {imformat} (원격 이미지)")
-                if imformat not in ['JPEG', 'PNG', 'WEBP', 'GIF']:
-                    imformat = 'JPEG'
-
-            mimetype = im.get_format_mimetype() or f'image/{imformat.lower()}'
+            if imformat not in ('JPEG', 'PNG', 'WEBP', 'GIF'):
+                raise ValueError('미지원 이미지 형식: ' + str(imformat))
+            mimetype = Image.MIME.get(imformat)
+            if not mode:
+                payload, _, _, mime = cls.image_output(content_bytes)
+                im.close()
+                return Response(payload, mimetype=mime)
 
         except UnidentifiedImageError as e:
             P.logger.error(f"image_proxy: 원격 응답을 이미지로 읽지 못함. 응답 형식: {content_type_header}")
@@ -1716,14 +1708,17 @@ class SiteAvBase:
 
             im = processed_im
 
-        return cls.pil_to_response(im, format=imformat, mimetype=mimetype)
+        try:
+            payload, _, _, mime = cls.image_output(im, image_format=imformat)
+            return Response(payload, mimetype=mime)
+        finally:
+            im.close()
 
 
     @classmethod
     def pil_to_response(cls, pil, format="JPEG", mimetype='image/jpeg'):
-        with BytesIO() as buf:
-            pil.save(buf, format=format, quality=95)
-            return Response(buf.getvalue(), mimetype=mimetype)
+        payload, _, _, mime = cls.image_output(pil, image_format=format)
+        return Response(payload, mimetype=mime)
 
 
     @staticmethod
@@ -1827,7 +1822,9 @@ class SiteAvBase:
                 target = os.path.join(local['target_folder'], filename)
                 if not os.path.isfile(target) or os.path.getsize(target) == 0:
                     continue
-                relative = unquote(str(url)[len(root_url)+1:]) if root_url and str(url).startswith(root_url + '/') else ''
+                from metadata.util_metadata import MetaUtil
+                MetaUtil.validate_image_local_target(target, MetaUtil.image_local_root())
+                relative = os.path.relpath(target, MetaUtil.image_local_root()).replace(os.sep, '/')
             if relative:
                 observations.append(dict(media_type=kind or 'poster', url=url, gdrive_fileid=fid,
                     relative_path=relative, is_user='_user.' in relative.rsplit('/', 1)[-1].lower(),
@@ -2013,10 +2010,10 @@ class SiteAvBase:
                                 logger.debug(f"[{cls.site_name}] [ImageServer] 유저 랜드스케이프 파일 감지: {user_landscape_filename}")
                                 break
 
-                        if os.path.exists(os.path.join(target_folder, f"{code_lower}_p.jpg")):
-                            decision_data['system_files_exist']['poster'] = True
-                        if os.path.exists(os.path.join(target_folder, f"{code_lower}_pl.jpg")):
-                            decision_data['system_files_exist']['landscape'] = True
+                        for kind, suffix in (('poster', 'p'), ('landscape', 'pl')):
+                            names = [name for name in os.listdir(target_folder) if re.fullmatch(
+                                re.escape(code_lower + '_' + suffix) + r'\.(?:jpe?g|png|webp|gif)', name, re.I)]
+                            if len(names) == 1: decision_data['system_files_exist'][kind] = names[0]
 
                         arts_count = len([f for f in os.listdir(target_folder) if f.startswith(f"{code_lower}_art_")])
                         decision_data['system_files_exist']['arts'] = arts_count
@@ -2061,10 +2058,17 @@ class SiteAvBase:
                     'remote_files': remote_files,
                     'user_p_fid': user_p_fid,
                     'user_pl_fid': user_pl_fid,
-                    'system_p_fid': remote_files.get(f"{code_lower}_p.jpg"),
-                    'system_pl_fid': remote_files.get(f"{code_lower}_pl.jpg"),
+                    'system_p_fid': None,
+                    'system_pl_fid': None,
                     'system_arts_count': len([f for f in remote_files if f.startswith(f"{code_lower}_art_")])
                 }
+
+                groups = getattr(remote_files, 'rows_by_name', {})
+                for suffix in ('p', 'pl'):
+                    names = [name for name in remote_files if re.fullmatch(
+                        re.escape(code_lower + '_' + suffix) + r'\.(?:jpe?g|png|webp|gif)', name, re.I)]
+                    if len(names) == 1 and len(groups.get(names[0].casefold(), [None])) == 1:
+                        decision_data['gdrive_data']['system_' + suffix + '_fid'] = remote_files[names[0]]
 
                 module_prefix = 'jav_censored' if cls.module_char == 'C' else 'jav_uncensored'
                 rewrite_str = cls.MetadataSetting.get(f'{module_prefix}_image_server_rewrite')
@@ -2111,9 +2115,9 @@ class SiteAvBase:
             cls.finalize_images_for_entity(entity, decision_data)
 
         except Exception as e:
-            cls.set_image_storage_state(entity, 'failed', str(e))
-            logger.error(f"이미지 처리 실패: {entity.code} — {e}")
-            logger.error(traceback.format_exc())
+            from metadata.util_runtime import redact_diagnostic, storage_logger
+            cls.set_image_storage_state(entity, 'failed', str(redact_diagnostic(e)))
+            storage_logger(logger).exception('[ImageUtil] [%s/%s] 이미지 소스 결정/준비 실패', cls.module_char, entity.code)
         finally:
             if merged_filepath and os.path.exists(merged_filepath):
                 os.remove(merged_filepath)
@@ -2200,11 +2204,11 @@ class SiteAvBase:
                     final_image_sources['is_user_poster'] = True
                     should_process_poster = False
                 elif is_rescued and decision_data['system_files_exist']['poster']:
-                    final_image_sources['poster_source'] = f"{url_prefix}/{code_lower}_p.jpg"
+                    final_image_sources['poster_source'] = f"{url_prefix}/{decision_data['system_files_exist']['poster']}"
                     final_image_sources['skip_poster_download'] = True
                     should_process_poster = False
                 elif decision_data['system_files_exist']['poster'] and not rewrite:
-                    final_image_sources['poster_source'] = f"{url_prefix}/{code_lower}_p.jpg"
+                    final_image_sources['poster_source'] = f"{url_prefix}/{decision_data['system_files_exist']['poster']}"
                     final_image_sources['skip_poster_download'] = True
                     should_process_poster = False
 
@@ -2215,11 +2219,11 @@ class SiteAvBase:
                     final_image_sources['is_user_landscape'] = True
                     should_process_landscape = False
                 elif is_rescued and decision_data['system_files_exist']['landscape']:
-                    final_image_sources['landscape_source'] = f"{url_prefix}/{code_lower}_pl.jpg"
+                    final_image_sources['landscape_source'] = f"{url_prefix}/{decision_data['system_files_exist']['landscape']}"
                     final_image_sources['skip_landscape_download'] = True
                     should_process_landscape = False
                 elif decision_data['system_files_exist']['landscape'] and not rewrite:
-                    final_image_sources['landscape_source'] = f"{url_prefix}/{code_lower}_pl.jpg"
+                    final_image_sources['landscape_source'] = f"{url_prefix}/{decision_data['system_files_exist']['landscape']}"
                     final_image_sources['skip_landscape_download'] = True
                     should_process_landscape = False
 
@@ -2374,7 +2378,7 @@ class SiteAvBase:
                                         if pos:
                                             final_poster = SiteUtilAv.imcrop(processed_lg_obj, position=pos, aspect_ratio=standard_aspect_ratio)
                                             if final_poster:
-                                                temp_filepath = cls.save_pil_to_temp(final_poster)
+                                                temp_filepath = cls.save_pil_to_temp(final_poster, image_format=im_lg_obj.format)
                                                 if temp_filepath:
                                                     final_image_sources['poster_source'] = temp_filepath
                                                     final_image_sources['poster_mode'] = 'local_file'
@@ -2463,7 +2467,7 @@ class SiteAvBase:
                         if abs(aspect_ratio - (4/3)) < 0.05:
                             im_no_lb = im_lg_obj.crop((0, int(h * 0.0533), w, h - int(h * 0.0533)))
                             processed_im = SiteUtilAv.imcrop(im_no_lb, position='r')
-                            temp_filepath = cls.save_pil_to_temp(processed_im)
+                            temp_filepath = cls.save_pil_to_temp(processed_im, image_format=im_lg_obj.format)
                             if temp_filepath:
                                 final_image_sources.update({'poster_source': temp_filepath, 'poster_mode': 'local_file', 'temp_poster_filepath': temp_filepath, 'processed_from_url': pl_url})
                             processed_im.close(); im_no_lb.close()
@@ -2523,21 +2527,55 @@ class SiteAvBase:
 
 
     @classmethod
-    def save_pil_to_temp(cls, pil_obj, image_format=None):
-        """PIL 객체를 임시 파일로 저장하고 경로를 반환합니다."""
+    def image_output(cls, source, image_format=None):
+        """Validate bytes, then return the actual encoded bytes/format/extension/MIME."""
+        raw = source if isinstance(source, bytes) else None
+        image = Image.open(BytesIO(raw)) if raw is not None else source
         try:
-            temp_dir = os.path.join(path_data, "tmp")
-            os.makedirs(temp_dir, exist_ok=True)
-            image_format = image_format or pil_obj.format or "PNG"
-            extension = image_format.lower()
-            filename = f"temp_poster_{int(time.time())}_{os.urandom(4).hex()}.{extension}"
-            filepath = os.path.join(temp_dir, filename)
+            image.load()
+            detected = image.format or image.info.get('_source_format') or image_format or 'PNG'
+            if detected not in ('JPEG', 'PNG', 'WEBP', 'GIF'):
+                raise ValueError('미지원 이미지 형식: ' + str(detected))
+            original = cls.config.get('image_save_mode', 'jpeg').lower() in ('original', 'source', 'raw')
+            fmt = detected if original else 'JPEG'
+            if raw is not None and original:
+                payload = raw
+            else:
+                converted = None
+                try:
+                    if fmt == 'JPEG' and (image.mode not in ('RGB', 'L') or 'transparency' in image.info):
+                        rgba = image.convert('RGBA')
+                        converted = Image.new('RGB', rgba.size, (255, 255, 255))
+                        converted.paste(rgba, mask=rgba.getchannel('A'))
+                        rgba.close()
+                    elif fmt == 'GIF' and image.mode not in ('P', 'L'):
+                        # A transformed RGBA frame cannot retain arbitrary GIF alpha.
+                        fmt = 'PNG'
+                    with BytesIO() as out:
+                        (converted or image).save(out, format=fmt, **({'quality': 95} if fmt in ('JPEG', 'WEBP') else {}))
+                        payload = out.getvalue()
+                finally:
+                    if converted is not None: converted.close()
+            # Verify the final representation, including encoder-selected modes.
+            with Image.open(BytesIO(payload)) as check:
+                check.load()
+                fmt = check.format
+            ext = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}[fmt]
+            return payload, fmt, ext, Image.MIME[fmt]
+        finally:
+            if raw is not None: image.close()
 
-            pil_obj.save(filepath, image_format)
-            logger.debug(f"Saved temporary poster to: {filepath}")
+    @classmethod
+    def save_pil_to_temp(cls, pil_obj, image_format=None):
+        try:
+            payload, _, extension, _ = cls.image_output(pil_obj, image_format=image_format)
+            temp_dir = os.path.join(path_data, 'tmp')
+            os.makedirs(temp_dir, exist_ok=True)
+            fd, filepath = tempfile.mkstemp(prefix='temp_poster_', suffix='.' + extension, dir=temp_dir)
+            with os.fdopen(fd, 'wb') as fp: fp.write(payload)
             return filepath
-        except Exception as e:
-            logger.error(f"이미지 임시 파일 저장 실패: {e}")
+        except Exception:
+            logger.exception('[ImageUtil] 파생 포스터 인코딩 실패')
             return None
 
 
@@ -2551,12 +2589,191 @@ class SiteAvBase:
         try:
             return cls._finalize_images_for_entity(entity, decision_data)
         except Exception as exc:
-            cls.set_image_storage_state(entity, 'failed', str(exc), mode=decision_data.get('image_mode'))
-            logger.warning('[ImageUtil] 미디어 처리 실패, 메타데이터는 유지: %s (%s)', entity.code, exc)
+            from metadata.util_runtime import redact_diagnostic, storage_logger
+            cls.set_image_storage_state(entity, 'failed', str(redact_diagnostic(exc)), mode=decision_data.get('image_mode'))
+            storage_logger(logger).exception('[ImageUtil] [%s/%s] 이미지 처리 실패, 기존 자산 보존', cls.module_char, entity.code)
         finally:
             cls.record_completed_image_assets(entity, decision_data)
             from metadata.util_metadata import MetaUtil
             MetaUtil.settle_image_replacements(entity, decision_data)
+
+    @classmethod
+    def _finalize_stored_images(cls, entity, decision):
+        """Encode before staging; both stores use the same per-slot result contract."""
+        from metadata.util_metadata import MetaUtil
+        from metadata.util_preview import MediaReplacement
+        from metadata.util_runtime import redact_diagnostic, storage_logger
+        mode = decision['image_mode']
+        remote = decision.get('gdrive_data') or {}
+        local = decision.get('image_server_paths') or {}
+        sources = decision.get('final_image_sources') or {}
+        category = 'WESTERN' if cls.module_char == 'W' else 'JAV_UNCEN' if cls.module_char == 'E' else 'JAV_CEN'
+        stem = str(entity.ui_code or entity.code or '').lower()
+        if not stem or stem in ('.', '..') or any(char in stem for char in ('/', '\\', ':', '\x00', '\n', '\r')):
+            raise ValueError('이미지 저장 파일명이 유효한 작품 코드가 아닙니다.')
+        entries = decision.setdefault('_media_replacements', [])
+        entity.extra_info['_media_replacements'] = entries
+        results = entity.extra_info['_image_results'] = []
+        paths = decision.setdefault('_stored_image_paths', {})
+        files = remote.get('remote_files') or {}
+        for name, fid in files.items():
+            if fid:
+                paths[str(fid)] = '/'.join(filter(None, (remote.get('rel_dir'),
+                    getattr(files, 'actual_names', {}).get(str(fid), name))))
+        queued, queued_slots = {}, {}
+        temporary = os.path.join(path_data, 'tmp')
+        os.makedirs(temporary, exist_ok=True)
+
+        def attach(kind, index, url):
+            if kind == 'fanart':
+                # Keep ordering even when a preceding fanart failed.
+                art_urls[index] = url
+            else:
+                entity.thumb.append(EntityThumb(aspect=kind, value=url))
+                entity.extra_info['poster_url' if kind == 'poster' else 'landscape_url'] = url
+
+        art_urls = {}
+        slots = [('landscape', 1, 'pl', sources.get('landscape_source'), None),
+                 ('poster', 0, 'p', sources.get('poster_source'), sources.get('poster_mode'))]
+        slots += [('fanart', i, 'art_' + str(i + 1), source, None)
+                  for i, source in enumerate(sources.get('arts') or [])]
+        if mode == 'gdrive':
+            initial = MetaUtil.image_initial_observation((remote.get('rel_dir', '') + '/_').strip('/'), category,
+                decision.setdefault('_image_observations', {}), remote.get('remote_files'))
+            existing_names = [row['Name'] for row in initial['files']]
+        else:
+            folder = local.get('target_folder')
+            existing_names = os.listdir(folder) if folder and os.path.isdir(folder) else []
+        art_pattern = re.compile(re.escape(stem) + r'_art_([1-9]\d*)(?:_user)?\.(?:jpe?g|png|webp|gif)$', re.I)
+        extra_indices = {int(match.group(1)) - 1 for name in existing_names if (match := art_pattern.fullmatch(name))}
+        slots += [('fanart', i, 'art_' + str(i + 1), None, None) for i in sorted(extra_indices) if i >= len(sources.get('arts') or [])]
+        with tempfile.TemporaryDirectory(prefix='image_outputs_', dir=temporary) as work:
+            for kind, index, suffix, source, source_mode in slots:
+                result = dict(media_type=kind, sort_order=index, status='source_missing', stage='source')
+                results.append(result)
+                stage = 'lookup'
+                entry = None
+                try:
+                    user = (remote.get('user_' + suffix + '_fid') if mode == 'gdrive' else
+                            (decision.get('user_files_exist') or {}).get(kind))
+                    user_name = None
+                    user_names = [stem + '_' + suffix + '_user.' + ext for ext in ('jpg', 'jpeg', 'png', 'webp', 'gif')]
+                    if mode == 'gdrive':
+                        initial = MetaUtil.image_initial_observation((remote.get('rel_dir', '') + '/_').strip('/'), category,
+                            decision.setdefault('_image_observations', {}), remote.get('remote_files'))
+                        user_rows = [row for row in initial['files'] if row['Name'].casefold() in user_names]
+                        if len(user_rows) > 1:
+                            raise ValueError('사용자 이미지 후보가 복수여서 변경을 보류합니다.')
+                        if user_rows:
+                            user = user_rows[0]['ID']
+                            paths[str(user)] = '/'.join(filter(None, (remote.get('rel_dir'), user_rows[0]['Name'])))
+                    if kind == 'fanart' or not user:
+                        user_name = next((name for name in user_names if files.get(name)), None) if mode == 'gdrive' else next(
+                            (name for name in user_names if os.path.isfile(os.path.join(local.get('target_folder') or '', name))), None)
+                        if user_name: user = files[user_name] if mode == 'gdrive' else user_name
+                    if user:
+                        url = MetaUtil.format_gdrive_thumbnail_url(user) if mode == 'gdrive' else local['url_prefix'].rstrip('/') + '/' + user
+                        attach(kind, index, url)
+                        result.update(status='reused', stage='complete', user=True)
+                        continue
+                    candidates = MetaUtil.image_slot_candidates(entity, decision, kind, index)
+                    if len(candidates) > 1:
+                        raise ValueError('동일 이미지 슬롯의 후보가 복수여서 변경/재사용을 보류합니다.')
+                    selected_cache = False
+                    if len(candidates) == 1 and sources.get('skip_' + kind + '_download'):
+                        selected_cache = (MetaUtil._item_drive_id(source) == candidates[0].get('ID') if mode == 'gdrive' else
+                            source == local['url_prefix'].rstrip('/') + '/' + candidates[0]['Name'])
+                    shared = False
+                    if candidates and decision.get('rewrite_flag', True) and not selected_cache:
+                        candidate = candidates[0]
+                        shared = MetaUtil._manual_image_references(dict(category=category,
+                            storage='gdrive' if mode == 'gdrive' else 'local', automatic_reuse=True,
+                            old=dict(url=MetaUtil.format_gdrive_thumbnail_url(candidate.get('ID')) if mode == 'gdrive' else
+                                     local['url_prefix'].rstrip('/') + '/' + candidate['Name'],
+                                     fid=candidate.get('ID') if mode == 'gdrive' else '',
+                                     relative_path=candidate['relative_path'],
+                                     owner_code=(decision.get('refresh_owner') or {}).get('code') or entity.code)))
+                    if candidates and (not decision.get('rewrite_flag', True) or selected_cache or shared):
+                        candidate = candidates[0]
+                        relative = candidate['relative_path']
+                        # Read-only reuse needs no mutation receipt or DB write authority.
+                        if mode == 'image_server':
+                            if MetaUtil._manual_file_stat(candidate['target']) != candidate['stat']:
+                                raise ValueError('기존 로컬 이미지가 변경되어 재사용을 보류합니다.')
+                            with Image.open(candidate['target']) as image:
+                                image.load()
+                                if image.format not in ('JPEG', 'PNG', 'WEBP', 'GIF'):
+                                    raise ValueError('미지원 이미지 형식: ' + str(image.format))
+                            url = local['url_prefix'].rstrip('/') + '/' + candidate['Name']
+                        else:
+                            from metadata.util_preview import MetaPreviewUtil
+                            MetaPreviewUtil.validate_remote_media(candidate)
+                            url = MetaUtil.format_gdrive_thumbnail_url(candidate['ID'])
+                        attach(kind, index, url)
+                        result.update(status='reused', stage='complete', relative_path=relative)
+                        continue
+                    if not source:
+                        continue
+                    stage = 'download'
+                    if os.path.isfile(str(source)):
+                        with open(source, 'rb') as fp: raw = fp.read()
+                    else:
+                        response = cls.jav_image(url=source, mode=source_mode, site=cls.site_name)
+                        if response is None or response.status_code != 200:
+                            raise ValueError('이미지 다운로드 실패')
+                        raw = response.data
+                    stage = 'decode/encode'
+                    payload, fmt, ext, _ = cls.image_output(raw)
+                    name = stem + '_' + suffix + '.' + ext
+                    staged = os.path.join(work, name)
+                    with open(staged, 'wb') as fp: fp.write(payload)
+                    relative = ('/'.join(filter(None, (remote.get('rel_dir'), name))) if mode == 'gdrive' else
+                        os.path.relpath(os.path.join(local['target_folder'], name),
+                            MetaUtil.image_local_root()).replace(os.sep, '/'))
+                    result.update(format=fmt, relative_path=relative)
+                    stage = 'stage'
+                    entry = MetaUtil.prepare_final_image_replacement(entity, decision, relative, kind, index)
+                    stage = 'upload' if mode == 'gdrive' else 'publish'
+                    if mode == 'gdrive':
+                        queued[relative] = staged
+                        queued_slots[relative] = (kind, index, result, entry)
+                    else:
+                        cls.publish_image_file(staged, entry['target'], replacement=entry)
+                        attach(kind, index, local['url_prefix'].rstrip('/') + '/' + name)
+                        result.update(status='saved', stage='complete')
+                except Exception as exc:
+                    if result.get('relative_path'):
+                        result['attempted_relative_path'] = result.pop('relative_path')
+                    if result.get('format'):
+                        result['attempted_format'] = result.pop('format')
+                    result.update(status='failed', stage=stage, reason=str(redact_diagnostic(exc)))
+                    storage_logger(logger).exception('[ImageUtil] [%s/%s/%s:%s] %s 실패; 기존 자산 보존',
+                        category, entity.code, kind, index, stage)
+                    if entry:
+                        result['cleanup_pending'] = bool(MetaUtil.finish_media_replacements([entry], False))
+            if queued:
+                try:
+                    uploaded = MetaUtil.upload_images_to_gdrive(queued, category=category,
+                        overwrite=decision.get('rewrite_flag', True), replacements=entries, code=entity.code)
+                except Exception:
+                    storage_logger(logger).exception('[ImageUtil] [%s/%s] 이미지 일괄 업로드 실패', category, entity.code)
+                    uploaded = {}
+                for relative, (kind, index, result, entry) in queued_slots.items():
+                    fid = uploaded.get(relative)
+                    if fid:
+                        paths[str(fid)] = relative
+                        attach(kind, index, MetaUtil.format_gdrive_thumbnail_url(fid))
+                        result.update(status='saved', stage='complete')
+                    else:
+                        result['attempted_relative_path'] = result.pop('relative_path', relative)
+                        if result.get('format'): result['attempted_format'] = result.pop('format')
+                        result.update(status='failed', stage='upload/registration', reason='업로드 또는 File ID 확인 실패')
+                        storage_logger(logger).warning('[ImageUtil] [%s/%s/%s:%s] 업로드/등록 실패; 기존 자산 보존', category, entity.code, kind, index)
+                        result['cleanup_pending'] = bool(MetaUtil.finish_media_replacements([entry], False))
+            entity.fanart.extend(art_urls.get(i, '') for i in range(max(art_urls, default=-1) + 1))
+        failed = [r for r in results if r['status'] == 'failed']
+        cls.set_image_storage_state(entity, 'failed' if failed else 'complete',
+            '; '.join(r['media_type'] + ': ' + r.get('reason', '') for r in failed), mode=mode)
 
     @classmethod
     def _finalize_images_for_entity(cls, entity, decision_data):
@@ -2573,6 +2790,9 @@ class SiteAvBase:
         poster_mode = image_sources.get('poster_mode', '')
         landscape_source = image_sources.get('landscape_source')
         arts = image_sources.get('arts', [])
+
+        if image_mode in ('image_server', 'gdrive'):
+            return cls._finalize_stored_images(entity, decision_data)
 
         if not image_sources or (not poster_source and not landscape_source and not arts):
             expected = any(raw_image_urls.get(key) for key in ('ps', 'poster', 'pl', 'merge_covers'))
@@ -2666,315 +2886,6 @@ class SiteAvBase:
                     discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
                     final_url = apply(discord_url, use_proxy_server, server_url)
                     entity.fanart.append(final_url)
-
-        elif image_mode == 'image_server':
-            image_server_paths = decision_data.get('image_server_paths', {})
-            target_folder = image_server_paths.get('target_folder')
-            server_url_prefix = image_server_paths.get('url_prefix')
-            rewrite = decision_data.get('rewrite_flag', True)
-            system_files_exist = decision_data.get('system_files_exist', {})
-            code_lower = entity.ui_code.lower()
-
-            if not target_folder:
-                logger.error(f"Image Save Error: target_folder not available for {entity.ui_code}")
-                return
-
-            os.makedirs(target_folder, exist_ok=True)
-
-            def image_receipt(target):
-                return next((e for e in decision_data.get('_media_replacements', [])
-                             if e.get('image_contract') and os.path.abspath(e['target']) == os.path.abspath(target)), None)
-
-            poster_source = image_sources.get('poster_source')
-            landscape_source = image_sources.get('landscape_source')
-            source_mode = image_sources.get('poster_mode')
-
-            saved_pl_url = None
-            user_pl_filename = decision_data['user_files_exist'].get('landscape')
-            system_landscape_path = os.path.join(target_folder, f"{code_lower}_pl.jpg")
-
-            if user_pl_filename:
-                saved_pl_url = f"{server_url_prefix}/{user_pl_filename}"
-                entity.thumb.append(EntityThumb(aspect="landscape", value=saved_pl_url))
-            elif landscape_source:
-                if image_sources.get('skip_landscape_download'):
-                    saved_pl_url = landscape_source
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=saved_pl_url))
-                else:
-                    save_success = False
-                    if not rewrite and os.path.exists(system_landscape_path):
-                        save_success = True
-                    else:
-                        im_pl_loaded = cls.imopen(landscape_source)
-                        if im_pl_loaded:
-                            save_mode = cls.config.get('image_save_mode', 'jpeg').lower()
-                            if save_mode in ('original', 'source', 'raw'):
-                                staged = cls.save_pil_to_temp(im_pl_loaded)
-                                if not staged:
-                                    raise RuntimeError("Landscape staging failed")
-                                try:
-                                    cls.publish_image_file(staged, system_landscape_path, replacement=image_receipt(system_landscape_path))
-                                finally:
-                                    if os.path.exists(staged): os.remove(staged)
-                            else:
-                                MetaUtil.save_normalized_jpeg(im_pl_loaded, system_landscape_path, replacement=image_receipt(system_landscape_path))
-                            im_pl_loaded.close()
-                            save_success = True
-                        else:
-                            logger.warning(f"{code_lower}: 가로 이미지 다운로드 실패 — {landscape_source}")
-
-                    if not save_success:
-                        cls.set_image_storage_state(entity, 'failed', '로컬 랜드스케이프 다운로드 또는 저장 실패')
-                        return
-                    if save_success:
-                        saved_pl_url = f"{server_url_prefix}/{code_lower}_pl.jpg"
-                        entity.thumb.append(EntityThumb(aspect="landscape", value=saved_pl_url))
-
-            if saved_pl_url:
-                if not hasattr(entity, 'extra_info') or entity.extra_info is None:
-                    entity.extra_info = {}
-                entity.extra_info['landscape_url'] = saved_pl_url
-
-            saved_p_url = None
-            user_p_filename = decision_data['user_files_exist'].get('poster')
-            system_poster_path = os.path.join(target_folder, f"{code_lower}_p.jpg")
-
-            if user_p_filename:
-                saved_p_url = f"{server_url_prefix}/{user_p_filename}"
-                entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
-            elif poster_source:
-                if image_sources.get('skip_poster_download'):
-                    saved_p_url = poster_source
-                    entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
-                else:
-                    save_success = False
-                    if not rewrite and os.path.exists(system_poster_path):
-                        save_success = True
-                    elif source_mode == 'local_file':
-                        try:
-                            with open(poster_source, 'rb') as f:
-                                save_success = cls._save_image_data(BytesIO(f.read()), system_poster_path, replacement=image_receipt(system_poster_path))
-                        except Exception as e:
-                            logger.warning(f"{code_lower}: 포스터 저장 실패 — {e}")
-                    else:
-                        response = safe_jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
-                        if response and response.status_code == 200:
-                            save_success = cls._save_image_data(BytesIO(response.data), system_poster_path, replacement=image_receipt(system_poster_path))
-
-                    if not save_success:
-                        cls.set_image_storage_state(entity, 'failed', '로컬 포스터 다운로드 또는 저장 실패')
-                        return
-                    if save_success:
-                        saved_p_url = f"{server_url_prefix}/{code_lower}_p.jpg"
-                        entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
-
-            # Reuse/check each requested image; do not remove old/user files before success.
-            if rewrite or arts:
-                for idx, art_url in enumerate(arts):
-                    filename = f"{code_lower}_art_{idx+1}.jpg"
-                    user_filename = next((f"{code_lower}_art_{idx+1}_user.{ext}" for ext in ('jpg', 'png', 'webp')
-                                          if os.path.isfile(os.path.join(target_folder, f"{code_lower}_art_{idx+1}_user.{ext}"))), None)
-                    if user_filename:
-                        filename = user_filename
-                    filepath = os.path.join(target_folder, filename)
-                    if not user_filename and (rewrite or not os.path.isfile(filepath)):
-                        response = safe_jav_image(url=art_url, site=cls.site_name)
-                        if response is None or response.status_code != 200 or not cls._save_image_data(BytesIO(response.data), filepath, replacement=image_receipt(filepath)):
-                            cls.set_image_storage_state(entity, 'failed', '로컬 팬아트 다운로드 또는 저장 실패')
-                            return
-                    entity.fanart.append(f"{server_url_prefix}/{filename}")
-            else:
-                if os.path.exists(target_folder):
-                    for filename in sorted(os.listdir(target_folder)):
-                        if filename.startswith(f"{code_lower}_art_"):
-                            entity.fanart.append(f"{server_url_prefix}/{filename}")
-
-        elif image_mode == 'gdrive':
-            gdrive_data = decision_data.get('gdrive_data', {})
-            rel_dir = gdrive_data.get('rel_dir', '')
-            stored_paths = {str(fid): f"{rel_dir}/{getattr(gdrive_data.get('remote_files', {}), 'actual_names', {}).get(str(fid), name)}".strip('/')
-                            for name, fid in gdrive_data.get('remote_files', {}).items() if fid}
-
-            decision_data['_stored_image_paths'] = stored_paths
-            code_lower = entity.ui_code.lower()
-            target_cat = 'JAV_UNCEN' if cls.module_char == 'E' else ('WESTERN' if cls.module_char == 'W' else 'JAV_CEN')
-            rewrite = decision_data.get('rewrite_flag', True)
-
-            poster_source = image_sources.get('poster_source')
-            landscape_source = image_sources.get('landscape_source')
-            source_mode = image_sources.get('poster_mode')
-
-            tmp_dir = os.path.join(path_data, 'tmp')
-            os.makedirs(tmp_dir, exist_ok=True)
-
-            with tempfile.TemporaryDirectory(prefix='gdrive_images_', dir=tmp_dir) as tmp_dir:
-                queued_images = {}
-                art_results = {}
-                art_slots = {}
-                # 랜드스케이프 처리
-                saved_pl_url = None
-                user_pl_fid = gdrive_data.get('user_pl_fid')
-                if user_pl_fid:
-                    saved_pl_url = MetaUtil.format_gdrive_thumbnail_url(user_pl_fid)
-                    logger.info(f"[{cls.site_name}] [GDrive] 원격 유저 랜드스케이프 썸네일 연결: {saved_pl_url}")
-                elif not rewrite and gdrive_data.get('system_pl_fid'):
-                    saved_pl_url = MetaUtil.format_gdrive_thumbnail_url(gdrive_data['system_pl_fid'])
-                elif not rewrite and (code_lower + '_pl.jpg') in getattr(gdrive_data.get('remote_files'), 'ambiguous_names', set()):
-                    cls.set_image_storage_state(entity, 'failed', '동명 랜드스케이프의 최신 파일 확인 보류')
-                elif landscape_source:
-                    if image_sources.get('skip_landscape_download'):
-                        saved_pl_url = landscape_source
-                    else:
-                        dest_rel_pl = f"{rel_dir}/{code_lower}_pl.jpg".strip('/')
-                        from metadata.util_preview import MetaPreviewUtil
-                        if not rewrite and not getattr(gdrive_data.get('remote_files'), 'listing_complete', False):
-                            existing_pl_fid = MetaPreviewUtil.get_remote_file_id(dest_rel_pl, category=target_cat, is_image=True)
-                            if existing_pl_fid:
-                                stored_paths[str(existing_pl_fid)] = dest_rel_pl
-                                saved_pl_url = MetaUtil.format_gdrive_thumbnail_url(existing_pl_fid)
-                                logger.debug(f"[{cls.site_name}] [GDrive] rewrite=False 원격 랜드스케이프 확인 ➔ File ID 동기화 및 다운로드 스킵: {existing_pl_fid}")
-
-                        if not saved_pl_url:
-                            image_fd, tmp_pl = tempfile.mkstemp(prefix='gdrive_image_', suffix='.jpg', dir=tmp_dir)
-                            os.close(image_fd)
-                            im_pl_loaded = cls.imopen(landscape_source)
-                            if im_pl_loaded:
-                                save_mode = cls.config.get('image_save_mode', 'jpeg').lower()
-                                if save_mode in ('original', 'source', 'raw'):
-                                    im_pl_loaded.save(tmp_pl)
-                                else:
-                                    MetaUtil.save_normalized_jpeg(im_pl_loaded, tmp_pl)
-                                im_pl_loaded.close()
-
-                                queued_images[dest_rel_pl] = tmp_pl
-                            else:
-                                cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 다운로드 또는 업로드 실패')
-                                logger.error(f"[{cls.site_name}] [GDrive] 랜드스케이프 원본 다운로드 실패: {landscape_source}")
-
-                # 포스터 처리
-                saved_p_url = None
-                user_p_fid = gdrive_data.get('user_p_fid')
-                if user_p_fid:
-                    saved_p_url = MetaUtil.format_gdrive_thumbnail_url(user_p_fid)
-                    logger.info(f"[{cls.site_name}] [GDrive] 원격 유저 포스터 썸네일 연결: {saved_p_url}")
-                elif not rewrite and gdrive_data.get('system_p_fid'):
-                    saved_p_url = MetaUtil.format_gdrive_thumbnail_url(gdrive_data['system_p_fid'])
-                elif not rewrite and (code_lower + '_p.jpg') in getattr(gdrive_data.get('remote_files'), 'ambiguous_names', set()):
-                    cls.set_image_storage_state(entity, 'failed', '동명 포스터의 최신 파일 확인 보류')
-                elif poster_source:
-                    if image_sources.get('skip_poster_download'):
-                        saved_p_url = poster_source
-                    else:
-                        dest_rel_p = f"{rel_dir}/{code_lower}_p.jpg".strip('/')
-                        from metadata.util_preview import MetaPreviewUtil
-                        if not rewrite and not getattr(gdrive_data.get('remote_files'), 'listing_complete', False):
-                            existing_p_fid = MetaPreviewUtil.get_remote_file_id(dest_rel_p, category=target_cat, is_image=True)
-                            if existing_p_fid:
-                                stored_paths[str(existing_p_fid)] = dest_rel_p
-                                saved_p_url = MetaUtil.format_gdrive_thumbnail_url(existing_p_fid)
-                                logger.debug(f"[{cls.site_name}] [GDrive] rewrite=False 원격 포스터 확인 ➔ File ID 동기화 및 다운로드 스킵: {existing_p_fid}")
-
-                        if not saved_p_url:
-                            image_fd, tmp_p = tempfile.mkstemp(prefix='gdrive_image_', suffix='.jpg', dir=tmp_dir)
-                            os.close(image_fd)
-                            poster_loaded = False
-
-                            if source_mode == 'local_file':
-                                try:
-                                    import shutil
-                                    shutil.copy(poster_source, tmp_p)
-                                    poster_loaded = True
-                                except: pass
-                            else:
-                                response = safe_jav_image(url=poster_source, mode=source_mode, site=cls.site_name)
-                                if response and response.status_code == 200:
-                                    if not cls._save_image_data(BytesIO(response.data), tmp_p):
-                                        with open(tmp_p, 'wb') as f: f.write(response.data)
-                                    poster_loaded = True
-
-                            if poster_loaded and os.path.exists(tmp_p):
-                                queued_images[dest_rel_p] = tmp_p
-                            else:
-                                cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 다운로드 또는 업로드 실패')
-                                logger.error(f"[{cls.site_name}] [GDrive] 포스터 원본 다운로드 실패: {poster_source}")
-
-                # 팬아트 처리
-                if rewrite or image_sources.get('arts'):
-                    for idx, art_url in enumerate(image_sources.get('arts', [])):
-                        filename = f"{code_lower}_art_{idx+1}.jpg"
-                        dest_rel_art = f"{rel_dir}/{filename}".strip('/')
-                        user_art = next((f"{code_lower}_art_{idx+1}_user.{ext}" for ext in ('jpg', 'jpeg', 'png', 'webp')
-                                         if (gdrive_data.get('remote_files') or {}).get(f"{code_lower}_art_{idx+1}_user.{ext}")), None)
-                        if user_art:
-                            art_results[idx] = MetaUtil.format_gdrive_thumbnail_url(gdrive_data['remote_files'][user_art])
-                            continue
-                        # rewrite 옵션이 꺼져 있는 경우 원격 팬아트 파일 사전 확인
-                        from metadata.util_preview import MetaPreviewUtil
-                        if not rewrite:
-                            remote_files = gdrive_data.get('remote_files')
-                            if filename in getattr(remote_files, 'ambiguous_names', set()):
-                                cls.set_image_storage_state(entity, 'failed', '동명 팬아트의 최신 파일 확인 보류')
-                                continue
-                            existing_art_fid = (remote_files.get(filename) if remote_files is not None else
-                                                MetaPreviewUtil.get_remote_file_id(dest_rel_art, category=target_cat, is_image=True))
-                            if existing_art_fid:
-                                stored_paths.setdefault(str(existing_art_fid), dest_rel_art)
-                                art_results[idx] = MetaUtil.format_gdrive_thumbnail_url(existing_art_fid)
-                                continue
-
-                        image_fd, tmp_art = tempfile.mkstemp(prefix='gdrive_image_', suffix='.jpg', dir=tmp_dir)
-                        os.close(image_fd)
-                        response = safe_jav_image(url=art_url, site=cls.site_name)
-                        if response and response.status_code == 200:
-                            if not cls._save_image_data(BytesIO(response.data), tmp_art):
-                                with open(tmp_art, 'wb') as f: f.write(response.data)
-
-                            queued_images[dest_rel_art] = tmp_art
-                            art_slots[dest_rel_art] = idx
-                        else:
-                            cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 다운로드 또는 업로드 실패')
-                            logger.error(f"[{cls.site_name}] [GDrive] 팬아트 #{idx+1} 다운로드 실패 ➔ 처리 중단: {art_url}")
-                            continue
-
-                else:
-                    for fname, fid in gdrive_data.get('remote_files', {}).items():
-                        if fname.startswith(f"{code_lower}_art_"):
-                            entity.fanart.append(MetaUtil.format_gdrive_thumbnail_url(fid))
-
-                if queued_images:
-                    replacements = decision_data.setdefault('_media_replacements', [])
-                    entity.extra_info['_media_replacements'] = replacements
-                    uploaded = MetaUtil.upload_images_to_gdrive(queued_images, category=target_cat,
-                        overwrite=rewrite, replacements=replacements, code=entity.code)
-                    for relative, file_id in uploaded.items():
-                        stored_paths[str(file_id)] = relative
-                        url = MetaUtil.format_gdrive_thumbnail_url(file_id)
-                        if relative in art_slots:
-                            art_results[art_slots[relative]] = url
-                        elif relative.endswith('_pl.jpg'):
-                            saved_pl_url = url
-                        else:
-                            saved_p_url = url
-                    if len(uploaded) != len(queued_images):
-                        cls.set_image_storage_state(entity, 'failed', 'GDrive 이미지 일괄 업로드 또는 File ID 확인 실패')
-
-                if saved_pl_url and str(saved_pl_url).startswith(('http://', 'https://')):
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=saved_pl_url))
-                    if not hasattr(entity, 'extra_info') or entity.extra_info is None:
-                        entity.extra_info = {}
-                    entity.extra_info['landscape_url'] = saved_pl_url
-
-                if saved_p_url and str(saved_p_url).startswith(('http://', 'https://')):
-                    entity.thumb.append(EntityThumb(aspect="poster", value=saved_p_url))
-                    if not hasattr(entity, 'extra_info') or entity.extra_info is None:
-                        entity.extra_info = {}
-                    entity.extra_info['poster_url'] = saved_p_url
-                elif saved_p_url:
-                    logger.warning(
-                        f"[{cls.site_name}] 유효하지 않은 포스터 URL을 최종 메타데이터에 반영하지 않습니다: {saved_p_url}"
-                    )
-
-                entity.fanart.extend(art_results[i] for i in sorted(art_results))
 
         assets = [(getattr(t, 'aspect', None), getattr(t, 'value', None), 0) for t in entity.thumb or []]
         assets += [('fanart', url, idx) for idx, url in enumerate(entity.fanart or [])]
@@ -3673,40 +3584,13 @@ class SiteAvBase:
 
     @classmethod
     def _encode_image_data(cls, image_data_bytesio: BytesIO, save_path: str) -> bool:
-        """
-        이미지 바이너리 데이터를 설정에 따라 원본 또는 JPEG로 저장합니다.
-        성공 시 True, 실패 시 False를 반환합니다.
-        """
         try:
-            # 버퍼의 내용을 복사하여 원본 BytesIO 객체에 영향을 주지 않도록 함
             image_data_bytesio.seek(0)
-            temp_buffer = BytesIO(image_data_bytesio.read())
-            
-            # Pillow로 이미지 열어 포맷과 모드 확인
-            with Image.open(temp_buffer) as img:
-                img.load()
-                if cls.config.get('image_save_mode', 'jpeg').lower() in ('original', 'source', 'raw'):
-                    logger.debug(f"Saving original image data to {save_path}")
-                    image_data_bytesio.seek(0) # 원본 버퍼 포인터 리셋
-                    with open(save_path, 'wb') as f:
-                        f.write(image_data_bytesio.read())
-                    return True
-                
-                logger.debug(f"Image format '{img.format}'. Converting to JPEG for {save_path}")
-                if img.mode not in ('RGB', 'L'):
-                    rgb_img = img.convert('RGB')
-                    rgb_img.save(save_path, 'JPEG', quality=95)
-                    rgb_img.close()
-                else:
-                    img.save(save_path, 'JPEG', quality=95)
-                return True
-
-        except UnidentifiedImageError:
-            logger.warning(f"Invalid image response; refusing to save: {save_path}")
-            return False
-        except Exception as e:
-            logger.error(f"이미지 처리·저장 실패: {save_path} — {e}")
-            logger.error(traceback.format_exc())
+            payload, _, _, _ = cls.image_output(image_data_bytesio.read())
+            with open(save_path, 'wb') as fp: fp.write(payload)
+            return True
+        except Exception:
+            logger.exception('[ImageUtil] 이미지 검증/인코딩 실패')
             return False
 
 
@@ -4700,7 +4584,9 @@ class SiteAvBase:
         crop_width = min(width, max(1, int(height / target_ratio)))
         crop_height = min(height, max(1, int(width * target_ratio)))
         left, top = (width - crop_width) // 2, (height - crop_height) // 2
-        return image.crop((left, top, left + crop_width, top + crop_height))
+        cropped = image.crop((left, top, left + crop_width, top + crop_height))
+        cropped.info['_source_format'] = image.format or image.info.get('_source_format')
+        return cropped
 
     @classmethod
     def _smart_crop_image(cls, pil_image, target_ratio=1.4225):
@@ -4713,7 +4599,7 @@ class SiteAvBase:
             import mediapipe as mp
         except ImportError as e:
             logger.warning(f"[{cls.site_name}] Required libraries not installed. Skipping Smart Crop. ({e})")
-            return cls._center_crop_poster(pil_image, target_ratio) if cls.module_char == 'W' else None
+            return cls._center_crop_poster(pil_image, target_ratio) if cls.module_char in ('W', 'E') else None
 
         open_cv_image = np.array(pil_image)
         if pil_image.mode == 'RGB': open_cv_image = open_cv_image[:, :, ::-1].copy()
@@ -4801,7 +4687,7 @@ class SiteAvBase:
             valid_faces.sort(key=lambda x: x['score'], reverse=True)
         else:
             logger.debug(f"[{cls.site_name}] No valid faces found after filtering.")
-            if cls.module_char == 'W' and is_landscape:
+            if cls.module_char in ('W', 'E') and is_landscape:
                 logger.debug(f"[{cls.site_name}] 얼굴/신체 인식 실패 -> 중앙 기준 세로 크롭")
                 return cls._center_crop_poster(pil_image, target_ratio)
             return None
@@ -4827,7 +4713,9 @@ class SiteAvBase:
                 crop_y2 = h
                 crop_y1 = max(0, h - target_h)
 
-            return pil_image.crop((0, crop_y1, w, crop_y2))
+            cropped = pil_image.crop((0, crop_y1, w, crop_y2))
+            cropped.info['_source_format'] = pil_image.format or pil_image.info.get('_source_format')
+            return cropped
 
         # Center Calculation Phase (일반 가로 이미지에 대한 기존 가로 크롭 파이프라인)
         final_center_x = None
@@ -5122,7 +5010,9 @@ class SiteAvBase:
             crop_x2 = w
             crop_x1 = max(0, w - target_w)
 
-        return pil_image.crop((crop_x1, 0, crop_x2, h))
+        cropped = pil_image.crop((crop_x1, 0, crop_x2, h))
+        cropped.info['_source_format'] = pil_image.format or pil_image.info.get('_source_format')
+        return cropped
 
 
     @staticmethod

@@ -169,8 +169,14 @@ class SiteTpdb(SiteAvBase):
                 logger.warning(f"[{cls.site_name}] Failed to download covers for merging.")
                 return None
 
-            img_back = Image.open(BytesIO(res_back.content)).convert('RGB')
-            img_front = Image.open(BytesIO(res_front.content)).convert('RGB')
+            with Image.open(BytesIO(res_back.content)) as back, Image.open(BytesIO(res_front.content)) as front:
+                back.load(); front.load()
+                if any(image.format not in ('JPEG', 'PNG', 'WEBP', 'GIF') for image in (back, front)):
+                    raise ValueError('미지원 이미지 형식: 커버 합성 입력')
+                image_format = front.format if front.format == back.format else 'PNG'
+                mode = 'RGBA' if any('A' in image.getbands() or 'transparency' in image.info for image in (back, front)) else 'RGB'
+                img_back = back.convert(mode)
+                img_front = front.convert(mode)
 
             target_height = img_front.height
             if img_back.height != target_height:
@@ -179,12 +185,12 @@ class SiteTpdb(SiteAvBase):
                 img_back = img_back.resize((new_width, target_height), Image.Resampling.LANCZOS)
 
             total_width = img_back.width + img_front.width
-            merged_img = Image.new('RGB', (total_width, target_height))
+            merged_img = Image.new(mode, (total_width, target_height))
             
             merged_img.paste(img_back, (0, 0))
             merged_img.paste(img_front, (img_back.width, 0))
 
-            temp_filepath = cls.save_pil_to_temp(merged_img, image_format="JPEG")
+            temp_filepath = cls.save_pil_to_temp(merged_img, image_format=image_format)
             
             img_back.close()
             img_front.close()
@@ -194,7 +200,8 @@ class SiteTpdb(SiteAvBase):
             return temp_filepath
 
         except Exception as e:
-            logger.error(f"[{cls.site_name}] Error merging covers: {e}")
+            from metadata.util_runtime import storage_logger
+            storage_logger(logger).exception('[%s] 커버 합성 실패', cls.site_name)
             return None
 
     @classmethod
