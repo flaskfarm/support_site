@@ -360,12 +360,15 @@ class SiteTpdb(SiteAvBase):
 
                                 hit_dict = hit_item.as_dict()
                                 hit_dict['site_key'] = site_key
+                                hit_dict['match_type'] = local_db_item.get('match_type', 'unknown')
+                                hit_dict['fingerprint_source'] = local_db_item.get('fingerprint_source', 'none')
                                 hit_dict['is_db_cached'] = local_db_item.get('has_item', True)
                                 hit_dict['is_priority_label_site'] = True
                                 hit_results.append(hit_dict)
 
                             logger.info(f"[{cls.site_name}] 로컬 DB 지문 B-Tree 색인 히트 ({len(hit_results)}건 중 최우선 채택: {hit_results[0]['code']})")
-                            return {'ret': 'success', 'data': hit_results}
+                            if any(hit['match_type'] == 'fingerprint' for hit in hit_results):
+                                return {'ret': 'success', 'data': hit_results}
 
         oshash = None
         if target_video and os.path.exists(target_video):
@@ -375,8 +378,12 @@ class SiteTpdb(SiteAvBase):
         encoded_keyword = urllib.parse.quote(keyword)
         
         hash_param = f"&hash={oshash}" if oshash else "&hash="
-        scenes_data = cls._call_api(f"/scenes?parse={encoded_keyword}{hash_param}")
-        movies_data = cls._call_api(f"/movies?parse={encoded_keyword}{hash_param}")
+        fingerprint_only = kwargs.get('fingerprint_only', False)
+        if fingerprint_only and not oshash:
+            return {'ret': 'no_match', 'data': []}
+        scenes_data = cls._call_api(f"/scenes?hash={oshash}" if fingerprint_only else f"/scenes?parse={encoded_keyword}{hash_param}")
+        movies_data = cls._call_api(f"/movies?hash={oshash}" if fingerprint_only else f"/movies?parse={encoded_keyword}{hash_param}")
+        hash_only_scenes = fingerprint_only
         
         scenes_list = scenes_data.get('data', []) if scenes_data else []
         movies_list = movies_data.get('data', []) if movies_data else []
@@ -385,12 +392,13 @@ class SiteTpdb(SiteAvBase):
         if isinstance(movies_list, dict): movies_list = [movies_list]
 
         # 텍스트+해시 결과가 없을 때 OSHash 단독 검색 시도
-        if not scenes_list and not movies_list and oshash:
+        if not fingerprint_only and not scenes_list and not movies_list and oshash:
             logger.debug(f"[{cls.site_name}] 1차 검색 실패 ➔ OSHash 단독 역검색 시도: {oshash}")
             hash_scenes_data = cls._call_api(f"/scenes?hash={oshash}")
             if hash_scenes_data and hash_scenes_data.get('data'):
                 h_data = hash_scenes_data['data']
                 scenes_list = h_data if isinstance(h_data, list) else [h_data]
+                hash_only_scenes = True
 
         combined_results = []
         for idx, item in enumerate(scenes_list):
@@ -511,6 +519,16 @@ class SiteTpdb(SiteAvBase):
             item.score = max(0, min(100, int(round(calc_score))))
             result = item.as_dict()
             result['originaltitle'] = item.ui_code
+            hashes = item_data.get('hashes') or item_data.get('hash') or []
+            if isinstance(hashes, (str, dict)):
+                hashes = [hashes]
+            exact_hash = bool(oshash) and any(
+                (str(h.get('hash') or '').strip().lower() == oshash
+                 and str(h.get('algorithm') or h.get('type') or 'OSHASH').upper() == 'OSHASH')
+                if isinstance(h, dict) else str(h).strip().lower() == oshash for h in hashes)
+            is_fp_match = exact_hash or (hash_only_scenes if content_type == 'scene' else fingerprint_only)
+            result['match_type'] = 'fingerprint' if is_fp_match else 'filename'
+            result['fingerprint_source'] = 'site' if is_fp_match else 'none'
             ret.append(result)
 
         ret.sort(key=lambda k: k.get("score", 0), reverse=True)
@@ -608,32 +626,9 @@ class SiteTpdb(SiteAvBase):
 
         site_fps.extend([h for h in raw_hashes if isinstance(h, dict)])
 
-        user_fps = []
-        if media_path and os.path.exists(media_path):
-            # info 단계에서는 캐시된 지문을 재활용하고 무거운 pHash 신규 계산 방지
-            local_fps = cls.get_video_fingerprints(
-                media_path,
-                fp_type=cls.config.get("fingerprint_type") or "OSHASH",
-                ffmpeg_path=cls.config.get("ffmpeg_path") or "ffmpeg",
-                force_phash=False
-            )
-            for l_fp in local_fps:
-                h_val = l_fp.get('hash', '').lower()
-                algo_val = l_fp.get('algorithm', 'OSHASH').upper()
-                user_fps.append({
-                    'algorithm': algo_val,
-                    'hash': h_val,
-                    'source': 'user'
-                })
-
         entity.original['fingerprints'] = site_fps
-        all_fps = list(site_fps)
-        for uf in user_fps:
-            if not any(f.get('hash') == uf['hash'] and f.get('algorithm') == uf['algorithm'] for f in all_fps):
-                all_fps.append(uf)
-
-        if all_fps:
-            entity.extra_info['fingerprints'] = all_fps
+        if site_fps:
+            entity.extra_info['fingerprints'] = list(site_fps)
 
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
         raw_title = str(item_data.get('title', entity.ui_code)).strip()
