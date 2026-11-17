@@ -2598,6 +2598,24 @@ class SiteAvBase:
             MetaUtil.settle_image_replacements(entity, decision_data)
 
     @classmethod
+    def check_new_poster_placeholder(cls, entity, source):
+        """Inspect a newly staged JAV_CEN poster, never a reused storage asset."""
+        if cls.module_char != 'C':
+            return False
+        with Image.open(source if isinstance(source, str) else BytesIO(source)) as image:
+            placeholder = cls.is_placeholder_image(image)
+        results = entity.extra_info.setdefault('_image_results', [])
+        result = next((r for r in results if r.get('media_type') == 'poster'), None)
+        if result is None:
+            result = dict(media_type='poster', sort_order=0, status='source_missing', stage='source')
+            results.append(result)
+        result.update(placeholder=placeholder)
+        if placeholder:
+            result.update(status='source_invalid', stage='source', reason='사이트 플레이스홀더 포스터')
+            logger.info('[%s] 새 포스터 플레이스홀더 감지, 저장 생략: %s', cls.site_name, entity.code)
+        return placeholder
+
+    @classmethod
     def _finalize_stored_images(cls, entity, decision):
         """Encode before staging; both stores use the same per-slot result contract."""
         from metadata.util_metadata import MetaUtil
@@ -2635,6 +2653,9 @@ class SiteAvBase:
         art_urls = {}
         slots = [('landscape', 1, 'pl', sources.get('landscape_source'), None),
                  ('poster', 0, 'p', sources.get('poster_source'), sources.get('poster_mode'))]
+        # Reject a bad source before any slot from this JAV_CEN attempt is published.
+        if category == 'JAV_CEN':
+            slots.reverse()
         slots += [('fanart', i, 'art_' + str(i + 1), source, None)
                   for i, source in enumerate(sources.get('arts') or [])]
         if mode == 'gdrive':
@@ -2727,6 +2748,9 @@ class SiteAvBase:
                     name = stem + '_' + suffix + '.' + ext
                     staged = os.path.join(work, name)
                     with open(staged, 'wb') as fp: fp.write(payload)
+                    if kind == 'poster' and cls.check_new_poster_placeholder(entity, staged):
+                        cls.set_image_storage_state(entity, 'complete', mode=mode)
+                        return
                     relative = ('/'.join(filter(None, (remote.get('rel_dir'), name))) if mode == 'gdrive' else
                         os.path.relpath(os.path.join(local['target_folder'], name),
                             MetaUtil.image_local_root()).replace(os.sep, '/'))
@@ -2771,6 +2795,9 @@ class SiteAvBase:
                         storage_logger(logger).warning('[ImageUtil] [%s/%s/%s:%s] 업로드/등록 실패; 기존 자산 보존', category, entity.code, kind, index)
                         result['cleanup_pending'] = bool(MetaUtil.finish_media_replacements([entry], False))
             entity.fanart.extend(art_urls.get(i, '') for i in range(max(art_urls, default=-1) + 1))
+        if category == 'JAV_CEN':
+            entity.thumb.sort(key=lambda thumb: 0 if thumb.aspect == 'landscape' else 1)
+            results.sort(key=lambda result: {'landscape': 0, 'poster': 1}.get(result['media_type'], 2))
         failed = [r for r in results if r['status'] == 'failed']
         cls.set_image_storage_state(entity, 'failed' if failed else 'complete',
             '; '.join(r['media_type'] + ': ' + r.get('reason', '') for r in failed), mode=mode)
@@ -2859,11 +2886,19 @@ class SiteAvBase:
                 if response is not None and response.status_code == 200: response_bytes = BytesIO(response.data)
 
             if response_bytes:
+                if (not image_sources.get('is_user_poster') and not image_sources.get('skip_poster_download')
+                        and cls.check_new_poster_placeholder(entity, poster_source if poster_mode == 'local_file' else response_bytes.getvalue())):
+                    cls.set_image_storage_state(entity, 'complete', mode=image_mode)
+                    return
                 if use_my_webhook and webhook_list:
                     webhook_url = webhook_list[random.randint(0, len(webhook_list) - 1)]
                 discord_url = SupportDiscord.discord_proxy_image_bytes(response_bytes, webhook_url=webhook_url)
                 final_url = apply(discord_url, use_proxy_server, server_url)
                 entity.thumb.append(EntityThumb(aspect="poster", value=final_url))
+                if final_url and cls.module_char == 'C':
+                    for result in entity.extra_info.get('_image_results') or []:
+                        if result.get('media_type') == 'poster' and result.get('placeholder') is False:
+                            result.update(status='saved', stage='complete')
 
             # --- 랜드스케이프 처리 ---
             if landscape_source:

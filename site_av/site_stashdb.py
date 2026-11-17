@@ -481,12 +481,15 @@ class SiteStashdb(SiteAvBase):
 
                                 hit_dict = hit_item.as_dict()
                                 hit_dict['site_key'] = site_key
+                                hit_dict['match_type'] = local_db_item.get('match_type', 'unknown')
+                                hit_dict['fingerprint_source'] = local_db_item.get('fingerprint_source', 'none')
                                 hit_dict['is_db_cached'] = local_db_item.get('has_item', True)
                                 hit_dict['is_priority_label_site'] = True
                                 hit_results.append(hit_dict)
 
                             logger.info(f"[{cls.site_name}] 로컬 DB 지문 B-Tree 색인 히트 ({len(hit_results)}건 중 최우선 채택: {hit_results[0]['code']})")
-                            return {'ret': 'success', 'data': hit_results}
+                            if any(hit['match_type'] == 'fingerprint' for hit in hit_results):
+                                return {'ret': 'success', 'data': hit_results}
 
         if target_video:
             fp_scenes = cls.search_by_fingerprint(media_path=target_video)
@@ -495,6 +498,8 @@ class SiteStashdb(SiteAvBase):
                 is_fp_match = True
 
         # 1순위: searchScenes 텍스트 통합 검색 (지문 결과가 없을 때)
+        if not is_fp_match and kwargs.get('fingerprint_only'):
+            return {'ret': 'no_match', 'data': []}
         if not is_fp_match:
             query = """
             query SearchScenes($term: String!) {
@@ -612,6 +617,8 @@ class SiteStashdb(SiteAvBase):
             item.score = max(0, min(100, item.score))
             result = item.as_dict()
             result['originaltitle'] = item.ui_code
+            result['match_type'] = 'fingerprint' if is_fp_match else 'filename'
+            result['fingerprint_source'] = 'site' if is_fp_match else 'none'
             ret.append(result)
 
         ret.sort(key=lambda k: k.get("score", 0), reverse=True)
@@ -732,32 +739,9 @@ class SiteStashdb(SiteAvBase):
                     'source': 'site'
                 })
 
-        user_fps = []
-        if media_path and os.path.exists(media_path):
-            # info 단계에서는 이미 계산되어 캐싱된 지문만 재활용하고 불필요한 pHash 신규 계산(FFmpeg 캡처) 방지
-            local_fps = cls.get_video_fingerprints(
-                media_path,
-                fp_type=cls.config.get("fingerprint_type") or "OSHASH",
-                ffmpeg_path=cls.config.get("ffmpeg_path") or "ffmpeg",
-                force_phash=False
-            )
-            for l_fp in local_fps:
-                h_val = l_fp.get('hash', '').lower()
-                algo_val = l_fp.get('algorithm', 'OSHASH').upper()
-                user_fps.append({
-                    'algorithm': algo_val,
-                    'hash': h_val,
-                    'source': 'user'
-                })
-
         entity.original['fingerprints'] = site_fps
-        all_fps = list(site_fps)
-        for uf in user_fps:
-            if not any(f.get('hash') == uf['hash'] and f.get('algorithm') == uf['algorithm'] for f in all_fps):
-                all_fps.append(uf)
-
-        if all_fps:
-            entity.extra_info['fingerprints'] = all_fps
+        if site_fps:
+            entity.extra_info['fingerprints'] = list(site_fps)
 
         entity.ui_code = f"{cls.module_char}{cls.site_char}{type_char}_{item_id}"
         raw_title = str(item_data.get('title') or entity.ui_code).strip()
